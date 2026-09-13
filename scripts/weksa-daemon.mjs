@@ -174,13 +174,6 @@ async function publishWitnesses() {
   return snapshot;
 }
 
-async function currentSnapshot() {
-  if (!cachedSnapshot) {
-    await refreshWitnesses("snapshot-demand");
-  }
-  return cachedSnapshot;
-}
-
 async function refreshWitnesses(reason) {
   if (witnessRefreshRunning) {
     await appendLog(`skipped overlapping witness refresh reason=${reason}`);
@@ -1106,32 +1099,6 @@ function readdirSyncSafe(path) {
 async function writeJson(path, value) {
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
-function sendJson(response, statusCode, value) {
-  response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
-  response.end(`${JSON.stringify(value, null, 2)}\n`);
-}
-
-async function readJsonBody(request) {
-  const chunks = [];
-  let byteLength = 0;
-  for await (const chunk of request) {
-    byteLength += chunk.length;
-    if (byteLength > 1_000_000) {
-      throw httpError(413, "request body is too large");
-    }
-    chunks.push(chunk);
-  }
-  const text = Buffer.concat(chunks).toString("utf8").trim();
-  if (!text) {
-    throw httpError(400, "request body is empty");
-  }
-  try {
-    return JSON.parse(text);
-  } catch (error) {
-    throw httpError(400, `invalid JSON body: ${error.message}`);
-  }
 }
 
 function httpError(statusCode, message) {
