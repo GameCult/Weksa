@@ -157,14 +157,12 @@ async function publishWitnesses() {
   const snapshot = await buildSnapshot();
   await writeWitness("provider-advertisement.cc", snapshot.providerAdvertisement);
   await writeWitness("operator-state.cc", snapshot.operatorState);
-  await writeWitness("eve-surfaces.cc", snapshot.operatorSurface);
   await writeWitness("command-boundary.cc", snapshot.commandBoundary);
   await writeWitness("transport-profile.cc", snapshot.transportProfile);
   await writeWitness("cultmesh-publications.cc", snapshot.cultMeshPublications);
   await writeCultMeshStore(snapshot);
   await writeJson(resolve(stateRoot, "provider-advertisement.json"), snapshot.providerAdvertisement);
   await writeJson(resolve(stateRoot, "operator-state.json"), snapshot.operatorState);
-  await writeJson(resolve(stateRoot, "eve-operator-surface.json"), snapshot.operatorSurface);
   await writeJson(resolve(stateRoot, "command-boundary.json"), snapshot.commandBoundary);
   await writeJson(resolve(stateRoot, "transport-profile.json"), snapshot.transportProfile);
   await writeJson(resolve(stateRoot, "cultmesh-publications.json"), snapshot.cultMeshPublications);
@@ -255,7 +253,6 @@ async function buildSnapshot() {
       provider_advertisement: ".weksa/provider-advertisement.cc",
       provider_advertisement_store: ".weksa/provider-advertisement-store.cc",
       operator_state: ".weksa/operator-state.cc",
-      eve_surface: ".weksa/eve-surfaces.cc",
       cultmesh_publications: ".weksa/cultmesh-publications.cc",
     },
     readiness: {
@@ -270,7 +267,6 @@ async function buildSnapshot() {
   };
   const commandBoundary = buildCommandBoundary(updatedAt);
   const transportProfile = buildTransportProfile(updatedAt);
-  const operatorSurface = buildOperatorSurface({ providerAdvertisement, operatorState, commandBoundary, cultureCatalog, tuning });
   const cultMeshPublications = {
     schema: "weksa.cultmesh_publications.v0",
     service_id: "weksa.intent.service",
@@ -283,14 +279,13 @@ async function buildSnapshot() {
     publications: [
       publication("weksa.service/provider-advertisement", "gamecult.eve.provider_advertisement.v1", ".weksa/provider-advertisement-store.cc", ".weksa/provider-advertisement-store.cc"),
       publication("weksa.operator/status", "weksa.operator_state.v0", ".weksa/operator-state.cc", ".weksa/operator-state.cc"),
-      publication("weksa.eve.surface.operator", "gamecult.eve.surface.v1", ".weksa/eve-surfaces.cc", ".weksa/eve-surfaces.cc"),
       publication("weksa.command-boundary", "weksa.command_boundary.v1", ".weksa/command-boundary.cc", null),
       publication("weksa.transport-profile", "weksa.transport_profile.v1", ".weksa/transport-profile.cc", null),
       publication("weksa.cultmesh/publications", "weksa.cultmesh_publications.v0", ".weksa/cultmesh-publications.cc", ".weksa/cultmesh-publications.cc"),
       publication("weksa.speech-provider/mimo/voicedesign", WEKSA_MIMO_VOICEDESIGN_COMMAND_SCHEMA_ID, ".weksa/speech-provider/mimo/{requestId}/command.cc", formatRudpEndpoint(host, port)),
     ],
   };
-  return { providerAdvertisement, operatorState, operatorSurface, commandBoundary, transportProfile, cultMeshPublications };
+  return { providerAdvertisement, operatorState, commandBoundary, transportProfile, cultMeshPublications };
 }
 
 async function writeCultMeshStore(snapshot) {
@@ -301,16 +296,12 @@ async function writeCultMeshStore(snapshot) {
   }
   const {
     providerAdvertisementDefinition,
-    interfaceBindingDefinition,
-    surfaceDefinition,
     operatorStateDefinition,
     commandBoundaryDefinition,
     transportProfileDefinition,
   } = defineCultMeshDocuments(runtime.defineDocumentType);
   const documents = [
     providerAdvertisementDefinition,
-    interfaceBindingDefinition,
-    surfaceDefinition,
     operatorStateDefinition,
     commandBoundaryDefinition,
     transportProfileDefinition,
@@ -318,35 +309,6 @@ async function writeCultMeshStore(snapshot) {
   await rm(cultMeshStorePath, { force: true });
   const node = await createCultMeshNodeWithOwnedStoreReset(runtime.CultMesh, cultMeshStorePath, documents);
   await node.put(providerAdvertisementDefinition, snapshot.providerAdvertisement.providerId, snapshot.providerAdvertisement);
-  await node.put(interfaceBindingDefinition, "weksa.operator", {
-    bindingId: "weksa.operator",
-    providerId: snapshot.providerAdvertisement.providerId,
-    title: "Weksa Operator",
-    kind: "operator",
-    updatedAt: snapshot.operatorState.updated_at,
-    provider: {
-      providerId: snapshot.providerAdvertisement.providerId,
-      canonicalService: "asgard.weksa",
-      locatedService: "asgard.starfire.weksa",
-      cultMeshAddress: "asgard.starfire.weksa/eve/operator",
-      endpoints: [
-        { transport: "cultmesh-store", address: ".weksa/provider-advertisement-store.cc" },
-        { transport: CULTNET_RUDP_PROTOCOL_ID, address: formatRudpEndpoint(host, port) },
-      ],
-      routes: [
-        { transport: "cultmesh-store", address: ".weksa/provider-advertisement-store.cc" },
-        { transport: CULTNET_RUDP_PROTOCOL_ID, address: formatRudpEndpoint(host, port) },
-      ],
-    },
-    surface: snapshot.operatorSurface,
-  });
-  await node.put(surfaceDefinition, snapshot.providerAdvertisement.providerId, {
-    providerId: snapshot.providerAdvertisement.providerId,
-    title: "Weksa Operator",
-    version: tick + 1,
-    updatedAt: snapshot.operatorState.updated_at,
-    surface: snapshot.operatorSurface,
-  });
   await node.put(operatorStateDefinition, "weksa", snapshot.operatorState);
   await node.put(commandBoundaryDefinition, "weksa", snapshot.commandBoundary);
   await node.put(transportProfileDefinition, "weksa", snapshot.transportProfile);
@@ -392,31 +354,6 @@ function configureCultLibModulePath() {
 }
 
 function defineCultMeshDocuments(defineDocumentType) {
-  const surfaceDefinition = defineDocumentType({
-    type: "gamecult.eve.surface_state",
-    schemaName: "gamecult.eve.surface_state",
-    schemaId: "gamecult.eve.surface_state.v1",
-    schemaVersion: "gamecult.eve.surface_state.v1",
-    global: false,
-    name: (value) => value?.providerId || "surface",
-    schema: { parse: (value) => value },
-    members: [
-      { slot: 0, memberName: "providerId", typeName: "string", isName: true },
-      { slot: 1, memberName: "title", typeName: "string" },
-      { slot: 2, memberName: "version", typeName: "long" },
-      { slot: 3, memberName: "updatedAt", typeName: "string" },
-      { slot: 4, memberName: "surface", typeName: "object" },
-    ],
-  });
-  const interfaceBindingDefinition = defineDocumentType({
-    type: "gamecult.eve.interface_binding",
-    schemaName: "gamecult.eve.interface_binding",
-    schemaId: "gamecult.eve.interface_binding.v1",
-    schemaVersion: "gamecult.eve.interface_binding.v1",
-    global: false,
-    name: (value) => value?.bindingId || value?.providerId || "interface",
-    schema: { parse: (value) => value },
-  });
   const providerAdvertisementDefinition = defineDocumentType({
     type: "gamecult.eve.provider_advertisement",
     schemaName: "gamecult.eve.provider_advertisement",
@@ -455,8 +392,6 @@ function defineCultMeshDocuments(defineDocumentType) {
   });
   return {
     providerAdvertisementDefinition,
-    interfaceBindingDefinition,
-    surfaceDefinition,
     operatorStateDefinition,
     commandBoundaryDefinition,
     transportProfileDefinition,
@@ -474,7 +409,7 @@ function loadProviderAdvertisement(updatedAt) {
     updatedAt,
     canonicalService: "asgard.weksa",
     locatedService: "asgard.starfire.weksa",
-    cultMeshAddress: "asgard.starfire.weksa/eve/operator",
+    cultMeshAddress: "asgard.starfire.weksa/operator",
     serviceVerse: {
       ...fixture.serviceVerse,
       semanticAddress: "asgard.starfire.weksa",
@@ -604,36 +539,6 @@ async function inspectCultureCatalog() {
     target_language_profile_count: targetProfiles.length,
     cultural_root: "data/cultural-ontology",
     target_language_root: "data/target-language-ontology",
-  };
-}
-
-function buildOperatorSurface({ providerAdvertisement, operatorState, commandBoundary, cultureCatalog, tuning }) {
-  return {
-    schema: "gamecult.eve.surface.v1",
-    providerId: providerAdvertisement.providerId,
-    surfaceId: "weksa.eve.operator.v0",
-    title: "Weksa",
-    updatedAt: operatorState.updated_at,
-    root: {
-      id: "weksa.operator.root",
-      kind: "panel",
-      props: {
-        title: "Weksa Intent Service",
-        providerId: providerAdvertisement.providerId,
-        status: operatorState.state,
-      },
-      children: [
-        fact("health", operatorState.state),
-        fact("verse", operatorState.verse_id),
-        fact("affect", operatorState.readiness.affect_aware_lowering),
-        fact("affect passes", tuning ? `${tuning.affect_contrast_visible}/${tuning.pass_count} visible` : "none"),
-        fact("culture profiles", String(cultureCatalog.profile_count)),
-        fact("target profiles", String(cultureCatalog.target_language_profile_count)),
-        fact("commands", operatorState.readiness.command_ingress),
-        fact("command boundary", commandBoundary.boundary_id),
-        fact("mimo voicedesign", operatorState.readiness.mimo_voicedesign),
-      ],
-    },
   };
 }
 
@@ -1005,14 +910,6 @@ async function callMimoVoiceDesign(mimoRequest) {
     id: json.id ?? null,
     created: json.created ?? null,
     audioBytes: Buffer.from(audioData, "base64"),
-  };
-}
-
-function fact(label, value) {
-  return {
-    id: `weksa.operator.fact.${label.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`,
-    kind: "text",
-    props: { label, text: `${label}: ${value}` },
   };
 }
 

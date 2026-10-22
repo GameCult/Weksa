@@ -4,7 +4,7 @@ Weksa is the language-intent daemon surface: currently a state spine, pipeline
 map, fixtures, and service contract waiting for its runtime loop.
 
 See [Verse Service Contract](./verse-service-contract.md) for the
-CultCache/CultMesh/Eve authority map.
+CultCache/CultMesh authority map.
 
 ## Objective
 

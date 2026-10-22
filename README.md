@@ -42,7 +42,7 @@ meaning-packet contract Weksa clients should target.
 
 See [Verse Service Contract](./docs/verse-service-contract.md) for the daemon
 contract: Weksa owns typed conversational intent, pronunciation plans, utterance
-handoffs, and the Eve/CultMesh surfaces that make those documents inspectable.
+handoffs, and the typed CultMesh state that makes those documents inspectable. Eve is deprecated and Thing 2 is its successor; the operator Eve surface is quarantined (see the contract).
 
 See [Multilingual Utterance Lowering](./docs/multilingual-utterance-lowering.md)
 for the shared lowering target: interlingua projected through speaker state into

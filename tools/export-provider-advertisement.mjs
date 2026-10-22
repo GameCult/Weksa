@@ -54,7 +54,7 @@ const document = {
       kind: "operator",
       cultMeshKey: "weksa.operator/status",
       authority: "Weksa daemon runtime",
-      schemas: ["weksa.operator_state.v0", "gamecult.eve.surface.v1"],
+      schemas: ["weksa.operator_state.v0"],
     },
     {
       id: "weksa.cultural_ontology",
@@ -95,35 +95,6 @@ const document = {
       witnesses: ["weksa.cultural_ontology_profile.v0", "weksa.cultural_ontology_catalog.v0"],
       durableShape: ".weksa/cultural-ontology/{storeId}.cc",
     },
-    {
-      family: "eve",
-      namespace: "weksa.eve.*",
-      witnesses: ["gamecult.eve.provider_advertisement.v1", "gamecult.eve.surface.v1"],
-      durableShape: ".weksa/eve-surfaces.cc",
-    },
-  ],
-  cultMeshSurfaceKeys: [
-    {
-      id: "weksa.eve.intent_review.v0",
-      documentSchema: "gamecult.eve.surface.v1",
-      cultMeshKey: "weksa.eve.surface.intent-review",
-      binds: ["weksa.intent.*", "weksa.trace.*"],
-      status: "expected-surface",
-    },
-    {
-      id: "weksa.eve.pronunciation_trace.v0",
-      documentSchema: "gamecult.eve.surface.v1",
-      cultMeshKey: "weksa.eve.surface.pronunciation-trace",
-      binds: ["weksa.pronunciation.*", "weksa.trace.*"],
-      status: "expected-surface",
-    },
-    {
-      id: "weksa.eve.utterance_handoff.v0",
-      documentSchema: "gamecult.eve.surface.v1",
-      cultMeshKey: "weksa.eve.surface.utterance-handoff",
-      binds: ["weksa.utterance.*", "aquasynth.speech.*"],
-      status: "expected-surface",
-    },
   ],
   commandBoundaries: [
     {
@@ -151,7 +122,6 @@ const document = {
   loweringRules: [
     "Weksa owns conversational intent and utterance lowering.",
     "AquaSynth owns learned embeddings, synth controls, Faust compilation, and audio output.",
-    "Eve surfaces submit commands and inspect witnesses; they do not own intent truth.",
     "Fixture exports are discovery metadata until the daemon loop commits typed witnesses.",
   ],
 };

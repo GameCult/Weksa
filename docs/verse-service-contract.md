@@ -25,8 +25,6 @@ Outputs:
 - `weksa.mimo_voicedesign_command.v0`
 - `weksa.mimo_tts_request.v0`
 - `weksa.mimo_voicedesign_receipt.v0`
-- Eve/CultUI surfaces for intent review, pronunciation inspection, and handoff
-  traces
 
 Weksa owns conversational intent and utterance lowering. AquaSynth owns learned
 phonetic realization, packed utterance embeddings, synth-driver controls, Faust
@@ -39,12 +37,10 @@ and trace.
 - `.weksa/provider-advertisement.cc`: read-only provider advertisement witness.
 - `.weksa/provider-advertisement-store.cc`: CultMesh/CultCache provider store
   containing `gamecult.eve.provider_advertisement.v1`,
-  `gamecult.eve.interface_binding.v1`, `gamecult.eve.surface_state.v1`,
   `weksa.operator_state.v0`, `weksa.command_boundary.v1`, and
   `weksa.transport_profile.v1` records for Odin discovery.
 - `.weksa/operator-state.cc`: daemon health, readiness, and runtime witness
   index used by Idunn health checks and operator inspection.
-- `.weksa/eve-surfaces.cc`: current Weksa operator Eve surface witness.
 - `.weksa/command-boundary.cc`: provider-owned command and lifecycle boundary
   naming Weksa as owner, Idunn as lifecycle requester, and the MiMo
   VoiceDesign RUDP command ingress as daemon-owned transport authority.
@@ -107,20 +103,13 @@ Odin ingests the Starfire Weksa provider through
 `.weksa/provider-advertisement-store.cc`. Idunn tracks the daemon as target
 `weksa` in the `starfire-local` swarm profile and owns restart authority through
 the Weksa restart script. Odin should read Weksa's provider advertisement,
-operator state, command boundary, transport profile, and Eve surface from the
+operator state, command boundary, and transport profile from the
 typed provider store and RUDP command boundary; no HTTP endpoint owns provider
 truth.
 
-## Eve Surfaces
+## Operator Dashboards
 
-- `weksa.eve.intent_review.v0`: inspect typed conversational intent before it
-  becomes an utterance.
-- `weksa.eve.pronunciation_trace.v0`: inspect pronunciation and IPA/prosody
-  lowering.
-- `weksa.eve.utterance_handoff.v0`: inspect handoff packets, embedding request
-  status, and AquaSynth receipt links.
-- `weksa.eve.operator.v0`: compact daemon state, queues, schema versions, and
-  witness freshness.
+Eve is deprecated, and Thing 2 is its successor (`thing2:ruling:eve-dashboards-quarantined`, 2026-10-22). Weksa's operator Eve surface publisher is quarantined: removed from main and the build, parked at the `parked/weksa-eve-surface` tag, with follow-up `thing2:follow_up:weksa-operator-view-on-thing2` to rebuild it on Thing 2. Until Thing 2's surface contract is ready, Weksa publishes typed CultMesh state (operator state, command boundary, transport profile, provider advertisement) and no dashboard composition.
 
 ## Commands
 
@@ -142,7 +131,7 @@ truth.
 
 - Text renderers do not own meaning.
 - AquaSynth does not own conversational intent.
-- Eve lowerings do not own Weksa state.
+- Dashboard renderers do not own Weksa state.
 - Fixture emitters cannot become an alternate runtime truth.
 - Agent transcript memory cannot silently override typed Persona or intent
   documents.
