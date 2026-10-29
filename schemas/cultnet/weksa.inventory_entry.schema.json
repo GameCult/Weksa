@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "InventoryEntry",
+  "description": "Key: the entry's id, `<family>:<n>`.",
+  "type": "object",
+  "properties": {
+    "applies_to": {
+      "description": "Non-empty exactly on features.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Slot"
+      }
+    },
+    "gloss": {
+      "description": "1 to 120 bytes, no control character (checked at admission).",
+      "type": "string"
+    },
+    "id": {
+      "$ref": "#/$defs/InvId"
+    },
+    "introduced_rev": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "retired_rev": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0
+    },
+    "value_kind": {
+      "description": "Present exactly on features and extensions.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ValueKind"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "id",
+    "gloss",
+    "applies_to",
+    "introduced_rev"
+  ],
+  "$defs": {
+    "InvId": {
+      "type": "string",
+      "pattern": "^(concept|frame|role|relation|speech_act|feature|referent_kind|extension):[1-9][0-9]*$"
+    },
+    "OptionLabel": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,23}$"
+    },
+    "OptionSet": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/OptionLabel"
+      },
+      "maxItems": 16,
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "Slot": {
+      "description": "Where a feature may sit in a packet.",
+      "type": "string",
+      "enum": [
+        "Discourse",
+        "Referent",
+        "Predication",
+        "Relation"
+      ]
+    },
+    "ValueKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "Grade",
+            "Flag"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "Options": {
+              "$ref": "#/$defs/OptionSet"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Options"
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,472 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Packet",
+  "type": "object",
+  "properties": {
+    "constraints": {
+      "$ref": "#/$defs/Constraints"
+    },
+    "context": {
+      "$ref": "#/$defs/Context"
+    },
+    "discourse": {
+      "$ref": "#/$defs/Discourse"
+    },
+    "extensions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Extension"
+      }
+    },
+    "id": {
+      "$ref": "#/$defs/PacketId"
+    },
+    "inventory_rev": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "kind": {
+      "$ref": "#/$defs/PacketKind"
+    },
+    "predications": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Predication"
+      }
+    },
+    "provenance": {
+      "$ref": "#/$defs/Provenance"
+    },
+    "referents": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Referent"
+      }
+    },
+    "relations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Relation"
+      }
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "trace": {
+      "$ref": "#/$defs/Trace"
+    }
+  },
+  "required": [
+    "id",
+    "schema_version",
+    "inventory_rev",
+    "kind",
+    "provenance",
+    "context",
+    "discourse",
+    "referents",
+    "predications",
+    "relations",
+    "constraints",
+    "extensions",
+    "trace"
+  ],
+  "$defs": {
+    "Constraints": {
+      "type": "object",
+      "properties": {
+        "deterministic": {
+          "type": "boolean"
+        },
+        "max_latency_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "preserve": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NodeId"
+          }
+        }
+      },
+      "required": [
+        "preserve",
+        "deterministic"
+      ]
+    },
+    "Context": {
+      "type": "object",
+      "properties": {
+        "audience": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NodeId"
+          }
+        },
+        "medium": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "participants": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NodeId"
+          }
+        },
+        "setting": {
+          "description": "Concept ids.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "participants",
+        "audience"
+      ]
+    },
+    "Discourse": {
+      "type": "object",
+      "properties": {
+        "addressee": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NodeId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "features": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FeatureValue"
+          }
+        },
+        "speech_act": {
+          "description": "Speech-act id.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "features"
+      ]
+    },
+    "EncoderId": {
+      "type": "string",
+      "pattern": "^encoder:[0-9a-f]{16}$"
+    },
+    "Extension": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "description": "Extension-entry id; the inventory declares its value kind.",
+          "$ref": "#/$defs/InvId"
+        },
+        "value": {
+          "$ref": "#/$defs/FeatValue"
+        }
+      },
+      "required": [
+        "key",
+        "value"
+      ]
+    },
+    "FeatValue": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "Grade": {
+              "$ref": "#/$defs/Grade"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Grade"
+          ]
+        },
+        {
+          "description": "A label the feature's inventory entry declares.",
+          "type": "object",
+          "properties": {
+            "Option": {
+              "$ref": "#/$defs/OptionLabel"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Option"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "Flag": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Flag"
+          ]
+        }
+      ]
+    },
+    "FeatureValue": {
+      "type": "object",
+      "properties": {
+        "feature": {
+          "description": "Feature id.",
+          "$ref": "#/$defs/InvId"
+        },
+        "value": {
+          "$ref": "#/$defs/FeatValue"
+        }
+      },
+      "required": [
+        "feature",
+        "value"
+      ]
+    },
+    "Grade": {
+      "type": "integer",
+      "maximum": 1000,
+      "minimum": 0
+    },
+    "InvId": {
+      "type": "string",
+      "pattern": "^(concept|frame|role|relation|speech_act|feature|referent_kind|extension):[1-9][0-9]*$"
+    },
+    "NodeId": {
+      "type": "string",
+      "pattern": "^n[1-9][0-9]{0,3}$"
+    },
+    "OptionLabel": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,23}$"
+    },
+    "PacketId": {
+      "type": "string",
+      "pattern": "^packet:[0-9a-f]{16}$"
+    },
+    "PacketKind": {
+      "type": "string",
+      "enum": [
+        "Utterance",
+        "NameRequest",
+        "CommentaryIntent",
+        "Narration",
+        "DialogueLine",
+        "CorpusExample",
+        "DebugProbe"
+      ]
+    },
+    "Predication": {
+      "type": "object",
+      "properties": {
+        "concept": {
+          "description": "Concept id.",
+          "$ref": "#/$defs/InvId"
+        },
+        "features": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FeatureValue"
+          }
+        },
+        "frame": {
+          "description": "Frame id.",
+          "$ref": "#/$defs/InvId"
+        },
+        "id": {
+          "$ref": "#/$defs/NodeId"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RoleFill"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "concept",
+        "frame",
+        "roles",
+        "features"
+      ]
+    },
+    "ProperName": {
+      "description": "1 to 4 space-joined tokens of letters, apostrophes and hyphens.",
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^\\p{L}([\\p{L}'’-]{0,22}\\p{L})?( \\p{L}([\\p{L}'’-]{0,22}\\p{L})?){0,3}$"
+    },
+    "Provenance": {
+      "type": "object",
+      "properties": {
+        "confidence": {
+          "$ref": "#/$defs/Grade"
+        },
+        "corpus_item": {
+          "description": "Key of the corpus item this packet was minted for.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "encoder": {
+          "$ref": "#/$defs/EncoderId"
+        },
+        "source": {
+          "$ref": "#/$defs/ProvenanceSource"
+        }
+      },
+      "required": [
+        "source",
+        "encoder",
+        "confidence"
+      ]
+    },
+    "ProvenanceSource": {
+      "type": "string",
+      "enum": [
+        "Authored",
+        "ModelDecomposition",
+        "GameTelemetry",
+        "ImportedCorpus"
+      ]
+    },
+    "Referent": {
+      "type": "object",
+      "properties": {
+        "concept": {
+          "description": "Concept id.",
+          "$ref": "#/$defs/InvId"
+        },
+        "features": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FeatureValue"
+          }
+        },
+        "id": {
+          "$ref": "#/$defs/NodeId"
+        },
+        "kind": {
+          "description": "Referent-kind id.",
+          "$ref": "#/$defs/InvId"
+        },
+        "name": {
+          "description": "A proper name, the one place a referent carries wording. It is\nform-bounded text; the scorer masks it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProperName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "concept",
+        "features"
+      ]
+    },
+    "Relation": {
+      "type": "object",
+      "properties": {
+        "features": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FeatureValue"
+          }
+        },
+        "from": {
+          "$ref": "#/$defs/NodeId"
+        },
+        "relation": {
+          "description": "Relation id.",
+          "$ref": "#/$defs/InvId"
+        },
+        "to": {
+          "$ref": "#/$defs/NodeId"
+        }
+      },
+      "required": [
+        "relation",
+        "from",
+        "to",
+        "features"
+      ]
+    },
+    "RoleFill": {
+      "type": "object",
+      "properties": {
+        "filler": {
+          "$ref": "#/$defs/NodeId"
+        },
+        "role": {
+          "description": "Role id.",
+          "$ref": "#/$defs/InvId"
+        }
+      },
+      "required": [
+        "role",
+        "filler"
+      ]
+    },
+    "Trace": {
+      "description": "Authoring and debug notes. Stripped before lowering.",
+      "type": "object",
+      "properties": {
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rejected_readings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "notes",
+        "rejected_readings"
+      ]
+    }
+  }
+}

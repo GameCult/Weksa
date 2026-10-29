@@ -17,14 +17,20 @@ measured.
 **Entry points.**
 
 - [Interlingua Standard](./docs/interlingua-standard.md): the packet contract.
+- `crates/weksa`: the packet, inventory and corpus types, `validate`, the
+  derived split and the `weksa` CLI (`weksa validate`, `corpus`, `inventory`,
+  `split`, `schema`); published schemas in `schemas/cultnet/`.
+- `data/corpus/corpus.cc` and `data/interlingua/inventory.cc`: the English
+  corpus and the inventory, read with `weksa corpus dump` and
+  `weksa inventory dump`.
 - [Lowering target](./docs/targets/interlingua-lowering.md) and
   [its map](./docs/targets/interlingua-lowering-map.md): the design, scoring
   and cut sequence.
 - `data/`: the cultural ontology and target-language profile data.
 - `settings/`: setting-specific proving grounds for language projects.
 
-**Live versus planned.** Live: docs, fixtures, examples and ontology data.
-Planned: the packet crate `crates/weksa` (cut `packet-store`), lowering, and
+**Live versus planned.** Live: docs, fixtures, examples, ontology data and the
+packet crate `crates/weksa`. Planned: scoring, lowering, and
 the golf loop that scores lowered English against an expressive corpus. No
 daemon runs; the earlier Node daemon is parked at tag `parked/weksa-node-body`.
 
@@ -85,7 +91,8 @@ AquaSynth or expanding pronunciation coverage.
 ## Implementation Status
 
 The persistent state spine is live: map, scratch, schemas, docs, examples and
-data. Packet storage, lowering and the service are planned (see the cut
+data. Packet types, validation and the corpus and inventory stores are live in
+`crates/weksa`. Scoring, lowering and the service are planned (see the cut
 sequence in [the lowering map](./docs/targets/interlingua-lowering-map.md)).
 Writing and agent state will enter Weksa as intent pressure, and typed utterance
 documents will leave for AquaSynth.

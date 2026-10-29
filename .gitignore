@@ -10,6 +10,7 @@ state/scratch-runtime/
 .weksa-runs/
 .weksa-smoke/
 .weksa/*.cc
+*.cc.lock
 .weksa/*.json
 .weksa/*.log
 .weksa/*.pid
@@ -20,3 +21,4 @@ dist/
 build/
 .venv/
 venv/
+target/

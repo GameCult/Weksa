@@ -46,7 +46,7 @@ The live state architecture is ported from EpiphanyAgent in reduced form:
 - `state/map.yaml` is canonical and slow-changing.
 - `state/scratch.md` is temporary and disposable.
 - `schemas/` explains state contracts in human language.
-- `packages/weksa-state-model` owns executable typed state.
+- `crates/weksa` owns executable typed state.
 
 Project truth does not belong in agent personality memory. If Weksa later grows
 role dossiers or heartbeat scheduling, those surfaces must remain separate from
