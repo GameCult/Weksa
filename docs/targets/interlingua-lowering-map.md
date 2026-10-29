@@ -15,12 +15,12 @@ types, speech acts and nuance features (hedge, certainty, warmth, irony and
 whatever the loop finds missing) that the schema's slots name by id. Every open slot in a packet is an inventory id; a packet's only free text is
 form-bounded referent names and the trace. No door judges text for leakage:
 what each model call may see, and what a score may count, own that
-(`weksa-lowering:ruling:leak-owned-by-flow-and-scorer-2`). The golf loop improves the spec
+(`weksa-lowering:ruling:leak-owned-by-flow-and-scorer-3`). The golf loop improves the spec
 mostly by growing and refining the inventory, which is fast; schema changes are
 the slow path. Concepts are open-class and grow forever; the other families are
 closed-class, and convergence is measured on them
 (`weksa-lowering:ruling:convergence-test`). This split was
-`spec-is-schema-plus-inventory`, now carried by `leak-owned-by-flow-and-scorer-2`.
+`spec-is-schema-plus-inventory`, now carried by `leak-owned-by-flow-and-scorer-3`.
 
 ## Model page
 
@@ -170,49 +170,58 @@ operator-attested annotations alone. Who annotates is question
   lexicon adherence for a conlang: the share of tokens that parse against its
   lexicon and morphology.
 - A style axis follows as its own cut, behind the same scorer port.
-- Leak (`leak-owned-by-flow-and-scorer-2`): two owners, no door. The loop's
-  context builder gives inventory-minting calls Train items only, the encoder
-  emits only a packet, and prompts are fixed within a run. The scorer never
-  touches the reference. It deletes the packet's referent-name tokens from the
-  lowered output only, collapses the whitespace left behind, and scores that
-  against the whole reference, so an output that renders a name scores exactly
-  what the same output with that name left out scores, for chrF and for
-  cosine: naming a word is worth what omitting it is worth, and no more.
-  Matching treats every language alike: NFC, then full Unicode case folding
-  (ß/ss, final sigma), then UAX #29 word segmentation of name and output; a
-  name token matches whole word segments only, so "Al" no longer guts "all".
-  Scripts that UAX #29 splits per character (Han, Hiragana) match the name's
-  segment sequence, which can fall inside a longer compound; without a
-  dictionary that is the floor. Transliterated renderings ("Brokkr" as
-  katakana) are masked only once the lowering trace names them (follow-up
-  `name-renderings-from-trace`). The cost: an honest name earns nothing.
-  "Brokkr came back." lowered perfectly scores chrF 56.61 and cosine 0.736
-  against itself, and "Kestrel came back." scores 51.37, so name fidelity is
-  not measured by the composite; common-word names (Will, May) also delete
-  their homographs from the output. The cost is the same for every spec that
-  names the same referents, so it lowers absolute scores on name-dense items
-  without favouring a spec; it is penalty-only, because masking more of the
-  output can only lower a score. Corpus-annotated names are the way to credit
-  honest names without reopening the channel (follow-up
-  `corpus-annotated-names`). The scorer reports, beside the scores and not as
-  gates: the share of the output and of the reference the name mask matches;
-  max pairwise chrF of minted glosses and labels against Validation and Test
-  items; and each held-out item's novel coverage: of its word 1-, 2- and
-  3-grams (same normalisation and segmentation) that occur in no Train item,
-  the share that occur in the minted text (unigrams over the union of all
-  minted tokens, 2- and 3-grams within one minted string). Excluding Train
-  n-grams keeps honest glosses of shared vocabulary from reading as leaks,
-  and grams of every length down to one catch one- and two-word chunking. An
-  item with no novel n-gram reads None (its words carry nothing a Train-only
-  proposer could not have minted); an honest run reads low but not zero,
-  because model-written glosses bring their own vocabulary. The minted text
-  is a list of strings the caller passes, so ontology entries (cut
-  `language-ontology`) join it without a scorer change. Rejected paths: text
-  rules at the inventory and packet doors (Soul packet-store s2 beat them, and
-  a door cannot know what a writer saw); masking reference and output alike
-  (Soul scorer s1: naming "kick the bucket" as "Kick Bucket" took chrF from
-  53.73 to 100, because it shrank what the output was scored against);
-  character 6-gram coverage per minted string (one-word glosses read 0.000).
+- Names and leak (`leak-owned-by-flow-and-scorer-3`): no packet field carries
+  free text, so the scorer masks nothing. A referent names an entity by id
+  (`EntityId`, `entity:<slug>`); the entity store (`weksa.entity`) holds each
+  entity's forms per language, citation form first, then inflected or
+  particle-bound forms (data, as the inventory is). Entities are minted at
+  intake: cast entities from the cast fixtures, public-domain entities by the
+  importer, and in live use by the persona before it names one. A corpus item
+  carries its name spans (byte ranges of its text, each naming an entity and
+  equal to one of that entity's forms in the item's language), and its speaker
+  and prior-turn speakers are entity ids. The packet store refuses a packet
+  whose referent cites an entity the store lacks, and a packet with a
+  `corpus_item` that cites an entity neither annotated on that item nor one of
+  its speakers: an id-set check, not a text rule. The scorer reads only the
+  output and the reference and scores the whole of each. An honest name earns
+  its credit ("Brokkr came back." against itself is 100), a wrong one loses it,
+  filler costs what filler costs (Soul scorer s2: "Darling, I am truly not
+  angry, darling." scores 46.84 whole; the output-only mask, fed the filler as
+  a name, had raised it to 86.78), and no rule depends on script or word
+  segmentation, so Thai, Korean particles and Turkish or Finnish suffixes are
+  scored by the same character n-grams as English. Why this is not a leak:
+  leakage is information the learner has that it would not have at prediction
+  time (Kaufman et al., TKDD 2012). A live persona knows which entity it means;
+  the annotation gives the corpus encoder exactly that, fixed at intake before
+  any round and written by no loop writer, and the encoder chooses only which
+  of the item's own ids to cite. The free text left is inventory labels and
+  glosses (Train-only, the context builder's) and the trace (never lowered or
+  scored). Diagnostics, reported and never gates: max pairwise chrF of minted
+  text against held-out items; novel coverage pooled per order, for n = 1, 2
+  and 3 separately, the covered share of all novel n-grams (word n-grams of a
+  held-out item that occur in no Train item) over a split's items, with the
+  worst item at n >= 2. Keys split on `_`, `.` and lower-to-upper case
+  transitions as well as UAX #29 boundaries, so a snake_case `OptionLabel`
+  reads as words. Honest glosses of single words saturate n = 1 (the 54 seed
+  glosses read max 1.000, s2), so the leak signature is pooled n >= 2.
+  Costs: a live persona mints before it names (one typed write, which also
+  buys coreference and one rendering per language); public-domain intake
+  annotates name spans (follow-up `pd-name-spans`, annotator per
+  `pd-speaker-annotation`); the lowerer inflects a name from its stored forms
+  or adds one, traced. Prior art (recall): AMR keeps `:name` strings inside
+  the graph beside a `:wiki` link, and AMR-to-text systems copy those strings;
+  Abstract Wikipedia renders constructors over Wikidata item ids, with labels
+  per language and Lexeme forms for inflection; Grammatical Framework lexicons
+  hold proper names (`PN`) with per-language inflection tables; referring
+  expression generation (Reiter and Dale 2000; the GREC tasks, 2008-2010)
+  chooses a name, pronoun or description from an entity id and the discourse.
+  Rejected paths: text rules at the inventory and packet doors (Soul
+  packet-store s2); any mask of names in the scored texts: masking reference
+  and output (s1: "Kick Bucket" took chrF 53.73 to 100) and masking the output
+  only (s2: named filler took chrF 46.84 to 86.78, cosine 0.728 to 0.886);
+  equal-length placeholder masking (bounds chrF, not cosine, and still pays
+  nothing for an honest name); character 6-gram coverage (one-word glosses
+  read 0.000); max-over-items coverage (saturates on honest runs).
 
 ## Body facts (probes of 2026-10-29, map pass for speaker state, 2b and scorer)
 
@@ -309,8 +318,9 @@ One line per cut; specs exist for the cuts about to run (2b and 3, siblings).
 1. `park-node-body`: park the Node daemon, MiMo command, RUDP shims, launchers and the Discord-sourced Metame harness at tag `parked/weksa-node-body`; README front door tells the truth. Landed.
 2. `packet-store`: Rust crate with packet, inventory and corpus types, the validator, the derived split, the stores and the `weksa` CLI. Landed at `28284cc`.
 2b. `packet-store-corpus`: corpus labels tell the truth (`corpus-labels-tell-truth`): `ModelFamily` and the generator string on `ModelWritten`; `item:nibu:1` ModelWritten (Unrecorded); `item:brokkr:1` and its fixture carry `codex-local-source-aware-draft`, family OpenAi; intake refuses aliased keys, a whole item changed under its key, and a held item's text under a new key; corpus.cc reseeded. Speaker state is not in 2b: it lives in Speaker and Scene documents and the packet's stance, not on the item. Waits on 2. (spec)
-3. `scorer`: chrF, meaning cosine behind an `Embedder` port (Ollama adapter with `num_thread`), the name mask, leak diagnostics, aggregation by derived split; library only, `weksa score` comes with the loop. h1 landed on its branch; r2 is the fix pass after Soul s1 (output-only mask by whole normalised words, novel n-gram coverage, whitespace parity, pinned survivors, dimension check). (spec r2)
-4. `speaker-state`: inventory slots `Stance`, `Speaker`, `Scene`; packet schema v2 with `stance` (felt affect, restraint); formality, warmth and intensity removed from the seed and the standard; `weksa.speaker` and `weksa.scene` documents with `Annotator` (reusing 2b's `ModelFamily`), validated by the packet's feature check; corpus items name speaker slugs that resolve; cast speakers and scenes for the three items. Waits on 2b and question `pd-speaker-annotation` only for the annotator variants it admits.
+2c. `entity-store`: `ProperName` and `Referent.name` deleted; `EntityId`, `Referent.entity`, the `weksa.entity` document and its store; corpus name spans and entity-id speakers; the packet store's entity checks; seed entities and spans for the cast items; schema v2. Waits on 2b. (spec r1)
+3. `scorer`: chrF, meaning cosine behind an `Embedder` port (Ollama adapter with `num_thread`), leak diagnostics, aggregation by derived split; library only, `weksa score` comes with the loop. h2 landed the r2 fix pass on its branch; r3 deletes the name mask (the scorer reads output and reference only) and pools novel coverage per order over word keys that split joined labels. Waits on 2c for merge order. (spec r3)
+4. `speaker-state`: inventory slots `Stance`, `Speaker`, `Scene`; packet schema v3 with `stance` (felt affect, restraint); formality, warmth and intensity removed from the seed and the standard; `weksa.speaker` and `weksa.scene` documents with `Annotator` (reusing 2b's `ModelFamily`), validated by the packet's feature check; Speaker documents keyed by the entity ids of 2c; cast speakers and scenes for the three items. Waits on 2b and question `pd-speaker-annotation` only for the annotator variants it admits.
 5. `language-ontology`: `weksa.community` from `data/cultural-ontology/` (owns follow-up `edda-referent-yaml-parse`), `weksa.ontology_entry` for en-US and ja-JP from `data/target-language-ontology/` (YAML deleted), speaker communities, deterministic `select`, the lowering view (packet without trace, speaker, scene, selected entries). Waits on 4.
 6. `pd-importer`: public-domain play and fiction dialogue into the corpus with speaker, scene group, edition provenance, and Speaker and Scene annotations by the ruled annotator. Waits on 4, follow-up `gutenberg-terms` and question `pd-speaker-annotation`.
 7. `golf-loop-en`: the loop driver, the Train-only context builder for inventory- and ontology-minting calls (follow-up `loop-context-builder-train-only`), the packet store bound to one inventory store (`packet-store-inventory-binding`), `ModelPort` with the `claude -p` adapter, encoder (packet with stance) and lowerer prompts, round records, Score documents, the composite and accept rule, `weksa score`, the detached unit on Yggdrasil. Waits on 3, 5, 6 and follow-up `claude-on-yggdrasil`.
