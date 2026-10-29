@@ -114,6 +114,14 @@ pub fn validate(packet: &Packet, inventory: &Inventory) -> Result<(), Vec<Refusa
 /// The one implementation of the rules. Crate-private: `PacketStore::admit` is
 /// the only caller that keeps the view.
 ///
+/// The first block is the same call through the public name, so the second
+/// fails for the private path and nothing else.
+///
+/// ```
+/// use weksa::{Inventory, packet::Packet};
+/// fn judge(p: &Packet, i: &Inventory) { let _ = weksa::validate::validate(p, i); }
+/// ```
+///
 /// ```compile_fail
 /// use weksa::{Inventory, packet::Packet};
 /// fn lower(p: &Packet, i: &Inventory) { let _ = weksa::validate::admissible(p, i); }
