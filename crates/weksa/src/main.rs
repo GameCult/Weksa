@@ -5,9 +5,14 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use weksa::corpus::{CorpusItem, ModelFamily, Source, Turn};
+use unicode_normalization::UnicodeNormalization;
+use weksa::corpus::{CorpusItem, ModelFamily, NameSpan, Source, Turn};
+use weksa::entity::{Entity, EntityOrigin, LanguageForms};
 use weksa::inventory::seed;
-use weksa::{CorpusStore, InventoryStore, PacketStore, SplitScheme, StoreError, validate};
+use weksa::{
+    CorpusStore, EntityId, EntityStore, InventoryStore, PacketStore, SplitScheme, StoreError,
+    validate,
+};
 
 #[derive(Parser)]
 #[command(
@@ -21,6 +26,9 @@ struct Cli {
     /// The inventory store.
     #[arg(long, global = true, default_value = "data/interlingua/inventory.cc")]
     inventory: PathBuf,
+    /// The entity store.
+    #[arg(long, global = true, default_value = "data/entity/entity.cc")]
+    entities: PathBuf,
     #[command(subcommand)]
     command: Command,
 }
@@ -33,6 +41,8 @@ enum Command {
     Corpus(CorpusCommand),
     #[command(subcommand)]
     Inventory(InventoryCommand),
+    #[command(subcommand)]
+    Entity(EntityCommand),
     /// Print the split of a corpus item.
     Split { item_key: String },
     /// Write the published JSON Schemas.
@@ -58,6 +68,74 @@ enum InventoryCommand {
     Dump,
     /// Admit revision 1, the standard's enumerated values and the nuance features.
     Seed,
+}
+
+#[derive(Subcommand)]
+enum EntityCommand {
+    /// Admit an entity, or append forms to a stored one.
+    Put(PutArgs),
+    /// Text projection of the entity store for review; not a store.
+    Dump,
+}
+
+#[derive(Args)]
+struct PutArgs {
+    /// `entity:<slug>`.
+    id: String,
+    /// `language=form`, repeated; a language's forms keep the order given,
+    /// citation form first. Forms are NFC-normalized here.
+    #[arg(long = "form", required = true)]
+    forms: Vec<String>,
+    #[arg(long, value_enum)]
+    origin: OriginKind,
+    /// The persona of a `cast` origin; refused with any other origin.
+    #[arg(long)]
+    persona: Option<String>,
+    /// The work of a `public-domain` origin; refused with any other origin.
+    #[arg(long)]
+    work: Option<String>,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum OriginKind {
+    Cast,
+    PublicDomain,
+    Live,
+}
+
+impl PutArgs {
+    fn entity(self) -> Result<Entity> {
+        let mut forms: Vec<LanguageForms> = Vec::new();
+        for f in &self.forms {
+            let (language, form) = f
+                .split_once('=')
+                .with_context(|| format!("--form {f:?} is not language=form"))?;
+            match forms.iter_mut().find(|lf| lf.language == language) {
+                Some(lf) => lf.forms.push(form.nfc().collect()),
+                None => forms.push(LanguageForms {
+                    language: language.to_string(),
+                    forms: vec![form.nfc().collect()],
+                }),
+            }
+        }
+        let origin = match (self.origin, self.persona, self.work) {
+            (OriginKind::Cast, persona, None) => EntityOrigin::Cast {
+                persona: need(persona, "persona")?,
+            },
+            (OriginKind::PublicDomain, None, work) => EntityOrigin::PublicDomain {
+                work: need(work, "work")?,
+            },
+            (OriginKind::Live, None, None) => EntityOrigin::Live,
+            _ => bail!(
+                "--persona is only for --origin cast and --work only for --origin public-domain"
+            ),
+        };
+        Ok(Entity {
+            id: self.id.parse()?,
+            forms,
+            origin,
+        })
+    }
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -98,12 +176,17 @@ impl From<ModelFamilyArg> for ModelFamily {
 struct AddArgs {
     #[arg(long)]
     slug: String,
+    /// NFC-normalized here; `--name` byte offsets index the normalized text.
     #[arg(long)]
     text: String,
     #[arg(long, default_value = "en-US")]
     language: String,
+    /// An entity id.
     #[arg(long)]
-    speaker: String,
+    speaker: EntityId,
+    /// `start..end=entity:<slug>`, repeated: a byte range of the text naming an entity.
+    #[arg(long = "name")]
+    names: Vec<String>,
     #[arg(long)]
     group: String,
     /// `speaker=text`, repeated, oldest first.
@@ -177,15 +260,29 @@ impl AddArgs {
                     .split_once('=')
                     .with_context(|| format!("--prior-turn {t:?} is not speaker=text"))?;
                 Ok(Turn {
-                    speaker: speaker.to_string(),
-                    text: text.to_string(),
+                    speaker: speaker.parse()?,
+                    text: text.nfc().collect(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let names = self
+            .names
+            .iter()
+            .map(|n| {
+                let bad = || format!("--name {n:?} is not start..end=entity:<slug>");
+                let (range, entity) = n.split_once('=').with_context(bad)?;
+                let (start, end) = range.split_once("..").with_context(bad)?;
+                Ok(NameSpan {
+                    entity: entity.parse()?,
+                    start: start.parse().with_context(bad)?,
+                    end: end.parse().with_context(bad)?,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(CorpusItem {
             id,
             source: self.source()?,
-            text: self.text,
+            text: self.text.nfc().collect(),
             language: self.language,
             speaker: self.speaker,
             group: self.group,
@@ -193,6 +290,7 @@ impl AddArgs {
             admitted_on: self.admitted_on,
             supersedes: self.supersedes,
             withdrawn: false,
+            names,
         })
     }
 }
@@ -241,7 +339,10 @@ fn main() -> Result<()> {
         Command::Corpus(CorpusCommand::Add(args)) => {
             let mut store = CorpusStore::open(&cli.corpus)?;
             let key = store.next_key(&args.slug)?;
-            let outcome = store.add((*args).item(key.clone())?).map_err(refused)?;
+            let entities = EntityStore::open(&cli.entities)?;
+            let outcome = store
+                .add((*args).item(key.clone())?, &entities)
+                .map_err(refused)?;
             println!("{outcome:?} {key}");
         }
         Command::Corpus(CorpusCommand::Dump) => {
@@ -249,8 +350,8 @@ fn main() -> Result<()> {
                 let split = split_text(&i);
                 let withdrawn = if i.withdrawn { " withdrawn" } else { "" };
                 println!(
-                    "{} [{} {} group={} {split}{withdrawn}]\n  {:?}\n  source: {:?}",
-                    i.id, i.language, i.speaker, i.group, i.text, i.source
+                    "{} [{} {} group={} {split}{withdrawn}]\n  {:?}\n  names: {:?}\n  source: {:?}",
+                    i.id, i.language, i.speaker, i.group, i.text, i.names, i.source
                 );
             }
         }
@@ -276,6 +377,19 @@ fn main() -> Result<()> {
                     "{} introduced={} retired={:?} {:?} {:?} {}",
                     e.id, e.introduced_rev, e.retired_rev, e.value_kind, e.applies_to, e.gloss
                 );
+            }
+        }
+        Command::Entity(EntityCommand::Put(args)) => {
+            let entity = args.entity()?;
+            let id = entity.id.clone();
+            let outcome = EntityStore::open(&cli.entities)?
+                .put(entity)
+                .map_err(refused)?;
+            println!("{outcome:?} {id}");
+        }
+        Command::Entity(EntityCommand::Dump) => {
+            for e in EntityStore::open(&cli.entities)?.all()? {
+                println!("{} {:?}\n  forms: {:?}", e.id, e.origin, e.forms);
             }
         }
         Command::Inventory(InventoryCommand::Seed) => {

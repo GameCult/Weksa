@@ -143,6 +143,10 @@
         "audience"
       ]
     },
+    "CorpusItemId": {
+      "type": "string",
+      "pattern": "^item:[a-z0-9]([a-z0-9-]{0,46}[a-z0-9])?:[1-9][0-9]*$"
+    },
     "Discourse": {
       "type": "object",
       "properties": {
@@ -181,6 +185,10 @@
     "EncoderId": {
       "type": "string",
       "pattern": "^encoder:[0-9a-f]{16}$"
+    },
+    "EntityId": {
+      "type": "string",
+      "pattern": "^entity:[a-z0-9]([a-z0-9-]{0,46}[a-z0-9])?$"
     },
     "Extension": {
       "type": "object",
@@ -323,12 +331,6 @@
         "features"
       ]
     },
-    "ProperName": {
-      "description": "1 to 4 space-joined tokens of letters, apostrophes and hyphens.",
-      "type": "string",
-      "maxLength": 64,
-      "pattern": "^\\p{L}([\\p{L}'’-]{0,22}\\p{L})?( \\p{L}([\\p{L}'’-]{0,22}\\p{L})?){0,3}$"
-    },
     "Provenance": {
       "type": "object",
       "properties": {
@@ -336,11 +338,8 @@
           "$ref": "#/$defs/Grade"
         },
         "corpus_item": {
-          "description": "Key of the corpus item this packet was minted for.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "description": "The corpus item this packet was minted for. Required: the packet store\nadmits only packets that name their item.",
+          "$ref": "#/$defs/CorpusItemId"
         },
         "encoder": {
           "$ref": "#/$defs/EncoderId"
@@ -351,6 +350,7 @@
       },
       "required": [
         "source",
+        "corpus_item",
         "encoder",
         "confidence"
       ]
@@ -371,6 +371,17 @@
           "description": "Concept id.",
           "$ref": "#/$defs/InvId"
         },
+        "entity": {
+          "description": "The entity this referent names, when it has one. The entity store holds\nits wording; the packet holds only the id.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EntityId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "features": {
           "type": "array",
           "items": {
@@ -383,17 +394,6 @@
         "kind": {
           "description": "Referent-kind id.",
           "$ref": "#/$defs/InvId"
-        },
-        "name": {
-          "description": "A proper name, the one place a referent carries wording. It is\nform-bounded text; the scorer masks it.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ProperName"
-            },
-            {
-              "type": "null"
-            }
-          ]
         }
       },
       "required": [

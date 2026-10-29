@@ -2,6 +2,7 @@
 //! documents; nothing in this crate reads JSON.
 
 use crate::corpus::CorpusItem;
+use crate::entity::Entity;
 use crate::inventory::{InventoryEntry, InventoryRevision};
 use crate::packet::Packet;
 use cultcache_rs::DatabaseEntry;
@@ -19,5 +20,6 @@ pub fn published() -> Vec<(String, String)> {
         published_for::<InventoryEntry>(),
         published_for::<InventoryRevision>(),
         published_for::<CorpusItem>(),
+        published_for::<Entity>(),
     ]
 }

@@ -6,9 +6,12 @@ use cultcache_rs::DatabaseEntry;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::form::{FormError, is_slug, string_form};
+use crate::packet::EntityId;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Turn {
-    pub speaker: String,
+    pub speaker: EntityId,
     pub text: String,
 }
 
@@ -62,7 +65,7 @@ pub struct CorpusItem {
     #[cultcache(key = 2)]
     pub language: String,
     #[cultcache(key = 3)]
-    pub speaker: String,
+    pub speaker: EntityId,
     /// The unit the split hashes: a scene, a fixture, a work.
     #[cultcache(key = 4)]
     pub group: String,
@@ -77,7 +80,47 @@ pub struct CorpusItem {
     pub supersedes: Option<String>,
     #[cultcache(key = 9)]
     pub withdrawn: bool,
+    /// Which entities the text names, and where. Fixed with the text at intake.
+    #[cultcache(key = 10)]
+    pub names: Vec<NameSpan>,
 }
+
+/// A byte range `[start, end)` of an item's text that names an entity. The
+/// store admits it only when both ends sit on extended grapheme cluster
+/// boundaries (UAX #29) of the NFC text and the range's bytes equal one of the
+/// entity's forms in the item's language.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct NameSpan {
+    pub entity: EntityId,
+    pub start: u32,
+    pub end: u32,
+}
+
+/// The key of a corpus item, `item:<slug>:<n>` as `key_slug` reads it. A packet
+/// names the item it was minted for by this type, so the key cannot be free text.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct CorpusItemId(String);
+
+impl CorpusItemId {
+    pub fn parse(s: &str) -> Result<Self, FormError> {
+        key_slug(s)
+            .map(|_| Self(s.to_string()))
+            .ok_or_else(|| FormError::new("CorpusItemId", s))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for CorpusItemId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+string_form!(CorpusItemId, { "type": "string", "pattern": "^item:[a-z0-9]([a-z0-9-]{0,46}[a-z0-9])?:[1-9][0-9]*$" });
 
 /// `item:<slug>:<n>`.
 pub fn item_key(slug: &str, n: u32) -> String {
@@ -92,11 +135,5 @@ pub fn key_slug(key: &str) -> Option<&str> {
     let (slug, n) = rest.rsplit_once(':')?;
     let canonical_n =
         n.bytes().all(|b| b.is_ascii_digit()) && !n.starts_with('0') && n.parse::<u32>().is_ok();
-    let b = slug.as_bytes();
-    let slug_ok = (1..=48).contains(&b.len())
-        && b.iter()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-')
-        && b[0] != b'-'
-        && b[b.len() - 1] != b'-';
-    (canonical_n && slug_ok).then_some(slug)
+    (canonical_n && is_slug(slug)).then_some(slug)
 }

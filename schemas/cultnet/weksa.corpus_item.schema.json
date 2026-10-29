@@ -17,6 +17,13 @@
     "language": {
       "type": "string"
     },
+    "names": {
+      "description": "Which entities the text names, and where. Fixed with the text at intake.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/NameSpan"
+      }
+    },
     "prior_turns": {
       "type": "array",
       "items": {
@@ -27,7 +34,7 @@
       "$ref": "#/$defs/Source"
     },
     "speaker": {
-      "type": "string"
+      "$ref": "#/$defs/EntityId"
     },
     "supersedes": {
       "description": "Key of the item this one corrects.",
@@ -52,9 +59,14 @@
     "prior_turns",
     "source",
     "admitted_on",
-    "withdrawn"
+    "withdrawn",
+    "names"
   ],
   "$defs": {
+    "EntityId": {
+      "type": "string",
+      "pattern": "^entity:[a-z0-9]([a-z0-9-]{0,46}[a-z0-9])?$"
+    },
     "ModelFamily": {
       "description": "The family of the model that wrote a line.",
       "oneOf": [
@@ -74,6 +86,30 @@
           "type": "string",
           "const": "Unrecorded"
         }
+      ]
+    },
+    "NameSpan": {
+      "description": "A byte range `[start, end)` of an item's text that names an entity. The\nstore admits it only when both ends sit on extended grapheme cluster\nboundaries (UAX #29) of the NFC text and the range's bytes equal one of the\nentity's forms in the item's language.",
+      "type": "object",
+      "properties": {
+        "end": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "entity": {
+          "$ref": "#/$defs/EntityId"
+        },
+        "start": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "entity",
+        "start",
+        "end"
       ]
     },
     "Source": {
@@ -196,7 +232,7 @@
       "type": "object",
       "properties": {
         "speaker": {
-          "type": "string"
+          "$ref": "#/$defs/EntityId"
         },
         "text": {
           "type": "string"

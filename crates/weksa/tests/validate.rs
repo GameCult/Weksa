@@ -360,7 +360,6 @@ fn lowering_input_carries_no_trace_id_or_provenance() {
     p.trace.rejected_readings = vec!["SECRET-READING".into()];
     let input = validate(&p, &inventory()).unwrap();
     let seen = format!("{input:?}");
-    assert!(seen.contains("Nibu"), "the input carries the name: {seen}");
     for hidden in [PACKET_ID, ENCODER_ID, "item:nibu:1", "SECRET"] {
         assert!(!seen.contains(hidden), "{hidden} reached the input: {seen}");
     }
@@ -396,7 +395,7 @@ fn referent(id: &str) -> Referent {
         id: nd(id),
         kind: iv(PERSON),
         concept: iv(CONCEPT_A),
-        name: None,
+        entity: None,
         features: vec![],
     }
 }
@@ -507,7 +506,6 @@ fn two_referents() -> Packet {
     let mut p = good();
     let mut r = p.referents[0].clone();
     r.id = nd("n3");
-    r.name = None;
     p.referents.push(r);
     p
 }

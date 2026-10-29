@@ -4,9 +4,11 @@
 //! or a grade is its type's parse, not a rule, so V9 is retired and not
 //! renumbered.
 //!
-//! `validate` owns form and capacity and makes no leak decision. A packet's
-//! free text is form-bounded and every list is bounded, so a packet has no
-//! unbounded channel. What bounds each list (V11, V12): a feature list holds at
+//! `validate` owns form and capacity and makes no leak decision. A packet's one
+//! free text is its trace (`notes` and `rejected_readings`): `validate` does not
+//! bound or read it, and [`LoweringInput`] drops it, so no lowerer sees it.
+//! Every other slot is an id type, so the lists are the bounded part. What bounds
+//! each list (V11, V12): a feature list holds at
 //! most one value per feature id and `extensions` at most one per extension id,
 //! so each is at most the inventory's ids of that kind; `participants`,
 //! `audience` and `preserve` hold each node id at most once and every id names
@@ -14,7 +16,7 @@
 //! hold each role id at most once, so at most the inventory's roles; and the
 //! nodes themselves are at most `Packet::MAX_NODES` (V12). Whether a score may
 //! rise because corpus text reached a packet is owned by the golf loop's
-//! context builder and the scorer (ruling `leak-owned-by-flow-and-scorer`),
+//! context builder and the scorer (ruling `leak-owned-by-flow-and-scorer-3`),
 //! never by a text rule here, in `admit_revision` or in `PacketStore::admit`.
 
 use std::collections::BTreeSet;

@@ -5,10 +5,40 @@ use weksa::{InventoryStore, PacketStore};
 fn weksa(dir: &std::path::Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_weksa"))
         .current_dir(dir)
-        .args(["--corpus", "./c.cc", "--inventory", "./i.cc"])
+        .args([
+            "--corpus",
+            "./c.cc",
+            "--inventory",
+            "./i.cc",
+            "--entities",
+            "./e.cc",
+        ])
         .args(args)
         .output()
         .unwrap()
+}
+
+/// Admits the cast entities the tests cite.
+fn cast_entities(dir: &std::path::Path, slugs: &[&str]) {
+    for slug in slugs {
+        let id = format!("entity:{slug}");
+        let form = format!("en-US={}", slug.to_uppercase());
+        let put = weksa(
+            dir,
+            &[
+                "entity",
+                "put",
+                &id,
+                "--form",
+                &form,
+                "--origin",
+                "cast",
+                "--persona",
+                slug,
+            ],
+        );
+        assert!(put.status.success(), "{}", out(&put));
+    }
 }
 
 fn out(o: &Output) -> String {
@@ -23,7 +53,7 @@ const ADD: [&str; 14] = [
     "--text",
     "Mind the hatch.",
     "--speaker",
-    "nibu",
+    "entity:nibu",
     "--group",
     "scene-1",
     "--admitted-on",
@@ -35,6 +65,7 @@ const ADD: [&str; 14] = [
 #[test]
 fn seed_add_dump_split_withdraw() {
     let d = tempfile::tempdir().unwrap();
+    cast_entities(d.path(), &["nibu"]);
     let seeded = weksa(d.path(), &["inventory", "seed"]);
     assert!(seeded.status.success(), "{}", out(&seeded));
     assert!(out(&seeded).contains("seeded rev:1"));
@@ -105,13 +136,14 @@ fn seed_add_dump_split_withdraw() {
 #[test]
 fn model_written_and_public_domain_sources_name_their_provenance() {
     let d = tempfile::tempdir().unwrap();
+    cast_entities(d.path(), &["s", "player"]);
     let base = [
         "corpus",
         "add",
         "--slug",
         "x",
         "--speaker",
-        "s",
+        "entity:s",
         "--group",
         "g",
         "--admitted-on",
@@ -186,7 +218,7 @@ fn model_written_and_public_domain_sources_name_their_provenance() {
         "--source",
         "operator-written",
         "--prior-turn",
-        "player=hello",
+        "entity:player=hello",
     ]);
     assert!(turn.status.success(), "{}", out(&turn));
 }
@@ -200,7 +232,7 @@ fn validate_reports_each_packet() {
     let packet = common::good();
     PacketStore::open(&packets)
         .unwrap()
-        .admit(packet.clone(), &w.inventory, &w.corpus)
+        .admit(packet.clone(), &w.inventory, &w.corpus, &w.entities)
         .unwrap();
 
     let validate = |inventory: &std::path::Path, extra: &[&str]| {
@@ -250,9 +282,188 @@ fn schema_writes_the_published_files() {
         names,
         [
             "weksa.corpus_item.schema.json",
+            "weksa.entity.schema.json",
             "weksa.interlingua_packet.schema.json",
             "weksa.inventory_entry.schema.json",
             "weksa.inventory_revision.schema.json"
         ]
     );
+}
+
+#[test]
+fn entity_put_and_name_spans() {
+    let d = tempfile::tempdir().unwrap();
+    let put = |args: &[&str]| {
+        let mut all = vec!["entity", "put", "entity:kay", "--origin", "cast"];
+        all.extend_from_slice(args);
+        weksa(d.path(), &all)
+    };
+    let no_persona = put(&["--form", "en-US=Kay"]);
+    assert!(
+        !no_persona.status.success() && out(&no_persona).contains("--persona"),
+        "{}",
+        out(&no_persona)
+    );
+    let first = put(&["--form", "en-US=Kay", "--persona", "kay"]);
+    assert!(
+        first.status.success() && out(&first).contains("Added entity:kay"),
+        "{}",
+        out(&first)
+    );
+    // Forms append; a language's forms keep the order given.
+    let grown = put(&[
+        "--form",
+        "en-US=Kay",
+        "--form",
+        "en-US=Kay's",
+        "--persona",
+        "kay",
+    ]);
+    assert!(grown.status.success(), "{}", out(&grown));
+    let shrunk = put(&["--form", "en-US=Kay", "--persona", "kay"]);
+    assert!(
+        !shrunk.status.success() && out(&shrunk).contains("EntityNotAppendOnly"),
+        "{}",
+        out(&shrunk)
+    );
+    let dump = out(&weksa(d.path(), &["entity", "dump"]));
+    assert!(
+        dump.contains("entity:kay") && dump.contains("Kay's"),
+        "{dump}"
+    );
+
+    cast_entities(d.path(), &["nibu"]);
+    let add = |range: &str, text: &str| {
+        weksa(
+            d.path(),
+            &[
+                "corpus",
+                "add",
+                "--slug",
+                "kay",
+                "--text",
+                text,
+                "--speaker",
+                "entity:nibu",
+                "--group",
+                "g",
+                "--admitted-on",
+                "2026-10-29",
+                "--source",
+                "operator-written",
+                "--name",
+                range,
+            ],
+        )
+    };
+    let named = add("0..3=entity:kay", "Kay left.");
+    assert!(named.status.success(), "{}", out(&named));
+    let unequal = add("0..3=entity:kay", "Kai left.");
+    assert!(
+        !unequal.status.success() && out(&unequal).contains("NameSpanNotAForm"),
+        "{}",
+        out(&unequal)
+    );
+    let malformed = add("0-3", "Kay again.");
+    assert!(
+        !malformed.status.success() && out(&malformed).contains("start..end=entity"),
+        "{}",
+        out(&malformed)
+    );
+    let dump = out(&weksa(d.path(), &["corpus", "dump"]));
+    assert!(
+        dump.contains("names:") && dump.contains("entity:kay"),
+        "{dump}"
+    );
+}
+
+#[test]
+fn entity_origin_flags_must_match_origin() {
+    let d = tempfile::tempdir().unwrap();
+    let put = |args: &[&str]| {
+        let mut all = vec!["entity", "put", "entity:kay", "--form", "en-US=Kay"];
+        all.extend_from_slice(args);
+        weksa(d.path(), &all)
+    };
+    for mismatched in [
+        &["--origin", "live", "--persona", "kay"][..],
+        &["--origin", "live", "--work", "edda"],
+        &["--origin", "cast", "--persona", "kay", "--work", "edda"],
+        &[
+            "--origin",
+            "public-domain",
+            "--persona",
+            "kay",
+            "--work",
+            "edda",
+        ],
+        &["--origin", "public-domain", "--persona", "kay"],
+    ] {
+        let o = put(mismatched);
+        assert!(!o.status.success(), "{mismatched:?}: {}", out(&o));
+    }
+    assert!(!out(&weksa(d.path(), &["entity", "dump"])).contains("entity:kay"));
+    assert!(put(&["--origin", "live"]).status.success());
+    let work = weksa(
+        d.path(),
+        &[
+            "entity",
+            "put",
+            "entity:brokkr",
+            "--form",
+            "en-US=Brokkr",
+            "--origin",
+            "public-domain",
+            "--work",
+            "edda",
+        ],
+    );
+    assert!(work.status.success(), "{}", out(&work));
+    assert!(out(&weksa(d.path(), &["entity", "dump"])).contains("PublicDomain"));
+}
+
+#[test]
+fn intake_normalizes_to_nfc() {
+    let d = tempfile::tempdir().unwrap();
+    // A decomposed form and decomposed text meet as the same composed bytes.
+    let put = weksa(
+        d.path(),
+        &[
+            "entity",
+            "put",
+            "entity:rene",
+            "--form",
+            "fr=Rene\u{301}",
+            "--origin",
+            "live",
+        ],
+    );
+    assert!(put.status.success(), "{}", out(&put));
+    cast_entities(d.path(), &["nibu"]);
+    let add = weksa(
+        d.path(),
+        &[
+            "corpus",
+            "add",
+            "--slug",
+            "rene",
+            "--text",
+            "Rene\u{301} part.",
+            "--language",
+            "fr",
+            "--speaker",
+            "entity:nibu",
+            "--group",
+            "g",
+            "--admitted-on",
+            "2026-10-29",
+            "--source",
+            "operator-written",
+            "--name",
+            "0..5=entity:rene",
+        ],
+    );
+    assert!(add.status.success(), "{}", out(&add));
+    let dump = out(&weksa(d.path(), &["corpus", "dump"]));
+    assert!(dump.contains("Ren\u{e9} part."), "{dump}");
 }

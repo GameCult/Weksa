@@ -1,9 +1,8 @@
 //! The interlingua packet. Every id is an opaque form type: a node id `n<k>`, a
 //! packet id `packet:<hex16>`, an encoder id `encoder:<hex16>`, an inventory id
-//! `<family>:<n>`. The free text is a bounded [`ProperName`] and the trace, which
-//! is stripped before lowering. A malformed id or name cannot be built, and
-//! cannot be read back from a store, so a packet cannot carry target-language
-//! wording through an id slot.
+//! `<family>:<n>`. The only free text is the trace, which is stripped before
+//! lowering. A malformed id cannot be built, and cannot be read back from a
+//! store, so a packet cannot carry target-language wording through an id slot.
 
 use std::fmt;
 
@@ -11,12 +10,13 @@ use cultcache_rs::DatabaseEntry;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::form::{FormError, string_form};
+use crate::corpus::CorpusItemId;
+use crate::form::{FormError, is_slug, string_form};
 pub use crate::inventory::InvId;
 use crate::inventory::OptionLabel;
 
 /// Bumped by a commit that changes these types; the published schema moves with it.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Id of a referent or predication within one packet: `n<k>`, `k` a canonical
 /// decimal 1..=9999.
@@ -109,6 +109,33 @@ impl fmt::Display for EncoderId {
 
 string_form!(EncoderId, { "type": "string", "pattern": "^encoder:[0-9a-f]{16}$" });
 
+/// Id of an entity: `entity:<slug>`, a slug as an item key's (`[a-z0-9]` and
+/// inner `-`, 1 to 48 bytes, no edge `-`).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct EntityId(String);
+
+impl EntityId {
+    pub fn parse(s: &str) -> Result<Self, FormError> {
+        match s.strip_prefix("entity:") {
+            Some(slug) if is_slug(slug) => Ok(Self(s.to_string())),
+            _ => Err(FormError::new("EntityId", s)),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for EntityId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+string_form!(EntityId, { "type": "string", "pattern": "^entity:[a-z0-9]([a-z0-9-]{0,46}[a-z0-9])?$" });
+
 /// Permille, 0..=1000.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "u16", into = "u16")]
@@ -151,60 +178,6 @@ impl JsonSchema for Grade {
         schemars::json_schema!({ "type": "integer", "minimum": 0, "maximum": 1000 })
     }
 }
-
-/// A proper name: 1 to 4 tokens joined by single spaces, 64 bytes at most. A
-/// token is 1 to 24 letters, apostrophes (`'` or U+2019) and hyphens, beginning
-/// and ending with a letter. The form bounds capacity only: names are text the
-/// scorer masks, and no door judges them for leakage.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(try_from = "String", into = "String")]
-pub struct ProperName(String);
-
-impl ProperName {
-    pub const MAX_BYTES: usize = 64;
-    pub const MAX_TOKENS: usize = 4;
-    pub const MAX_TOKEN_CHARS: usize = 24;
-
-    pub fn parse(s: &str) -> Result<Self, FormError> {
-        let tokens: Vec<&str> = s.split(' ').collect();
-        if s.len() <= Self::MAX_BYTES
-            && tokens.len() <= Self::MAX_TOKENS
-            && tokens.iter().all(|t| Self::token_ok(t))
-        {
-            Ok(Self(s.to_string()))
-        } else {
-            Err(FormError::new("ProperName", s))
-        }
-    }
-
-    fn token_ok(t: &str) -> bool {
-        let (Some(first), Some(last)) = (t.chars().next(), t.chars().next_back()) else {
-            return false;
-        };
-        t.chars().count() <= Self::MAX_TOKEN_CHARS
-            && first.is_alphabetic()
-            && last.is_alphabetic()
-            && t.chars()
-                .all(|c| c.is_alphabetic() || matches!(c, '\'' | '\u{2019}' | '-'))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for ProperName {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-string_form!(ProperName, {
-    "type": "string",
-    "maxLength": 64,
-    "pattern": "^\\p{L}([\\p{L}'\u{2019}-]{0,22}\\p{L})?( \\p{L}([\\p{L}'\u{2019}-]{0,22}\\p{L})?){0,3}$",
-    "description": "1 to 4 space-joined tokens of letters, apostrophes and hyphens."
-});
 
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, DatabaseEntry)]
 #[cultcache(type = "weksa.interlingua_packet")]
@@ -265,8 +238,9 @@ pub enum ProvenanceSource {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Provenance {
     pub source: ProvenanceSource,
-    /// Key of the corpus item this packet was minted for.
-    pub corpus_item: Option<String>,
+    /// The corpus item this packet was minted for. Required: the packet store
+    /// admits only packets that name their item.
+    pub corpus_item: CorpusItemId,
     pub encoder: EncoderId,
     pub confidence: Grade,
 }
@@ -310,9 +284,9 @@ pub struct Referent {
     pub kind: InvId,
     /// Concept id.
     pub concept: InvId,
-    /// A proper name, the one place a referent carries wording. It is
-    /// form-bounded text; the scorer masks it.
-    pub name: Option<ProperName>,
+    /// The entity this referent names, when it has one. The entity store holds
+    /// its wording; the packet holds only the id.
+    pub entity: Option<EntityId>,
     pub features: Vec<FeatureValue>,
 }
 

@@ -36,8 +36,9 @@ phonology, diachrony, and renderer rules.
 - `extensions`: namespaced client or setting pressure.
 - `trace`: debug and authoring notes, stripped before lowering.
 
-Every open slot is an inventory id or a node id. The only free text is a
-referent's proper `name` and the trace.
+Every open slot is an inventory id, a node id, an entity id or a corpus item id.
+The only free text is the trace, which the validator neither bounds nor reads
+and which is stripped before lowering.
 
 ## Extension Contract
 

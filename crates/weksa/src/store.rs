@@ -7,10 +7,14 @@ use std::fmt;
 use std::path::Path;
 
 use cultcache_rs::{CultCache, SingleFileMessagePackBackingStore};
+use unicode_normalization::is_nfc;
+use unicode_segmentation::UnicodeSegmentation;
 
-use crate::corpus::{CorpusItem, item_key, key_slug};
+use crate::corpus::{CorpusItem, CorpusItemId, item_key, key_slug};
+use crate::entity::Entity;
+use crate::form::is_language_tag;
 use crate::inventory::{Change, InvId, Inventory, InventoryEntry, InventoryRevision, revision_key};
-use crate::packet::Packet;
+use crate::packet::{EntityId, Packet};
 use crate::validate::{Refusal, validate};
 
 /// A broken store rule, named.
@@ -40,8 +44,59 @@ pub enum StoreRefusal {
     UnknownCorpusItem { key: String },
     /// A packet key already holds a different packet.
     PacketImmutable { key: String },
+    /// An entity id the entity store does not hold: a speaker, a prior-turn
+    /// speaker, a name span's entity or a referent's entity.
+    UnknownEntity { entity: EntityId },
+    /// A name span with `start >= end`, `end` past the text, or an end off a
+    /// character boundary.
+    NameSpanRange { key: String, start: u32, end: u32 },
+    /// A name span that starts or ends inside an extended grapheme cluster
+    /// (UAX #29) of the item's text.
+    NameSpanSplitsCluster { key: String, start: u32, end: u32 },
+    /// An item text or prior-turn text, or an entity form, that is not NFC.
+    /// Callers normalize at intake; the stores refuse what they were handed.
+    NotNfc { key: String },
+    /// An entity beyond a capacity bound.
+    EntityBounds { id: EntityId, bound: EntityBound },
+    /// Two name spans of one item that overlap.
+    NameSpanOverlap { key: String },
+    /// A name span whose bytes equal none of its entity's forms in the item's
+    /// language (an entity with no forms in that language included).
+    NameSpanNotAForm {
+        key: String,
+        entity: EntityId,
+        start: u32,
+        end: u32,
+    },
+    /// A `put` that drops, reorders or edits a stored language, form or origin.
+    EntityNotAppendOnly { id: EntityId },
+    /// A corpus packet's referent cites an entity that is neither named on its
+    /// item nor the item's speaker or a prior-turn speaker.
+    EntityNotOnItem { entity: EntityId, item: String },
     /// Any other malformed document or change.
     Malformed { key: String, why: &'static str },
+}
+
+/// The capacity bound an entity broke.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EntityBound {
+    /// A language that is not a BCP 47-form tag (1 to 35 bytes).
+    LanguageTag,
+    /// More than 8 languages.
+    Languages,
+    /// More than 8 forms in one language.
+    Forms,
+    /// A form of more than 64 bytes.
+    FormBytes,
+    /// A form of more than 4 words.
+    FormWords,
+}
+
+impl EntityBound {
+    pub const MAX_LANGUAGES: usize = 8;
+    pub const MAX_FORMS: usize = 8;
+    pub const MAX_FORM_BYTES: usize = 64;
+    pub const MAX_FORM_WORDS: usize = 4;
 }
 
 #[derive(Debug)]
@@ -141,23 +196,25 @@ impl CorpusStore {
         Ok(item_key(slug, highest + 1))
     }
 
-    /// The item `key` names, or `UnknownCorpusItem` when the key is not
-    /// `item:<slug>:<n>` or holds nothing.
-    fn resolve(&self, key: &str) -> Result<CorpusItem, StoreError> {
-        let unknown = || StoreRefusal::UnknownCorpusItem {
-            key: key.to_string(),
-        };
-        if key_slug(key).is_none() {
-            return Err(unknown().into());
-        }
-        self.get(key)?.ok_or_else(|| unknown().into())
+    /// The item `id` names, or `UnknownCorpusItem` when it holds nothing.
+    fn resolve(&self, id: &CorpusItemId) -> Result<CorpusItem, StoreError> {
+        self.get(id.as_str())?.ok_or_else(|| {
+            StoreRefusal::UnknownCorpusItem {
+                key: id.to_string(),
+            }
+            .into()
+        })
     }
 
     /// S1: an item key holds its whole item for good. S6: a text held under
     /// one key (live or withdrawn) is not re-added under another unless the new
     /// item supersedes that key. S5: a correction stays in its predecessor's
     /// group, so it cannot move across the split.
-    pub fn add(&mut self, item: CorpusItem) -> Result<AddOutcome, StoreError> {
+    pub fn add(
+        &mut self,
+        item: CorpusItem,
+        entities: &EntityStore,
+    ) -> Result<AddOutcome, StoreError> {
         if key_slug(&item.id).is_none() {
             return Err(malformed(&item.id, "item key is not item:<slug>:<n>"));
         }
@@ -173,6 +230,13 @@ impl CorpusStore {
             }
             return Err(StoreRefusal::S1ItemImmutable { key: item.id }.into());
         }
+        if !is_language_tag(&item.language) {
+            return Err(malformed(&item.id, "language is not a BCP 47-form tag"));
+        }
+        if !is_nfc(&item.text) || item.prior_turns.iter().any(|t| !is_nfc(&t.text)) {
+            return Err(StoreRefusal::NotNfc { key: item.id }.into());
+        }
+        check_entities(&item, entities)?;
         let text = normalized(&item.text);
         for held in self.all()? {
             if normalized(&held.text) == text && item.supersedes.as_deref() != Some(&held.id) {
@@ -216,6 +280,76 @@ impl CorpusStore {
     }
 }
 
+/// Every entity an item cites exists, and every name span is a well-formed,
+/// non-overlapping byte range of the text, starting and ending on extended
+/// grapheme cluster boundaries, equal to one of its entity's forms in the
+/// item's language. Id lookup, UAX #29 boundaries and byte equality: no reading
+/// of meaning, so every script is held to the same check.
+fn check_entities(item: &CorpusItem, entities: &EntityStore) -> Result<(), StoreError> {
+    let known = |id: &EntityId| -> Result<Entity, StoreError> {
+        entities
+            .get(id)?
+            .ok_or_else(|| StoreRefusal::UnknownEntity { entity: id.clone() }.into())
+    };
+    known(&item.speaker)?;
+    for turn in &item.prior_turns {
+        known(&turn.speaker)?;
+    }
+    let mut ranges = Vec::with_capacity(item.names.len());
+    let cuts: BTreeSet<usize> = item
+        .text
+        .grapheme_indices(true)
+        .map(|(i, _)| i)
+        .chain([item.text.len()])
+        .collect();
+    for span in &item.names {
+        let entity = known(&span.entity)?;
+        let (start, end) = (span.start as usize, span.end as usize);
+        let Some(bytes) = item
+            .text
+            .get(start..end)
+            .filter(|_| start < end)
+            .map(str::as_bytes)
+        else {
+            return Err(StoreRefusal::NameSpanRange {
+                key: item.id.clone(),
+                start: span.start,
+                end: span.end,
+            }
+            .into());
+        };
+        if !cuts.contains(&start) || !cuts.contains(&end) {
+            return Err(StoreRefusal::NameSpanSplitsCluster {
+                key: item.id.clone(),
+                start: span.start,
+                end: span.end,
+            }
+            .into());
+        }
+        let is_form = entity
+            .forms_in(&item.language)
+            .is_some_and(|forms| forms.iter().any(|f| f.as_bytes() == bytes));
+        if !is_form {
+            return Err(StoreRefusal::NameSpanNotAForm {
+                key: item.id.clone(),
+                entity: span.entity.clone(),
+                start: span.start,
+                end: span.end,
+            }
+            .into());
+        }
+        ranges.push((span.start, span.end));
+    }
+    ranges.sort_unstable();
+    if ranges.windows(2).any(|w| w[1].0 < w[0].1) {
+        return Err(StoreRefusal::NameSpanOverlap {
+            key: item.id.clone(),
+        }
+        .into());
+    }
+    Ok(())
+}
+
 /// Lowercased alphanumerics only, so case, spacing and punctuation variants of
 /// a text compare equal.
 fn normalized(text: &str) -> String {
@@ -223,6 +357,112 @@ fn normalized(text: &str) -> String {
         .flat_map(char::to_lowercase)
         .filter(|c| c.is_alphanumeric())
         .collect()
+}
+
+pub struct EntityStore {
+    cache: CultCache,
+}
+
+impl EntityStore {
+    pub fn open(path: &Path) -> anyhow::Result<Self> {
+        Ok(Self {
+            cache: open_cache(path, |c| c.register_entry_type::<Entity>())?,
+        })
+    }
+
+    pub fn all(&self) -> anyhow::Result<Vec<Entity>> {
+        let mut entities = self.cache.get_all::<Entity>()?;
+        entities.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(entities)
+    }
+
+    pub fn get(&self, id: &EntityId) -> anyhow::Result<Option<Entity>> {
+        self.cache.get::<Entity>(id.as_str())
+    }
+
+    /// Admits a new entity, an identical replay, or a replacement that keeps
+    /// every stored language and form in order and origin as it was, and only
+    /// appends: forms grow, never shrink, reorder or change. An entity has 1 to
+    /// 8 languages, each a BCP 47-form tag named once, with 1 to 8 NFC forms of
+    /// 1 to 64 bytes and at most 4 words, no control character, no edge
+    /// whitespace, none repeated.
+    pub fn put(&mut self, entity: Entity) -> Result<AddOutcome, StoreError> {
+        let key = entity.id.to_string();
+        check_entity_shape(&entity)?;
+        if let Some(old) = self.get(&entity.id)? {
+            if old == entity {
+                return Ok(AddOutcome::Unchanged);
+            }
+            let grows = old.origin == entity.origin
+                && old.forms.len() <= entity.forms.len()
+                && old.forms.iter().zip(&entity.forms).all(|(o, n)| {
+                    o.language == n.language
+                        && o.forms.len() <= n.forms.len()
+                        && n.forms.starts_with(&o.forms)
+                });
+            if !grows {
+                return Err(StoreRefusal::EntityNotAppendOnly { id: entity.id }.into());
+            }
+        }
+        self.cache.put(key, &entity)?;
+        Ok(AddOutcome::Added)
+    }
+}
+
+fn check_entity_shape(entity: &Entity) -> Result<(), StoreError> {
+    let bad = |why| malformed(entity.id.as_str(), why);
+    let bound = |bound| -> StoreError {
+        StoreRefusal::EntityBounds {
+            id: entity.id.clone(),
+            bound,
+        }
+        .into()
+    };
+    if entity.forms.is_empty() {
+        return Err(bad("an entity has forms in at least one language"));
+    }
+    if entity.forms.len() > EntityBound::MAX_LANGUAGES {
+        return Err(bound(EntityBound::Languages));
+    }
+    let mut languages = BTreeSet::new();
+    for lf in &entity.forms {
+        if !is_language_tag(&lf.language) {
+            return Err(bound(EntityBound::LanguageTag));
+        }
+        if !languages.insert(&lf.language) {
+            return Err(bad("a language is named once"));
+        }
+        if lf.forms.is_empty() {
+            return Err(bad("a language has at least one form"));
+        }
+        if lf.forms.len() > EntityBound::MAX_FORMS {
+            return Err(bound(EntityBound::Forms));
+        }
+        let mut seen = BTreeSet::new();
+        for f in &lf.forms {
+            if f.len() > EntityBound::MAX_FORM_BYTES {
+                return Err(bound(EntityBound::FormBytes));
+            }
+            if f.split_whitespace().count() > EntityBound::MAX_FORM_WORDS {
+                return Err(bound(EntityBound::FormWords));
+            }
+            if !is_nfc(f) {
+                return Err(StoreRefusal::NotNfc {
+                    key: entity.id.to_string(),
+                }
+                .into());
+            }
+            if f.is_empty() || f.chars().any(char::is_control) || f.trim() != f.as_str() {
+                return Err(bad(
+                    "a form is not empty and has no control character or edge whitespace",
+                ));
+            }
+            if !seen.insert(f) {
+                return Err(bad("a form is not repeated within its language"));
+            }
+        }
+    }
+    Ok(())
 }
 
 pub struct InventoryStore {
@@ -360,16 +600,36 @@ impl PacketStore {
 
     /// The only door: a packet exists only if `validate` passes against the
     /// inventory the store holds at the packet's revision, its `corpus_item`
-    /// (when set) resolves, and a key holds its packet for good.
+    /// resolves, every referent's entity is in the entity store and is named on
+    /// that item or is its speaker or a prior-turn speaker (an id-set check). A
+    /// key holds its packet for good. A packet that names no corpus item has no
+    /// door here.
     pub fn admit(
         &mut self,
         packet: Packet,
         inventory: &InventoryStore,
         corpus: &CorpusStore,
+        entities: &EntityStore,
     ) -> Result<(), StoreError> {
         validate(&packet, &inventory.inventory()?).map_err(StoreError::Invalid)?;
-        if let Some(item_key) = &packet.provenance.corpus_item {
-            corpus.resolve(item_key)?;
+        let item = corpus.resolve(&packet.provenance.corpus_item)?;
+        for entity in packet.referents.iter().filter_map(|r| r.entity.as_ref()) {
+            if entities.get(entity)?.is_none() {
+                return Err(StoreRefusal::UnknownEntity {
+                    entity: entity.clone(),
+                }
+                .into());
+            }
+            let on_item = item.names.iter().any(|n| &n.entity == entity)
+                || &item.speaker == entity
+                || item.prior_turns.iter().any(|t| &t.speaker == entity);
+            if !on_item {
+                return Err(StoreRefusal::EntityNotOnItem {
+                    entity: entity.clone(),
+                    item: item.id.clone(),
+                }
+                .into());
+            }
         }
         let key = packet.id.to_string();
         if let Some(existing) = self.get(&key)? {

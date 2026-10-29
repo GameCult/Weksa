@@ -7,7 +7,8 @@ fn item(group: &str, source: Source) -> CorpusItem {
         id: "item:t:1".into(),
         text: "t".into(),
         language: "en-US".into(),
-        speaker: "s".into(),
+        speaker: weksa::EntityId::parse("entity:s").unwrap(),
+        names: vec![],
         group: group.into(),
         prior_turns: vec![],
         source,
@@ -54,7 +55,7 @@ fn p1_split_deterministic() {
     }
     // The split reads the group and nothing else: speaker, text and id do not move it.
     let mut other = item("scene-9", cast());
-    other.speaker = "someone".into();
+    other.speaker = weksa::EntityId::parse("entity:someone").unwrap();
     other.text = "different".into();
     other.id = "item:other:7".into();
     assert_eq!(SplitScheme::V1.split(&other), a);

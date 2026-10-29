@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Entity",
+  "description": "Key: the entity id. Forms only grow: see `EntityStore::put`.",
+  "type": "object",
+  "properties": {
+    "forms": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/LanguageForms"
+      }
+    },
+    "id": {
+      "$ref": "#/$defs/EntityId"
+    },
+    "origin": {
+      "$ref": "#/$defs/EntityOrigin"
+    }
+  },
+  "required": [
+    "id",
+    "forms",
+    "origin"
+  ],
+  "$defs": {
+    "EntityId": {
+      "type": "string",
+      "pattern": "^entity:[a-z0-9]([a-z0-9-]{0,46}[a-z0-9])?$"
+    },
+    "EntityOrigin": {
+      "description": "Where an entity was minted.",
+      "oneOf": [
+        {
+          "description": "From a cast member's fixture.",
+          "type": "object",
+          "properties": {
+            "Cast": {
+              "type": "object",
+              "properties": {
+                "persona": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "persona"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Cast"
+          ]
+        },
+        {
+          "description": "From a public-domain work.",
+          "type": "object",
+          "properties": {
+            "PublicDomain": {
+              "type": "object",
+              "properties": {
+                "work": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "work"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "PublicDomain"
+          ]
+        },
+        {
+          "description": "Minted live by a persona before it names the entity.",
+          "type": "string",
+          "const": "Live"
+        }
+      ]
+    },
+    "LanguageForms": {
+      "description": "An entity's forms in one language, as the corpus item language tag spells it.\nThe citation form comes first.",
+      "type": "object",
+      "properties": {
+        "forms": {
+          "description": "1 to 64 bytes each, no control character, no edge whitespace, none repeated.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "language": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "language",
+        "forms"
+      ]
+    }
+  }
+}

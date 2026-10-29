@@ -7,8 +7,9 @@ use weksa::corpus::ModelFamily;
 use weksa::inventory::{Change, seed};
 use weksa::packet::*;
 use weksa::{
-    CorpusItem, CorpusStore, InvId, Inventory, InventoryEntry, InventoryRevision, InventoryStore,
-    OptionLabel, Slot, Source, SplitScheme, ValueKind,
+    CorpusItem, CorpusItemId, CorpusStore, Entity, EntityOrigin, EntityStore, InvId, Inventory,
+    InventoryEntry, InventoryRevision, InventoryStore, LanguageForms, NameSpan, OptionLabel, Slot,
+    Source, SplitScheme, ValueKind,
 };
 
 pub const PERSON: &str = "referent_kind:1";
@@ -73,12 +74,45 @@ pub fn model() -> Source {
     }
 }
 
+/// Every speaker the tests use, as entities with one en-US form.
+const SPEAKERS: [&str; 6] = ["nibu", "brokkr", "player", "s", "someone", "hero"];
+
+pub fn eid(slug: &str) -> EntityId {
+    EntityId::parse(&format!("entity:{slug}")).unwrap()
+}
+
+/// A cast entity with `forms` in `language`, citation form first.
+pub fn ent(slug: &str, language: &str, forms: &[&str]) -> Entity {
+    Entity {
+        id: eid(slug),
+        forms: vec![LanguageForms {
+            language: language.into(),
+            forms: forms.iter().map(|f| f.to_string()).collect(),
+        }],
+        origin: EntityOrigin::Cast {
+            persona: slug.into(),
+        },
+    }
+}
+
+/// The entity store at `entities.cc` under `dir`, holding every test speaker
+/// (en-US form: the slug capitalized). Reopening replays identically.
+pub fn entities_in(dir: &std::path::Path) -> EntityStore {
+    let mut store = EntityStore::open(&dir.join("entities.cc")).unwrap();
+    for slug in SPEAKERS {
+        let form = slug[..1].to_uppercase() + &slug[1..];
+        store.put(ent(slug, "en-US", &[&form])).unwrap();
+    }
+    store
+}
+
 pub fn item_in(key: &str, text: &str, group: &str, source: Source) -> CorpusItem {
     CorpusItem {
         id: key.into(),
         text: text.into(),
         language: "en-US".into(),
-        speaker: "nibu".into(),
+        speaker: eid("nibu"),
+        names: vec![],
         group: group.into(),
         prior_turns: vec![],
         source,
@@ -132,6 +166,7 @@ pub struct World {
     pub dir: TempDir,
     pub inventory: InventoryStore,
     pub corpus: CorpusStore,
+    pub entities: EntityStore,
 }
 
 impl World {
@@ -143,15 +178,15 @@ impl World {
 pub fn world() -> World {
     let dir = tempfile::tempdir().unwrap();
     let mut corpus = CorpusStore::open(&dir.path().join("c.cc")).unwrap();
+    let entities = entities_in(dir.path());
     let train = group_in_bucket(10);
-    corpus
-        .add(item_in(
-            "item:nibu:1",
-            "Nibu says mind the hatch.",
-            &train,
-            cast(),
-        ))
-        .unwrap();
+    let mut first = item_in("item:nibu:1", "Nibu says mind the hatch.", &train, cast());
+    first.names = vec![NameSpan {
+        entity: eid("nibu"),
+        start: 0,
+        end: 4,
+    }];
+    corpus.add(first, &entities).unwrap();
     let mut inventory = InventoryStore::open(&dir.path().join("i.cc")).unwrap();
     let (rev1, entries) = seed();
     inventory.admit_revision(rev1, entries).unwrap();
@@ -192,6 +227,7 @@ pub fn world() -> World {
         dir,
         inventory,
         corpus,
+        entities,
     }
 }
 
@@ -209,7 +245,7 @@ pub fn good() -> Packet {
         kind: PacketKind::DialogueLine,
         provenance: Provenance {
             source: ProvenanceSource::Authored,
-            corpus_item: Some("item:nibu:1".into()),
+            corpus_item: CorpusItemId::parse("item:nibu:1").unwrap(),
             encoder: EncoderId::parse(ENCODER_ID).unwrap(),
             confidence: grade(900),
         },
@@ -231,7 +267,7 @@ pub fn good() -> Packet {
             id: nd("n1"),
             kind: iv(PERSON),
             concept: iv(CONCEPT_A),
-            name: Some(ProperName::parse("Nibu").unwrap()),
+            entity: Some(eid("nibu")),
             features: vec![],
         }],
         predications: vec![Predication {

@@ -18,11 +18,11 @@ measured.
 
 - [Interlingua Standard](./docs/interlingua-standard.md): the packet contract.
 - `crates/weksa`: the packet, inventory and corpus types, `validate`, the
-  derived split and the `weksa` CLI (`weksa validate`, `corpus`, `inventory`,
+  derived split and the `weksa` CLI (`weksa validate`, `corpus`, `entity`, `inventory`,
   `split`, `schema`); published schemas in `schemas/cultnet/`.
-- `data/corpus/corpus.cc` and `data/interlingua/inventory.cc`: the English
-  corpus and the inventory, read with `weksa corpus dump` and
-  `weksa inventory dump`.
+- `data/corpus/corpus.cc`, `data/entity/entity.cc` and `data/interlingua/inventory.cc`: the English
+  corpus, its entities and the inventory, read with `weksa corpus dump`,
+  `weksa entity dump` and `weksa inventory dump`.
 - [Lowering target](./docs/targets/interlingua-lowering.md) and
   [its map](./docs/targets/interlingua-lowering-map.md): the design, scoring
   and cut sequence.

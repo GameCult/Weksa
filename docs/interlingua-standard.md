@@ -100,13 +100,19 @@ Every id is an opaque form type, parsed when it is built and when a store
 reads it: an inventory id is `<family>:<n>` with `n` a canonical decimal of at
 least 1 (`role:1`; `role:01` is not an id), a node id is `n<k>` with `k` in
 1..=9999, a packet id is `packet:<16 hex>` and an encoder id is
-`encoder:<16 hex>`. The free text a packet may hold is a referent's `name`,
-a `ProperName` of 1 to 4 space-joined tokens of letters, apostrophes and
-hyphens within 64 bytes, and the `trace`. A name is bounded text, not a judged
-one: no door compares packet text with the corpus. Leakage of scored text is
-owned outside the validator, by the loop's context builder (what each model
-call sees) and the scorer (names are masked before scoring); the validator
-owns form and capacity. The trace is stripped before lowering. Concept ids are opaque and carry a gloss in the inventory; concepts
+`encoder:<16 hex>`, an entity id is `entity:<slug>` (`[a-z0-9]` and inner
+`-`, 1 to 48 bytes) and a corpus item id is `item:<slug>:<n>`. The only free
+text a packet holds is the `trace` (`notes` and `rejected_readings`), which the
+validator neither bounds nor reads and which is stripped before lowering: a
+referent names its entity by id, and the entity store (`weksa.entity`) holds
+the entity's forms per language. The packet store refuses a referent whose
+entity the store lacks, a packet whose `corpus_item` the corpus lacks, and one
+whose entity is neither named on that item nor its speaker or a prior-turn
+speaker (a packet without a corpus item has no door in this store):
+an id-set check, not a text rule. Leakage of scored text is owned outside the
+validator, by the loop's context builder (what each model call sees) and the
+scorer; the validator owns form and capacity. The trace is stripped before
+lowering. Concept ids are opaque and carry a gloss in the inventory; concepts
 are open-class and grow, while the other families are closed-class.
 
 ```text
@@ -115,7 +121,7 @@ Packet
   provenance   { source, corpus_item, encoder, confidence }
   context      { setting, medium, participants, audience }
   discourse    { speech_act, addressee, features }
-  referents    [ { id, kind, concept, name, features } ]
+  referents    [ { id, kind, concept, entity, features } ]
   predications [ { id, concept, frame, roles: [ { role, filler } ], features } ]
   relations    [ { relation, from, to, features } ]
   constraints  { preserve, deterministic, max_latency_ms }
@@ -165,8 +171,8 @@ reads at the packet's revision, never one the caller supplies.
 ### `provenance`
 
 `source` is `Authored`, `ModelDecomposition`, `GameTelemetry` or
-`ImportedCorpus`. `corpus_item` is the key of the corpus item the packet was
-minted for, `encoder` names what wrote it, and `confidence` is a grade.
+`ImportedCorpus`. `corpus_item` is the required `item:<slug>:<n>` key of the
+corpus item the packet was minted for, `encoder` names what wrote it, and `confidence` is a grade.
 
 ### `context`
 
@@ -185,7 +191,7 @@ communicative pressure, not target-language register.
 Entities, groups, places, abstractions and the rest. `kind` is a referent-kind
 id (the inventory seeds `person`, `group`, `organism`, `place`, `artifact`,
 `institution`, `ecology`, `route`, `memory`, `event`, `abstract`), `concept` is
-a concept id, and `name` is a proper name when the referent has one.
+a concept id, and `entity` is the id of the named entity when the referent has one.
 
 ### `predications`
 

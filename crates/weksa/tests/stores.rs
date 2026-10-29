@@ -4,14 +4,14 @@ use tempfile::TempDir;
 use weksa::corpus::{CorpusItem, ModelFamily, Source, Turn};
 use weksa::inventory::{Change, seed};
 use weksa::{
-    AddOutcome, CorpusStore, Family, InventoryEntry, InventoryRevision, InventoryStore,
-    PacketStore, Refusal, Slot, SplitScheme, StoreError, StoreRefusal, ValueKind,
+    AddOutcome, CorpusStore, EntityStore, Family, InventoryEntry, InventoryRevision,
+    InventoryStore, PacketStore, Refusal, Slot, SplitScheme, StoreError, StoreRefusal, ValueKind,
 };
 
 fn item(key: &str, text: &str) -> CorpusItem {
     CorpusItem {
         prior_turns: vec![Turn {
-            speaker: "player".into(),
+            speaker: eid("player"),
             text: "hello".into(),
         }],
         ..item_in(key, text, "scene-1", cast())
@@ -23,6 +23,10 @@ fn refusal(r: Result<impl std::fmt::Debug, StoreError>) -> StoreRefusal {
         Err(StoreError::Refused(r)) => r,
         other => panic!("expected a store refusal, got {other:?}"),
     }
+}
+
+fn ents(d: &TempDir) -> EntityStore {
+    entities_in(d.path())
 }
 
 fn dir() -> TempDir {
@@ -46,13 +50,17 @@ fn s1_item_immutable() {
     let path = d.path().join("c.cc");
     let mut store = CorpusStore::open(&path).unwrap();
     assert_eq!(
-        store.add(item("item:nibu:1", "Mind the hatch.")).unwrap(),
+        store
+            .add(item("item:nibu:1", "Mind the hatch."), &ents(&d))
+            .unwrap(),
         AddOutcome::Added
     );
     // An equal item is idempotent, even from a reopened store.
     let mut store = CorpusStore::open(&path).unwrap();
     assert_eq!(
-        store.add(item("item:nibu:1", "Mind the hatch.")).unwrap(),
+        store
+            .add(item("item:nibu:1", "Mind the hatch."), &ents(&d))
+            .unwrap(),
         AddOutcome::Unchanged
     );
     let refused = || StoreRefusal::S1ItemImmutable {
@@ -71,7 +79,7 @@ fn s1_item_immutable() {
     v.language = "en-GB".into();
     variants.push(v);
     let mut v = base.clone();
-    v.speaker = "brokkr".into();
+    v.speaker = eid("brokkr");
     variants.push(v);
     let mut v = base.clone();
     v.group = "scene-2".into();
@@ -86,12 +94,12 @@ fn s1_item_immutable() {
     v.supersedes = Some("item:nibu:9".into());
     variants.push(v);
     for v in variants {
-        assert_eq!(refusal(store.add(v.clone())), refused(), "{v:?}");
+        assert_eq!(refusal(store.add(v.clone(), &ents(&d))), refused(), "{v:?}");
     }
     assert_eq!(store.get("item:nibu:1").unwrap(), Some(base.clone()));
     // A withdrawn item is a different item: re-adding it live is refused too.
     store.withdraw("item:nibu:1").unwrap();
-    assert_eq!(refusal(store.add(base)), refused());
+    assert_eq!(refusal(store.add(base, &ents(&d))), refused());
 }
 
 #[test]
@@ -115,7 +123,7 @@ fn corpus_keys_are_canonical() {
     ];
     for (i, key) in not_canonical.into_iter().enumerate() {
         assert_eq!(
-            refusal(store.add(item(key, &format!("line {i}")))),
+            refusal(store.add(item(key, &format!("line {i}")), &ents(&d))),
             malformed(key, "item key is not item:<slug>:<n>"),
             "{key}"
         );
@@ -126,29 +134,24 @@ fn corpus_keys_are_canonical() {
     let canonical = ["item:a:1", "item:a-b:10", "item:7:2", "item:ab:9", &longest];
     for (i, key) in canonical.into_iter().enumerate() {
         assert_eq!(
-            store.add(item(key, &format!("fine {i}"))).unwrap(),
+            store
+                .add(item(key, &format!("fine {i}")), &ents(&d))
+                .unwrap(),
             AddOutcome::Added,
             "{key}"
         );
     }
-    // An alias of a stored key resolves to nothing.
-    let w = world();
-    let mut packets = PacketStore::open(&w.dir.path().join("p.cc")).unwrap();
-    let mut p = good();
-    p.provenance.corpus_item = Some("item:nibu:01".into());
-    assert_eq!(
-        refusal(packets.admit(p, &w.inventory, &w.corpus)),
-        StoreRefusal::UnknownCorpusItem {
-            key: "item:nibu:01".into()
-        }
-    );
+    // An alias of a stored key is not a corpus item id at all.
+    assert!(weksa::CorpusItemId::parse("item:nibu:01").is_err());
 }
 
 #[test]
 fn s6_text_held_by_another_key() {
     let d = dir();
     let mut store = CorpusStore::open(&d.path().join("c.cc")).unwrap();
-    store.add(item("item:nibu:1", "Mind the hatch.")).unwrap();
+    store
+        .add(item("item:nibu:1", "Mind the hatch."), &ents(&d))
+        .unwrap();
     let elsewhere = |key: &str, text: &str| CorpusItem {
         group: "scene-2".into(),
         ..item(key, text)
@@ -159,11 +162,11 @@ fn s6_text_held_by_another_key() {
     };
     // The same text in another group, and in the same group, is refused.
     assert_eq!(
-        refusal(store.add(elsewhere("item:nibu:2", "Mind the hatch."))),
+        refusal(store.add(elsewhere("item:nibu:2", "Mind the hatch."), &ents(&d))),
         held("item:nibu:2", "item:nibu:1")
     );
     assert_eq!(
-        refusal(store.add(item("item:nibu:2", "Mind the hatch."))),
+        refusal(store.add(item("item:nibu:2", "Mind the hatch."), &ents(&d))),
         held("item:nibu:2", "item:nibu:1")
     );
     // Case, spacing and punctuation variants are the same text.
@@ -174,38 +177,51 @@ fn s6_text_held_by_another_key() {
         "Mind the hatch.\n",
     ] {
         assert_eq!(
-            refusal(store.add(elsewhere("item:nibu:2", text))),
+            refusal(store.add(elsewhere("item:nibu:2", text), &ents(&d))),
             held("item:nibu:2", "item:nibu:1"),
             "{text:?}"
         );
     }
     store
-        .add(item("item:nibu:3", "\u{c4}rger \u{fc}ber \u{d6}l"))
+        .add(
+            item("item:nibu:3", "\u{c4}rger \u{fc}ber \u{d6}l"),
+            &ents(&d),
+        )
         .unwrap();
     assert_eq!(
-        refusal(store.add(elsewhere("item:nibu:4", "\u{e4}rger \u{dc}BER \u{f6}l"))),
+        refusal(store.add(
+            elsewhere("item:nibu:4", "\u{e4}rger \u{dc}BER \u{f6}l"),
+            &ents(&d)
+        )),
         held("item:nibu:4", "item:nibu:3")
     );
     // Text that differs in a letter or digit is a different text.
-    store.add(item("item:nibu:5", "Mind the hatch 2")).unwrap();
-    store.add(item("item:nibu:6", "Mind the hatches.")).unwrap();
+    store
+        .add(item("item:nibu:5", "Mind the hatch 2"), &ents(&d))
+        .unwrap();
+    store
+        .add(item("item:nibu:6", "Mind the hatches."), &ents(&d))
+        .unwrap();
     // A withdrawn holder still holds.
     store.withdraw("item:nibu:1").unwrap();
     assert_eq!(
-        refusal(store.add(elsewhere("item:nibu:2", "mind the hatch"))),
+        refusal(store.add(elsewhere("item:nibu:2", "mind the hatch"), &ents(&d))),
         held("item:nibu:2", "item:nibu:1")
     );
     // Superseding a different key does not excuse a copy of another item.
     let mut copy = item("item:nibu:8", "Mind the hatches!");
     copy.supersedes = Some("item:nibu:5".into());
-    assert_eq!(refusal(store.add(copy)), held("item:nibu:8", "item:nibu:6"));
+    assert_eq!(
+        refusal(store.add(copy, &ents(&d))),
+        held("item:nibu:8", "item:nibu:6")
+    );
     // A superseder of the holder, in the holder's group, is Added.
     let mut fix = item("item:nibu:2", "mind the hatch");
     fix.supersedes = Some("item:nibu:1".into());
-    assert_eq!(store.add(fix).unwrap(), AddOutcome::Added);
+    assert_eq!(store.add(fix, &ents(&d)).unwrap(), AddOutcome::Added);
     // The superseded holder's text stays held against a third key.
     assert_eq!(
-        refusal(store.add(elsewhere("item:nibu:7", "Mind the hatch."))),
+        refusal(store.add(elsewhere("item:nibu:7", "Mind the hatch."), &ents(&d))),
         held("item:nibu:7", "item:nibu:1")
     );
 }
@@ -215,32 +231,32 @@ fn corpus_admission_rules() {
     let d = dir();
     let mut store = CorpusStore::open(&d.path().join("c.cc")).unwrap();
     assert_eq!(
-        refusal(store.add(item("nibu:1", "x"))),
+        refusal(store.add(item("nibu:1", "x"), &ents(&d))),
         malformed("nibu:1", "item key is not item:<slug>:<n>")
     );
     assert_eq!(
-        refusal(store.add(item("item:nibu:x", "x"))),
+        refusal(store.add(item("item:nibu:x", "x"), &ents(&d))),
         malformed("item:nibu:x", "item key is not item:<slug>:<n>")
     );
     let mut born_withdrawn = item("item:nibu:1", "x");
     born_withdrawn.withdrawn = true;
     assert_eq!(
-        refusal(store.add(born_withdrawn)),
+        refusal(store.add(born_withdrawn, &ents(&d))),
         malformed("item:nibu:1", "an item is admitted live, then withdrawn")
     );
     let mut orphan = item("item:nibu:1", "x");
     orphan.supersedes = Some("item:nibu:9".into());
     assert_eq!(
-        refusal(store.add(orphan)),
+        refusal(store.add(orphan, &ents(&d))),
         malformed("item:nibu:1", "supersedes an item that does not exist")
     );
     // Nothing was written by the refusals.
     assert!(store.all().unwrap().is_empty());
     // A correction is a new item that supersedes the old one.
-    store.add(item("item:nibu:1", "old")).unwrap();
+    store.add(item("item:nibu:1", "old"), &ents(&d)).unwrap();
     let mut fix = item("item:nibu:2", "new");
     fix.supersedes = Some("item:nibu:1".into());
-    assert_eq!(store.add(fix).unwrap(), AddOutcome::Added);
+    assert_eq!(store.add(fix, &ents(&d)).unwrap(), AddOutcome::Added);
     assert_eq!(
         refusal(store.withdraw("item:nibu:7")),
         malformed("item:nibu:7", "no such item")
@@ -251,12 +267,12 @@ fn corpus_admission_rules() {
 fn s5_supersede_keeps_the_group() {
     let d = dir();
     let mut store = CorpusStore::open(&d.path().join("c.cc")).unwrap();
-    store.add(item("item:nibu:1", "old")).unwrap();
+    store.add(item("item:nibu:1", "old"), &ents(&d)).unwrap();
     let mut elsewhere = item("item:nibu:2", "new");
     elsewhere.supersedes = Some("item:nibu:1".into());
     elsewhere.group = "scene-2".into();
     assert_eq!(
-        refusal(store.add(elsewhere)),
+        refusal(store.add(elsewhere, &ents(&d))),
         StoreRefusal::S5SupersedeGroup {
             key: "item:nibu:2".into(),
             expected: "scene-1".into(),
@@ -266,7 +282,7 @@ fn s5_supersede_keeps_the_group() {
     assert!(store.get("item:nibu:2").unwrap().is_none());
     let mut same = item("item:nibu:2", "new");
     same.supersedes = Some("item:nibu:1".into());
-    assert_eq!(store.add(same).unwrap(), AddOutcome::Added);
+    assert_eq!(store.add(same, &ents(&d)).unwrap(), AddOutcome::Added);
 }
 
 #[test]
@@ -274,7 +290,9 @@ fn withdrawing_keeps_the_text_and_the_number() {
     let d = dir();
     let path = d.path().join("c.cc");
     let mut store = CorpusStore::open(&path).unwrap();
-    store.add(item("item:nibu:1", "keep me")).unwrap();
+    store
+        .add(item("item:nibu:1", "keep me"), &ents(&d))
+        .unwrap();
     assert_eq!(store.next_key("nibu").unwrap(), "item:nibu:2");
     assert_eq!(store.next_key("other").unwrap(), "item:other:1");
     store.withdraw("item:nibu:1").unwrap();
@@ -604,7 +622,7 @@ fn packet_admission_goes_through_the_validator() {
     let mut store = PacketStore::open(&w.dir.path().join("p.cc")).unwrap();
     let mut bad = good();
     bad.schema_version = 5;
-    match store.admit(bad, &w.inventory, &w.corpus) {
+    match store.admit(bad, &w.inventory, &w.corpus, &w.entities) {
         Err(e @ StoreError::Invalid(_)) => {
             assert!(e.to_string().contains("V1"), "{e}");
             let StoreError::Invalid(r) = e else {
@@ -615,13 +633,17 @@ fn packet_admission_goes_through_the_validator() {
         other => panic!("{other:?}"),
     }
     assert!(store.all().unwrap().is_empty());
-    store.admit(good(), &w.inventory, &w.corpus).unwrap();
+    store
+        .admit(good(), &w.inventory, &w.corpus, &w.entities)
+        .unwrap();
     // The same packet is idempotent; a different one under the same key is refused.
-    store.admit(good(), &w.inventory, &w.corpus).unwrap();
+    store
+        .admit(good(), &w.inventory, &w.corpus, &w.entities)
+        .unwrap();
     let mut other = good();
     other.provenance.confidence = grade(1);
     assert_eq!(
-        refusal(store.admit(other, &w.inventory, &w.corpus)),
+        refusal(store.admit(other, &w.inventory, &w.corpus, &w.entities)),
         StoreRefusal::PacketImmutable {
             key: PACKET_ID.into()
         }
@@ -637,17 +659,15 @@ fn admission_reads_the_store_inventory() {
     let d = dir();
     let mut corpus = empty_corpus(&d);
     corpus
-        .add(item_in(
-            "item:nibu:1",
-            "Nibu says mind the hatch.",
-            "g",
-            cast(),
-        ))
+        .add(
+            item_in("item:nibu:1", "Nibu says mind the hatch.", "g", cast()),
+            &ents(&d),
+        )
         .unwrap();
     let mut inventory = seeded(&d.path().join("i.cc"));
     let mut packets = PacketStore::open(&d.path().join("p.cc")).unwrap();
     assert_eq!(
-        match packets.admit(good(), &inventory, &corpus) {
+        match packets.admit(good(), &inventory, &corpus, &ents(&d)) {
             Err(StoreError::Invalid(r)) => r,
             other => panic!("{other:?}"),
         },
@@ -667,26 +687,36 @@ fn admission_reads_the_store_inventory() {
             ext,
         ],
     );
-    packets.admit(good(), &inventory, &corpus).unwrap();
+    packets
+        .admit(good(), &inventory, &corpus, &ents(&d))
+        .unwrap();
 }
 
 #[test]
 fn corpus_item_must_resolve() {
     let w = world();
     let mut packets = PacketStore::open(&w.dir.path().join("p.cc")).unwrap();
-    for key in ["item:nibu:9", "banana"] {
-        let mut p = good();
-        p.provenance.corpus_item = Some(key.into());
-        assert_eq!(
-            refusal(packets.admit(p, &w.inventory, &w.corpus)),
-            StoreRefusal::UnknownCorpusItem { key: key.into() }
-        );
-    }
-    assert!(packets.all().unwrap().is_empty());
-    // A packet minted for no item needs none.
     let mut p = good();
-    p.provenance.corpus_item = None;
-    packets.admit(p, &w.inventory, &w.corpus).unwrap();
+    p.provenance.corpus_item = weksa::CorpusItemId::parse("item:nibu:9").unwrap();
+    assert_eq!(
+        refusal(packets.admit(p, &w.inventory, &w.corpus, &w.entities)),
+        StoreRefusal::UnknownCorpusItem {
+            key: "item:nibu:9".into()
+        }
+    );
+    assert!(packets.all().unwrap().is_empty());
+    // Free text is not an item id, in Rust or on the wire; a packet with no item
+    // cannot be built or read back.
+    for bad in ["banana", "", "the reference sentence goes right here"] {
+        assert!(weksa::CorpusItemId::parse(bad).is_err(), "{bad:?}");
+    }
+    let mut wire = serde_json::to_value(good().provenance).unwrap();
+    for bad in [serde_json::Value::Null, "banana".into()] {
+        wire["corpus_item"] = bad;
+        assert!(serde_json::from_value::<weksa::packet::Provenance>(wire.clone()).is_err());
+    }
+    wire.as_object_mut().unwrap().remove("corpus_item");
+    assert!(serde_json::from_value::<weksa::packet::Provenance>(wire).is_err());
 }
 
 #[test]
@@ -698,7 +728,7 @@ fn store_roundtrip() {
     let p = good();
     PacketStore::open(&packets)
         .unwrap()
-        .admit(p.clone(), &w.inventory, &w.corpus)
+        .admit(p.clone(), &w.inventory, &w.corpus, &w.entities)
         .unwrap();
     assert_eq!(
         PacketStore::open(&packets).unwrap().get(PACKET_ID).unwrap(),
@@ -732,7 +762,10 @@ fn store_roundtrip() {
 
     let corpus = d.path().join("c.cc");
     let it = item("item:nibu:1", "round trip");
-    CorpusStore::open(&corpus).unwrap().add(it.clone()).unwrap();
+    CorpusStore::open(&corpus)
+        .unwrap()
+        .add(it.clone(), &ents(&d))
+        .unwrap();
     assert_eq!(
         CorpusStore::open(&corpus)
             .unwrap()
@@ -809,4 +842,30 @@ fn the_committed_stores_load_and_hold_clean_data() {
         "no item claims a recorded human author"
     );
     assert_eq!(items.len(), 3);
+}
+
+#[test]
+fn seed_reseeded() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let entities = EntityStore::open(&root.join("data/entity/entity.cc")).unwrap();
+    let ids: Vec<String> = entities
+        .all()
+        .unwrap()
+        .iter()
+        .map(|e| e.id.to_string())
+        .collect();
+    assert_eq!(ids, ["entity:brokkr", "entity:nibu"]);
+    // The committed corpus replays through the door with its entities: every
+    // speaker resolves and every span is a stored form.
+    let items = CorpusStore::open(&root.join("data/corpus/corpus.cc"))
+        .unwrap()
+        .all()
+        .unwrap();
+    assert_eq!(items.len(), 3);
+    let d = dir();
+    let mut replay = CorpusStore::open(&d.path().join("c.cc")).unwrap();
+    for i in items {
+        assert!(entities.get(&i.speaker).unwrap().is_some(), "{}", i.id);
+        replay.add(i, &entities).unwrap();
+    }
 }

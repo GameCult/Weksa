@@ -1,6 +1,6 @@
 mod common;
 use common::*;
-use weksa::packet::{EncoderId, Grade, NodeId, PacketId, ProperName, Referent};
+use weksa::packet::{EncoderId, Grade, NodeId, PacketId, Referent};
 use weksa::{Family, InvId, OptionLabel, OptionSet};
 
 /// Soul's probe: a whole corpus line, and the snake_case form that would
@@ -77,72 +77,11 @@ fn a_malformed_value_does_not_deserialize() {
     referent["id"] = SNAKE.into();
     assert!(serde_json::from_value::<Referent>(referent.clone()).is_err());
     referent["id"] = "n1".into();
-    referent["name"] = LINE.into();
-    assert!(serde_json::from_value::<Referent>(referent.clone()).is_err());
-    referent["name"] = "Nibu".into();
     referent["concept"] = "concept:01".into();
     assert!(serde_json::from_value::<Referent>(referent).is_err());
     assert!(serde_json::from_str::<Grade>("1001").is_err());
     assert_eq!(serde_json::from_str::<Grade>("1000").unwrap().get(), 1000);
     assert!(serde_json::from_str::<OptionSet>("[]").is_err());
-}
-
-#[test]
-fn proper_name_bounds() {
-    for ok in [
-        "Nibu",
-        "Brokkr Ivaldi",
-        "O'Neil",
-        "O\u{2019}Neil",
-        "Jean-Luc",
-        "A B C D",
-    ] {
-        assert_eq!(ProperName::parse(ok).unwrap().as_str(), ok);
-    }
-    // A caseless script is a name; so is a capital beyond ASCII.
-    assert!(ProperName::parse("\u{5c71}\u{7530}").is_ok());
-    assert!(ProperName::parse("\u{c9}owyn").is_ok());
-    for bad in [
-        LINE,
-        "A B C D E",
-        "Nibu.",
-        "Nibu, Ivaldi",
-        "Nibu  Ivaldi",
-        " Nibu",
-        "Nibu ",
-        "",
-        "Nibu2",
-        "'Nibu",
-        "-Nibu",
-        "Nibu-",
-        "Nibu'",
-        "Nibu_Ivaldi",
-    ] {
-        assert!(ProperName::parse(bad).is_err(), "{bad:?}");
-    }
-    // 24 chars a token, 4 tokens and 64 bytes are the bounds.
-    let token24 = format!("A{}", "b".repeat(23));
-    assert!(ProperName::parse(&token24).is_ok());
-    assert!(ProperName::parse(&format!("{token24}b")).is_err());
-    let sized = |lens: [usize; 4]| {
-        lens.iter()
-            .map(|n| format!("A{}", "b".repeat(n - 1)))
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
-    let at_limit = sized([15, 15, 15, 16]);
-    assert_eq!(at_limit.len(), 64);
-    assert!(ProperName::parse(&at_limit).is_ok());
-    let over = sized([15, 15, 15, 17]);
-    assert_eq!(over.len(), 65);
-    assert!(ProperName::parse(&over).is_err());
-    // The byte bound counts bytes, not characters.
-    let wide = format!(
-        "{0} {0} {0}",
-        "\u{e9}".repeat(11).replace('\u{e9}', "\u{c9}")
-    );
-    assert!(wide.chars().count() < 64 && wide.len() > 64);
-    assert!(ProperName::parse(&wide).is_err());
 }
 
 #[test]
@@ -210,39 +149,4 @@ fn grade_bound_is_the_type() {
     assert_eq!(grade["maximum"], 1000, "{grade}");
     assert_eq!(grade["minimum"], 0, "{grade}");
     assert_eq!(schema["$defs"]["NodeId"]["pattern"], "^n[1-9][0-9]{0,3}$");
-}
-
-#[test]
-fn proper_name_bound_in_chars() {
-    // The token bound counts characters: 24 two-byte letters are 48 bytes and parse.
-    let cyrillic = |n: usize| "\u{411}".repeat(n);
-    assert_eq!(cyrillic(24).len(), 48);
-    assert!(ProperName::parse(&cyrillic(24)).is_ok());
-    assert!(ProperName::parse(&cyrillic(25)).is_err());
-    // The 64-byte bound still counts bytes: two 48-byte tokens are 97 bytes.
-    assert!(ProperName::parse(&format!("{0} {0}", cyrillic(24))).is_err());
-}
-
-#[test]
-fn proper_name_is_form_only() {
-    // A name is bounded text: no case rule, so lowercase, hyphenated and
-    // caseless-script tokens parse.
-    for ok in [
-        "nibu",
-        "Nibu ivaldi",
-        "take-your-hand-off-that",
-        "Take-your-hand-off-that",
-        "\u{3131}-control-unless-you",
-        "\u{5c71}\u{7530}",
-    ] {
-        assert_eq!(ProperName::parse(ok).unwrap().as_str(), ok);
-    }
-    // The bounds still hold: 5 tokens, 65 bytes, a sentence's punctuation.
-    assert!(ProperName::parse("a b c d e").is_err());
-    assert!(ProperName::parse(&"a".repeat(25)).is_err());
-    let token = |n: usize| "a".repeat(n);
-    let over = [token(15), token(15), token(15), token(17)].join(" ");
-    assert_eq!(over.len(), 65);
-    assert!(ProperName::parse(&over).is_err());
-    assert!(ProperName::parse("take your hand, now.").is_err());
 }

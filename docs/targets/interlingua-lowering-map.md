@@ -178,10 +178,12 @@ operator-attested annotations alone. Who annotates is question
   intake: cast entities from the cast fixtures, public-domain entities by the
   importer, and in live use by the persona before it names one. A corpus item
   carries its name spans (byte ranges of its text, each naming an entity and
-  equal to one of that entity's forms in the item's language), and its speaker
+  on extended grapheme cluster boundaries of its NFC text and equal to one of that
+  entity's NFC forms in the item's language; an entity holds at most 8 languages
+  of BCP 47-form tags, 8 forms each, a form at most 64 bytes and 4 words), and its speaker
   and prior-turn speakers are entity ids. The packet store refuses a packet
   whose referent cites an entity the store lacks, and a packet with a
-  `corpus_item` that cites an entity neither annotated on that item nor one of
+  `corpus_item` (required, typed `CorpusItemId`) that cites an entity neither annotated on that item nor one of
   its speakers: an id-set check, not a text rule. The scorer reads only the
   output and the reference and scores the whole of each. An honest name earns
   its credit ("Brokkr came back." against itself is 100), a wrong one loses it,
