@@ -65,7 +65,16 @@ fn seed_add_dump_split_withdraw() {
         "{}",
         out(&added)
     );
-    let second = weksa(d.path(), &add);
+    // The same text under a new key is refused (S6); another text is not.
+    let copy = weksa(d.path(), &add);
+    assert!(
+        !copy.status.success() && out(&copy).contains("S6TextHeld"),
+        "{}",
+        out(&copy)
+    );
+    let mut other = add.clone();
+    other[5] = "Mind the other hatch.";
+    let second = weksa(d.path(), &other);
     assert!(
         out(&second).contains("Added item:nibu:2"),
         "{}",
@@ -101,8 +110,6 @@ fn model_written_and_public_domain_sources_name_their_provenance() {
         "add",
         "--slug",
         "x",
-        "--text",
-        "t",
         "--speaker",
         "s",
         "--group",
@@ -110,8 +117,13 @@ fn model_written_and_public_domain_sources_name_their_provenance() {
         "--admitted-on",
         "2026-10-29",
     ];
+    // S6 refuses one text under two keys, so each run writes its own.
+    let runs = std::cell::Cell::new(0);
     let run = |extra: &[&str]| {
+        runs.set(runs.get() + 1);
+        let text = format!("line {}", runs.get());
         let mut args = base.to_vec();
+        args.extend_from_slice(&["--text", &text]);
         args.extend_from_slice(extra);
         weksa(d.path(), &args)
     };
@@ -121,8 +133,27 @@ fn model_written_and_public_domain_sources_name_their_provenance() {
         "{}",
         out(&no_family)
     );
-    let model = run(&["--source", "model-written", "--model-family", "m"]);
+    let not_an_enum_value = run(&["--source", "model-written", "--model-family", "m"]);
+    assert!(
+        !not_an_enum_value.status.success(),
+        "{}",
+        out(&not_an_enum_value)
+    );
+    let model = run(&[
+        "--source",
+        "model-written",
+        "--model-family",
+        "open-ai",
+        "--generator",
+        "g",
+    ]);
     assert!(model.status.success(), "{}", out(&model));
+    let dump = weksa(d.path(), &["corpus", "dump"]);
+    assert!(
+        out(&dump).contains("OpenAi") && out(&dump).contains("generator: Some(\"g\")"),
+        "{}",
+        out(&dump)
+    );
     let no_work = run(&["--source", "public-domain", "--author", "a"]);
     assert!(
         !no_work.status.success() && out(&no_work).contains("--work"),

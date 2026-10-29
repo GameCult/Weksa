@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use weksa::corpus::{CorpusItem, Source, Turn};
+use weksa::corpus::{CorpusItem, ModelFamily, Source, Turn};
 use weksa::inventory::seed;
 use weksa::{CorpusStore, InventoryStore, PacketStore, SplitScheme, StoreError, validate};
 
@@ -69,6 +69,31 @@ enum SourceKind {
     ModelWritten,
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+enum ModelFamilyArg {
+    Anthropic,
+    OpenAi,
+    Google,
+    Alibaba,
+    Meta,
+    Mistral,
+    Unrecorded,
+}
+
+impl From<ModelFamilyArg> for ModelFamily {
+    fn from(f: ModelFamilyArg) -> Self {
+        match f {
+            ModelFamilyArg::Anthropic => ModelFamily::Anthropic,
+            ModelFamilyArg::OpenAi => ModelFamily::OpenAi,
+            ModelFamilyArg::Google => ModelFamily::Google,
+            ModelFamilyArg::Alibaba => ModelFamily::Alibaba,
+            ModelFamilyArg::Meta => ModelFamily::Meta,
+            ModelFamilyArg::Mistral => ModelFamily::Mistral,
+            ModelFamilyArg::Unrecorded => ModelFamily::Unrecorded,
+        }
+    }
+}
+
 #[derive(Args)]
 struct AddArgs {
     #[arg(long)]
@@ -98,8 +123,11 @@ struct AddArgs {
     author: Option<String>,
     #[arg(long)]
     edition_url: Option<String>,
+    #[arg(long = "model-family", value_enum)]
+    family: Option<ModelFamilyArg>,
+    /// The generator string the fixture or run wrote, verbatim.
     #[arg(long)]
-    model_family: Option<String>,
+    generator: Option<String>,
     #[arg(long)]
     prompt_digest: Option<String>,
     #[arg(long)]
@@ -130,7 +158,11 @@ impl AddArgs {
                 edition_url: get(&self.edition_url, "edition-url")?,
             },
             SourceKind::ModelWritten => Source::ModelWritten {
-                model_family: get(&self.model_family, "model-family")?,
+                family: self
+                    .family
+                    .map(ModelFamily::from)
+                    .context("this source needs --model-family")?,
+                generator: self.generator.clone(),
                 prompt_digest: self.prompt_digest.clone(),
             },
         })

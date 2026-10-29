@@ -3,6 +3,7 @@
 use std::sync::OnceLock;
 
 use tempfile::TempDir;
+use weksa::corpus::ModelFamily;
 use weksa::inventory::{Change, seed};
 use weksa::packet::*;
 use weksa::{
@@ -66,7 +67,8 @@ pub fn cast() -> Source {
 
 pub fn model() -> Source {
     Source::ModelWritten {
-        model_family: "m".into(),
+        family: ModelFamily::Unrecorded,
+        generator: None,
         prompt_digest: None,
     }
 }

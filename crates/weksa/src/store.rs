@@ -16,8 +16,8 @@ use crate::validate::{Refusal, validate};
 /// A broken store rule, named.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StoreRefusal {
-    /// S1: an existing item key re-added with different text.
-    S1ItemTextImmutable { key: String },
+    /// S1: an existing item key re-added with any field different.
+    S1ItemImmutable { key: String },
     /// S2: a revision that is not latest+1 with parent latest.
     S2RevisionChain { expected: u32, got: u32 },
     /// S3: a revision after a frozen one.
@@ -34,6 +34,8 @@ pub enum StoreRefusal {
         expected: String,
         got: String,
     },
+    /// S6: an item's normalized text equals another key's.
+    S6TextHeld { key: String, held_by: String },
     /// A `provenance.corpus_item` key names no item.
     UnknownCorpusItem { key: String },
     /// A packet key already holds a different packet.
@@ -151,8 +153,10 @@ impl CorpusStore {
         self.get(key)?.ok_or_else(|| unknown().into())
     }
 
-    /// S1: an item key holds its text for good. S5: a correction stays in its
-    /// predecessor's group, so it cannot move across the split.
+    /// S1: an item key holds its whole item for good. S6: a text held under
+    /// one key (live or withdrawn) is not re-added under another unless the new
+    /// item supersedes that key. S5: a correction stays in its predecessor's
+    /// group, so it cannot move across the split.
     pub fn add(&mut self, item: CorpusItem) -> Result<AddOutcome, StoreError> {
         if key_slug(&item.id).is_none() {
             return Err(malformed(&item.id, "item key is not item:<slug>:<n>"));
@@ -164,10 +168,20 @@ impl CorpusStore {
             ));
         }
         if let Some(existing) = self.get(&item.id)? {
-            if existing.text == item.text {
+            if existing == item {
                 return Ok(AddOutcome::Unchanged);
             }
-            return Err(StoreRefusal::S1ItemTextImmutable { key: item.id }.into());
+            return Err(StoreRefusal::S1ItemImmutable { key: item.id }.into());
+        }
+        let text = normalized(&item.text);
+        for held in self.all()? {
+            if normalized(&held.text) == text && item.supersedes.as_deref() != Some(&held.id) {
+                return Err(StoreRefusal::S6TextHeld {
+                    key: item.id,
+                    held_by: held.id,
+                }
+                .into());
+            }
         }
         if let Some(old) = &item.supersedes {
             let Some(old) = self.get(old)? else {
@@ -200,6 +214,15 @@ impl CorpusStore {
         }
         Ok(())
     }
+}
+
+/// Lowercased alphanumerics only, so case, spacing and punctuation variants of
+/// a text compare equal.
+fn normalized(text: &str) -> String {
+    text.chars()
+        .flat_map(char::to_lowercase)
+        .filter(|c| c.is_alphanumeric())
+        .collect()
 }
 
 pub struct InventoryStore {

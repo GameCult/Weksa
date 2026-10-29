@@ -55,6 +55,27 @@
     "withdrawn"
   ],
   "$defs": {
+    "ModelFamily": {
+      "description": "The family of the model that wrote a line.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "Anthropic",
+            "OpenAi",
+            "Google",
+            "Alibaba",
+            "Meta",
+            "Mistral"
+          ]
+        },
+        {
+          "description": "Nothing records which family wrote the line.",
+          "type": "string",
+          "const": "Unrecorded"
+        }
+      ]
+    },
     "Source": {
       "oneOf": [
         {
@@ -137,14 +158,20 @@
           ]
         },
         {
-          "description": "Labelled model output; never in the test split, never judged by its own family.",
+          "description": "Labelled model output; never in the test split, never judged by its own family.\n`family` is `Unrecorded` when nothing records one. `generator` is the\nstring the fixture or run wrote, kept verbatim.",
           "type": "object",
           "properties": {
             "ModelWritten": {
               "type": "object",
               "properties": {
-                "model_family": {
-                  "type": "string"
+                "family": {
+                  "$ref": "#/$defs/ModelFamily"
+                },
+                "generator": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 },
                 "prompt_digest": {
                   "type": [
@@ -154,7 +181,7 @@
                 }
               },
               "required": [
-                "model_family"
+                "family"
               ]
             }
           },

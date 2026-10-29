@@ -29,10 +29,26 @@ pub enum Source {
         edition_url: String,
     },
     /// Labelled model output; never in the test split, never judged by its own family.
+    /// `family` is `Unrecorded` when nothing records one. `generator` is the
+    /// string the fixture or run wrote, kept verbatim.
     ModelWritten {
-        model_family: String,
+        family: ModelFamily,
+        generator: Option<String>,
         prompt_digest: Option<String>,
     },
+}
+
+/// The family of the model that wrote a line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum ModelFamily {
+    Anthropic,
+    OpenAi,
+    Google,
+    Alibaba,
+    Meta,
+    Mistral,
+    /// Nothing records which family wrote the line.
+    Unrecorded,
 }
 
 /// Key: `item:<source-slug>:<n>`.
@@ -68,10 +84,19 @@ pub fn item_key(slug: &str, n: u32) -> String {
     format!("item:{slug}:{n}")
 }
 
-/// The slug of an item key, if it is `item:<slug>:<n>`.
+/// The slug of an item key, if it is canonical `item:<slug>:<n>`: a slug of
+/// `[a-z0-9]` and inner `-` (at most 48 bytes, no edge `-`), and `n` a decimal
+/// of at least 1 without sign or leading zero that fits `u32`.
 pub fn key_slug(key: &str) -> Option<&str> {
     let rest = key.strip_prefix("item:")?;
     let (slug, n) = rest.rsplit_once(':')?;
-    n.parse::<u32>().ok()?;
-    (!slug.is_empty()).then_some(slug)
+    let canonical_n =
+        n.bytes().all(|b| b.is_ascii_digit()) && !n.starts_with('0') && n.parse::<u32>().is_ok();
+    let b = slug.as_bytes();
+    let slug_ok = (1..=48).contains(&b.len())
+        && b.iter()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-')
+        && b[0] != b'-'
+        && b[b.len() - 1] != b'-';
+    (canonical_n && slug_ok).then_some(slug)
 }

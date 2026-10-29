@@ -1,7 +1,7 @@
 mod common;
 use common::*;
 use tempfile::TempDir;
-use weksa::corpus::{CorpusItem, Source, Turn};
+use weksa::corpus::{CorpusItem, ModelFamily, Source, Turn};
 use weksa::inventory::{Change, seed};
 use weksa::{
     AddOutcome, CorpusStore, Family, InventoryEntry, InventoryRevision, InventoryStore,
@@ -41,7 +41,7 @@ fn malformed(key: &str, why: &'static str) -> StoreRefusal {
 }
 
 #[test]
-fn s1_item_text_immutable() {
+fn s1_item_immutable() {
     let d = dir();
     let path = d.path().join("c.cc");
     let mut store = CorpusStore::open(&path).unwrap();
@@ -49,21 +49,164 @@ fn s1_item_text_immutable() {
         store.add(item("item:nibu:1", "Mind the hatch.")).unwrap(),
         AddOutcome::Added
     );
-    // The same text is idempotent, even from a reopened store.
+    // An equal item is idempotent, even from a reopened store.
     let mut store = CorpusStore::open(&path).unwrap();
     assert_eq!(
         store.add(item("item:nibu:1", "Mind the hatch.")).unwrap(),
         AddOutcome::Unchanged
     );
+    let refused = || StoreRefusal::S1ItemImmutable {
+        key: "item:nibu:1".into(),
+    };
+    // Changed text, and every other field, is refused; the stored item stays.
+    let base = item("item:nibu:1", "Mind the hatch.");
+    let mut variants = vec![item("item:nibu:1", "Mind the hatch!")];
+    let mut v = base.clone();
+    v.source = model();
+    variants.push(v);
+    let mut v = base.clone();
+    v.source = Source::OperatorWritten;
+    variants.push(v);
+    let mut v = base.clone();
+    v.language = "en-GB".into();
+    variants.push(v);
+    let mut v = base.clone();
+    v.speaker = "brokkr".into();
+    variants.push(v);
+    let mut v = base.clone();
+    v.group = "scene-2".into();
+    variants.push(v);
+    let mut v = base.clone();
+    v.prior_turns.clear();
+    variants.push(v);
+    let mut v = base.clone();
+    v.admitted_on = "2026-10-30".into();
+    variants.push(v);
+    let mut v = base.clone();
+    v.supersedes = Some("item:nibu:9".into());
+    variants.push(v);
+    for v in variants {
+        assert_eq!(refusal(store.add(v.clone())), refused(), "{v:?}");
+    }
+    assert_eq!(store.get("item:nibu:1").unwrap(), Some(base.clone()));
+    // A withdrawn item is a different item: re-adding it live is refused too.
+    store.withdraw("item:nibu:1").unwrap();
+    assert_eq!(refusal(store.add(base)), refused());
+}
+
+#[test]
+fn corpus_keys_are_canonical() {
+    let d = dir();
+    let mut store = CorpusStore::open(&d.path().join("c.cc")).unwrap();
+    let long_slug = format!("item:a{}:1", "b".repeat(48));
+    let not_canonical = [
+        "item:a:01",
+        "item:a:+1",
+        "item:a:0",
+        "item:A:1",
+        "item:a-:1",
+        "item:-a:1",
+        "item:a:b:1",
+        "item::1",
+        "item:a:",
+        "item:a:\u{661}",
+        "item:a:4294967296",
+        &long_slug,
+    ];
+    for (i, key) in not_canonical.into_iter().enumerate() {
+        assert_eq!(
+            refusal(store.add(item(key, &format!("line {i}")))),
+            malformed(key, "item key is not item:<slug>:<n>"),
+            "{key}"
+        );
+    }
+    assert!(store.all().unwrap().is_empty());
+    // The edges of the canonical form are admitted.
+    let longest = format!("item:{}:4294967295", "a".repeat(48));
+    let canonical = ["item:a:1", "item:a-b:10", "item:7:2", "item:ab:9", &longest];
+    for (i, key) in canonical.into_iter().enumerate() {
+        assert_eq!(
+            store.add(item(key, &format!("fine {i}"))).unwrap(),
+            AddOutcome::Added,
+            "{key}"
+        );
+    }
+    // An alias of a stored key resolves to nothing.
+    let w = world();
+    let mut packets = PacketStore::open(&w.dir.path().join("p.cc")).unwrap();
+    let mut p = good();
+    p.provenance.corpus_item = Some("item:nibu:01".into());
     assert_eq!(
-        refusal(store.add(item("item:nibu:1", "Mind the hatch!"))),
-        StoreRefusal::S1ItemTextImmutable {
-            key: "item:nibu:1".into()
+        refusal(packets.admit(p, &w.inventory, &w.corpus)),
+        StoreRefusal::UnknownCorpusItem {
+            key: "item:nibu:01".into()
         }
     );
+}
+
+#[test]
+fn s6_text_held_by_another_key() {
+    let d = dir();
+    let mut store = CorpusStore::open(&d.path().join("c.cc")).unwrap();
+    store.add(item("item:nibu:1", "Mind the hatch.")).unwrap();
+    let elsewhere = |key: &str, text: &str| CorpusItem {
+        group: "scene-2".into(),
+        ..item(key, text)
+    };
+    let held = |key: &str, by: &str| StoreRefusal::S6TextHeld {
+        key: key.into(),
+        held_by: by.into(),
+    };
+    // The same text in another group, and in the same group, is refused.
     assert_eq!(
-        store.get("item:nibu:1").unwrap().unwrap().text,
-        "Mind the hatch."
+        refusal(store.add(elsewhere("item:nibu:2", "Mind the hatch."))),
+        held("item:nibu:2", "item:nibu:1")
+    );
+    assert_eq!(
+        refusal(store.add(item("item:nibu:2", "Mind the hatch."))),
+        held("item:nibu:2", "item:nibu:1")
+    );
+    // Case, spacing and punctuation variants are the same text.
+    for text in [
+        "MIND THE HATCH",
+        "mind   the\thatch...",
+        "  Mind-the-hatch!  ",
+        "Mind the hatch.\n",
+    ] {
+        assert_eq!(
+            refusal(store.add(elsewhere("item:nibu:2", text))),
+            held("item:nibu:2", "item:nibu:1"),
+            "{text:?}"
+        );
+    }
+    store
+        .add(item("item:nibu:3", "\u{c4}rger \u{fc}ber \u{d6}l"))
+        .unwrap();
+    assert_eq!(
+        refusal(store.add(elsewhere("item:nibu:4", "\u{e4}rger \u{dc}BER \u{f6}l"))),
+        held("item:nibu:4", "item:nibu:3")
+    );
+    // Text that differs in a letter or digit is a different text.
+    store.add(item("item:nibu:5", "Mind the hatch 2")).unwrap();
+    store.add(item("item:nibu:6", "Mind the hatches.")).unwrap();
+    // A withdrawn holder still holds.
+    store.withdraw("item:nibu:1").unwrap();
+    assert_eq!(
+        refusal(store.add(elsewhere("item:nibu:2", "mind the hatch"))),
+        held("item:nibu:2", "item:nibu:1")
+    );
+    // Superseding a different key does not excuse a copy of another item.
+    let mut copy = item("item:nibu:8", "Mind the hatches!");
+    copy.supersedes = Some("item:nibu:5".into());
+    assert_eq!(refusal(store.add(copy)), held("item:nibu:8", "item:nibu:6"));
+    // A superseder of the holder, in the holder's group, is Added.
+    let mut fix = item("item:nibu:2", "mind the hatch");
+    fix.supersedes = Some("item:nibu:1".into());
+    assert_eq!(store.add(fix).unwrap(), AddOutcome::Added);
+    // The superseded holder's text stays held against a third key.
+    assert_eq!(
+        refusal(store.add(elsewhere("item:nibu:7", "Mind the hatch."))),
+        held("item:nibu:7", "item:nibu:1")
     );
 }
 
@@ -627,10 +770,43 @@ fn the_committed_stores_load_and_hold_clean_data() {
             );
         }
     }
-    assert!(
+    let by_id = |id: &str| {
         items
             .iter()
-            .any(|i| matches!(i.source, Source::ModelWritten { .. })),
-        "model-written lines are labelled"
+            .find(|i| i.id == id)
+            .unwrap_or_else(|| panic!("{id}"))
+    };
+    // brokkr:1 carries the generator string its fixture wrote, verbatim.
+    let fixture = std::fs::read_to_string(
+        root.join("examples/persona-lowering/brokkr-edda-voice/lowered-output.yaml"),
+    )
+    .unwrap();
+    let written = fixture
+        .lines()
+        .find_map(|l| l.strip_prefix("generator: "))
+        .expect("the fixture names its generator");
+    assert_eq!(written, "codex-local-source-aware-draft");
+    assert_eq!(
+        by_id("item:brokkr:1").source,
+        Source::ModelWritten {
+            family: ModelFamily::OpenAi,
+            generator: Some(written.into()),
+            prompt_digest: None
+        }
     );
+    // Fixtures that record no author are Unrecorded, never CastAuthored.
+    let unrecorded = Source::ModelWritten {
+        family: ModelFamily::Unrecorded,
+        generator: None,
+        prompt_digest: None,
+    };
+    assert_eq!(by_id("item:nibu:1").source, unrecorded);
+    assert_eq!(by_id("item:nibu:2").source, unrecorded);
+    assert!(
+        !items
+            .iter()
+            .any(|i| matches!(i.source, Source::CastAuthored { .. })),
+        "no item claims a recorded human author"
+    );
+    assert_eq!(items.len(), 3);
 }

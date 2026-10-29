@@ -1,4 +1,4 @@
-use weksa::corpus::{CorpusItem, Source};
+use weksa::corpus::{CorpusItem, ModelFamily, Source};
 use weksa::split::fnv1a64;
 use weksa::{Split, SplitScheme};
 
@@ -26,7 +26,8 @@ fn cast() -> Source {
 
 fn model() -> Source {
     Source::ModelWritten {
-        model_family: "m".into(),
+        family: ModelFamily::Unrecorded,
+        generator: None,
         prompt_digest: None,
     }
 }
