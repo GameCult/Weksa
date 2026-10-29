@@ -188,6 +188,7 @@ pub enum Slot {
     Referent,
     Predication,
     Relation,
+    Stance,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -439,10 +440,28 @@ pub fn seed() -> (InventoryRevision, Vec<InventoryEntry>) {
         &pred,
     );
     let nuance = [Slot::Discourse, Slot::Predication];
-    for g in ["hedge", "certainty", "warmth", "formality", "intensity"] {
+    for g in ["hedge", "certainty"] {
         add(Family::Feature, g, Some(ValueKind::Grade), &nuance);
     }
     add(Family::Feature, "irony", Some(ValueKind::Flag), &nuance);
+    // Felt affect (permille of how strongly it is felt) and the restraint the speaker
+    // puts on it: slot Stance only. Affection covers fondness toward the
+    // addressee. Displayed affect is each language's ontology's business.
+    let stance = [Slot::Stance];
+    for g in [
+        "anger",
+        "fear",
+        "sadness",
+        "joy",
+        "disgust",
+        "surprise",
+        "contempt",
+        "affection",
+        "shame",
+        "restraint",
+    ] {
+        add(Family::Feature, g, Some(ValueKind::Grade), &stance);
+    }
     let changes = entries.iter().map(|e| Change::Add(e.id)).collect();
     (
         InventoryRevision {

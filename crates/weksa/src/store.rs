@@ -15,7 +15,7 @@ use crate::entity::Entity;
 use crate::form::is_language_tag;
 use crate::inventory::{Change, InvId, Inventory, InventoryEntry, InventoryRevision, revision_key};
 use crate::packet::{EntityId, Packet};
-use crate::validate::{Refusal, validate};
+use crate::validate::{LoweringInput, Refusal, admissible};
 
 /// A broken store rule, named.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -73,6 +73,9 @@ pub enum StoreRefusal {
     /// A corpus packet's referent cites an entity that is neither named on its
     /// item nor the item's speaker or a prior-turn speaker.
     EntityNotOnItem { entity: EntityId, item: String },
+    /// A new packet names a corpus item already withdrawn. Packets admitted
+    /// before the withdrawal stay stored and readable.
+    WithdrawnCorpusItem { key: String },
     /// Any other malformed document or change.
     Malformed { key: String, why: &'static str },
 }
@@ -598,9 +601,10 @@ impl PacketStore {
         self.cache.get::<Packet>(key)
     }
 
-    /// The only door: a packet exists only if `validate` passes against the
-    /// inventory the store holds at the packet's revision, its `corpus_item`
-    /// resolves, every referent's entity is in the entity store and is named on
+    /// The only door, and the only source of a [`LoweringInput`]: a packet
+    /// exists only if the validator's rules pass against the inventory the
+    /// store holds at the packet's revision, its `corpus_item` resolves to an
+    /// item that is not withdrawn, every referent's entity is in the entity store and is named on
     /// that item or is its speaker or a prior-turn speaker (an id-set check). A
     /// key holds its packet for good. A packet that names no corpus item has no
     /// door here.
@@ -610,9 +614,15 @@ impl PacketStore {
         inventory: &InventoryStore,
         corpus: &CorpusStore,
         entities: &EntityStore,
-    ) -> Result<(), StoreError> {
-        validate(&packet, &inventory.inventory()?).map_err(StoreError::Invalid)?;
+    ) -> Result<LoweringInput, StoreError> {
+        let view = admissible(&packet, &inventory.inventory()?).map_err(StoreError::Invalid)?;
         let item = corpus.resolve(&packet.provenance.corpus_item)?;
+        if item.withdrawn {
+            return Err(StoreRefusal::WithdrawnCorpusItem {
+                key: item.id.clone(),
+            }
+            .into());
+        }
         for entity in packet.referents.iter().filter_map(|r| r.entity.as_ref()) {
             if entities.get(entity)?.is_none() {
                 return Err(StoreRefusal::UnknownEntity {
@@ -634,11 +644,11 @@ impl PacketStore {
         let key = packet.id.to_string();
         if let Some(existing) = self.get(&key)? {
             if existing == packet {
-                return Ok(());
+                return Ok(view);
             }
             return Err(StoreRefusal::PacketImmutable { key }.into());
         }
         self.cache.put(key, &packet)?;
-        Ok(())
+        Ok(view)
     }
 }

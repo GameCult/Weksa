@@ -16,7 +16,7 @@ pub use crate::inventory::InvId;
 use crate::inventory::OptionLabel;
 
 /// Bumped by a commit that changes these types; the published schema moves with it.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// Id of a referent or predication within one packet: `n<k>`, `k` a canonical
 /// decimal 1..=9999.
@@ -208,6 +208,8 @@ pub struct Packet {
     pub extensions: Vec<Extension>,
     #[cultcache(key = 12)]
     pub trace: Trace,
+    #[cultcache(key = 13)]
+    pub stance: Stance,
 }
 
 impl Packet {
@@ -259,6 +261,14 @@ pub struct Discourse {
     /// Speech-act id.
     pub speech_act: Option<InvId>,
     pub addressee: Option<NodeId>,
+    pub features: Vec<FeatureValue>,
+}
+
+/// The speaker's felt affect and restraint, never displayed affect: how the
+/// speaker shows a feeling is each language's ontology's business. A
+/// held-back feeling is not a claim, so it is never a predication.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Stance {
     pub features: Vec<FeatureValue>,
 }
 

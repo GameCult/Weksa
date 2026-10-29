@@ -19,7 +19,11 @@ pub const WARN: &str = "speech_act:5";
 pub const POLARITY: &str = "feature:1";
 pub const MODALITY: &str = "feature:4";
 pub const HEDGE: &str = "feature:6";
-pub const IRONY: &str = "feature:11";
+pub const IRONY: &str = "feature:8";
+/// Stance features, slot Stance only (Grade).
+pub const ANGER: &str = "feature:9";
+pub const AFFECTION: &str = "feature:16";
+pub const RESTRAINT: &str = "feature:18";
 /// Introduced at rev 2.
 pub const CONCEPT_A: &str = "concept:1";
 pub const CONCEPT_B: &str = "concept:2";
@@ -211,6 +215,7 @@ pub fn world() -> World {
                         Slot::Referent,
                         Slot::Predication,
                         Slot::Relation,
+                        Slot::Stance,
                     ],
                 )
             },
@@ -307,6 +312,18 @@ pub fn good() -> Packet {
         trace: Trace {
             notes: vec!["a note".into()],
             rejected_readings: vec![],
+        },
+        stance: Stance {
+            features: vec![
+                FeatureValue {
+                    feature: iv(ANGER),
+                    value: FeatValue::Grade(grade(300)),
+                },
+                FeatureValue {
+                    feature: iv(RESTRAINT),
+                    value: FeatValue::Grade(grade(700)),
+                },
+            ],
         },
     }
 }

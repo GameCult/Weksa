@@ -391,7 +391,7 @@ fn packet_entities_resolve() {
 
 #[test]
 fn packet_schema_v2() {
-    assert_eq!(SCHEMA_VERSION, 3);
+    assert_eq!(SCHEMA_VERSION, 4);
     let mut p = good();
     p.schema_version = 2;
     let Err(refused) = validate(&p, &inventory()) else {
@@ -416,4 +416,7 @@ fn packet_schema_v2() {
         serde_json::from_str(&published["weksa.corpus_item.schema.json"]).unwrap();
     assert!(item["properties"].get("names").is_some());
     assert!(published.contains_key("weksa.entity.schema.json"));
+    // v4: the packet carries the speaker's stance, a bare feature list.
+    assert!(packet["properties"].get("stance").is_some(), "{packet}");
+    assert_eq!(packet["$defs"]["Stance"]["properties"]["features"]["type"], "array");
 }

@@ -1,6 +1,9 @@
-//! The validator owns whether a packet exists. Every path that admits or lowers a
-//! packet calls `validate`, and its Ok value, [`LoweringInput`], is the only
-//! thing a lowerer sees. The rules are V1..V8 and V10..V12: the shape of an id
+//! The validator owns the inventory and form rules a packet must meet. Every
+//! path that admits a packet applies them, but `validate` only judges: it
+//! returns `Ok(())` or the refusals. [`LoweringInput`], the only thing a
+//! lowerer sees, comes from `PacketStore::admit` alone, which builds it through
+//! the crate-private `admissible`. The stance is checked like every feature
+//! list, in slot `Stance`. The rules are V1..V8 and V10..V12: the shape of an id
 //! or a grade is its type's parse, not a rule, so V9 is retired and not
 //! renumbered.
 //!
@@ -25,7 +28,7 @@ use std::fmt;
 use crate::inventory::{Family, InvId, Inventory, InventoryEntry, Slot, ValueKind};
 use crate::packet::{
     Constraints, Context, Discourse, Extension, FeatValue, FeatureValue, NodeId, Packet,
-    PacketKind, Predication, Referent, Relation, SCHEMA_VERSION,
+    PacketKind, Predication, Referent, Relation, SCHEMA_VERSION, Stance,
 };
 
 /// A broken rule, named.
@@ -91,9 +94,34 @@ impl fmt::Display for Refusal {
     }
 }
 
-/// Whether `packet` may exist under `inventory`. All broken rules are returned;
-/// a packet that passes yields the lowering view, which only this function builds.
-pub fn validate(packet: &Packet, inventory: &Inventory) -> Result<LoweringInput, Vec<Refusal>> {
+/// Whether `packet` meets the rules under `inventory`. All broken rules are
+/// returned. A pass carries no lowering view: that comes from
+/// `PacketStore::admit` only.
+///
+/// ```
+/// use weksa::{Inventory, Refusal, packet::Packet};
+/// fn judge(p: &Packet, i: &Inventory) -> Result<(), Vec<Refusal>> { weksa::validate(p, i) }
+/// ```
+///
+/// ```compile_fail
+/// use weksa::{Inventory, LoweringInput, Refusal, packet::Packet};
+/// fn lower(p: &Packet, i: &Inventory) -> Result<LoweringInput, Vec<Refusal>> { weksa::validate(p, i) }
+/// ```
+pub fn validate(packet: &Packet, inventory: &Inventory) -> Result<(), Vec<Refusal>> {
+    admissible(packet, inventory).map(|_| ())
+}
+
+/// The one implementation of the rules. Crate-private: `PacketStore::admit` is
+/// the only caller that keeps the view.
+///
+/// ```compile_fail
+/// use weksa::{Inventory, packet::Packet};
+/// fn lower(p: &Packet, i: &Inventory) { let _ = weksa::validate::admissible(p, i); }
+/// ```
+pub(crate) fn admissible(
+    packet: &Packet,
+    inventory: &Inventory,
+) -> Result<LoweringInput, Vec<Refusal>> {
     let mut out = Vec::new();
     if packet.schema_version != SCHEMA_VERSION {
         out.push(Refusal::V1SchemaVersion {
@@ -221,6 +249,7 @@ impl<'a> Inventoried<'a> {
             predications,
             relations,
             extensions,
+            stance,
             ..
         } = p;
         let Context {
@@ -238,6 +267,7 @@ impl<'a> Inventoried<'a> {
             self.slot(id, Family::SpeechAct, "speech act");
         }
         self.features(features, Slot::Discourse);
+        self.features(&stance.features, Slot::Stance);
         for Referent {
             kind,
             concept,
@@ -349,8 +379,9 @@ fn fits(kind: Option<&ValueKind>, value: &FeatValue) -> bool {
 
 /// What the lowerer sees: a validated packet's meaning, with no packet id, no
 /// provenance (so no corpus item key, encoder or source) and no trace. Its
-/// fields are private and `validate` is the only constructor, so a lowerer
-/// cannot be handed an unvalidated packet or the key to an answer text.
+/// fields are private and the constructor is crate-private, called only by
+/// `PacketStore::admit`, so a lowerer cannot be handed an unadmitted packet or
+/// the key to an answer text.
 ///
 /// Each field has a doctest that reads it from outside the crate. A read
 /// compiles exactly when the field is `pub`, so the doctest (which must fail to
@@ -394,6 +425,10 @@ fn fits(kind: Option<&ValueKind>, value: &FeatValue) -> bool {
 /// fn read(l: weksa::LoweringInput) { let _ = l.extensions; }
 /// ```
 ///
+/// ```compile_fail
+/// fn read(l: weksa::LoweringInput) { let _ = l.stance; }
+/// ```
+///
 /// The constructor is private: a call from outside the crate compiles only if
 /// `LoweringInput::of` is `pub`. The first block is the same code without the
 /// call, so the second fails for that call and nothing else.
@@ -430,6 +465,7 @@ pub struct LoweringInput {
     relations: Vec<Relation>,
     constraints: Constraints,
     extensions: Vec<Extension>,
+    stance: Stance,
 }
 
 impl LoweringInput {
@@ -444,6 +480,7 @@ impl LoweringInput {
             relations: p.relations.clone(),
             constraints: p.constraints.clone(),
             extensions: p.extensions.clone(),
+            stance: p.stance.clone(),
         }
     }
 
@@ -473,5 +510,8 @@ impl LoweringInput {
     }
     pub fn extensions(&self) -> &[Extension] {
         &self.extensions
+    }
+    pub fn stance(&self) -> &Stance {
+        &self.stance
     }
 }
