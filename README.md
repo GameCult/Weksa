@@ -18,8 +18,10 @@ measured.
 
 - [Interlingua Standard](./docs/interlingua-standard.md): the packet contract.
 - `crates/weksa`: the packet, inventory and corpus types, `validate`, the
-  derived split and the `weksa` CLI (`weksa validate`, `corpus`, `entity`, `inventory`,
-  `split`, `schema`); published schemas in `schemas/cultnet/`.
+  derived split, the scorer (`score`: chrF, meaning cosine through an Ollama
+  embedder, whole output against whole reference with no mask, leak diagnostics) and the `weksa` CLI
+  (`weksa validate`, `corpus`, `entity`, `inventory`, `split`, `schema`);
+  published schemas in `schemas/cultnet/`.
 - `data/corpus/corpus.cc`, `data/entity/entity.cc` and `data/interlingua/inventory.cc`: the English
   corpus, its entities and the inventory, read with `weksa corpus dump`,
   `weksa entity dump` and `weksa inventory dump`.
@@ -30,8 +32,8 @@ measured.
 - `settings/`: setting-specific proving grounds for language projects.
 
 **Live versus planned.** Live: docs, fixtures, examples, ontology data and the
-packet crate `crates/weksa`. Planned: scoring, lowering, and
-the golf loop that scores lowered English against an expressive corpus. No
+packet crate `crates/weksa`, including the scoring library. Planned: lowering,
+the `weksa score` subcommand, and the golf loop that scores lowered English against an expressive corpus. No
 daemon runs; the earlier Node daemon is parked at tag `parked/weksa-node-body`.
 
 ## Ownership Model
@@ -92,7 +94,7 @@ AquaSynth or expanding pronunciation coverage.
 
 The persistent state spine is live: map, scratch, schemas, docs, examples and
 data. Packet types, validation and the corpus and inventory stores are live in
-`crates/weksa`. Scoring, lowering and the service are planned (see the cut
+`crates/weksa`, and so is the scoring library. Lowering and the service are planned (see the cut
 sequence in [the lowering map](./docs/targets/interlingua-lowering-map.md)).
 Writing and agent state will enter Weksa as intent pressure, and typed utterance
 documents will leave for AquaSynth.
