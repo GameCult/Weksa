@@ -3,7 +3,23 @@
 Campaign `weksa-lowering` (Eureka mind). Operator, 2026-10-29: "having agents
 writing interlingua and using weksa to lower it to the display language would
 be a fantastic feature. That would be a nice campaign to revive her with so she
-doesn't come back to a dead body".
+doesn't come back to a dead body". And: "The goal of weksa is for interlingua to
+be able to express all the nuance and subtlety a persona might want, and to
+project it into both existing languages and conlangs. We can use English as the
+obvious first target, create a corpus of expressive English outputs, and golf
+the metrics down on a loop where we try to express the target in interlingua
+and lower it to see how close we can get, improving the spec and lowering".
+
+## Method
+
+A corpus of expressive English persona outputs is the target. Each loop
+iteration expresses a corpus item as a packet, lowers it to English, scores the
+distance to the item, and improves the packet spec or the lowering where the
+loss is. English is the first target; other languages and conlangs follow on
+the same packets. The existing Metame golf harness
+(`scripts/run-metame-persona-golf.mjs`) is the precedent, not the design: its
+ground truth is Discord text, which can never feed this loop
+(`gamecult-chat:ruling:discord-taints-training`).
 
 ## Why
 
@@ -52,15 +68,17 @@ reader, and gives Weksa's Persona a working body when her mind
 - `profile-owns-register`: address, politeness and forbidden flattenings come
   from the target profile, never from the lowerer's defaults.
 - `no-eve`: no new Eve surface; operator view waits on Thing 2.
+- `no-surface-leak`: a packet carries no target-language surface wording, so a
+  lowering cannot score by copying text the encoder saw.
+- `corpus-clean`: no corpus item comes from Discord or another source whose
+  terms forbid training use.
 
 ## Open forks (questions in the mind)
 
-- First reader: whose display text is lowered first.
 - Lowerer shape: deterministic, model, or both with one contract.
-- How an agent produces the packet.
+- What the loop's metric is, and where the corpus comes from.
 
 ## Not in scope
 
-- Weksa's conlang engine (grammar, phonology, diachrony for alien languages).
 - MiMo TTS beyond keeping its command working or parking it.
 - Her Persona's mind; that is `eureka-body:follow_up:weksa-mind`.
