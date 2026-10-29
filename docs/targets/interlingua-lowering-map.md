@@ -12,8 +12,8 @@ The interlingua spec has two layers. The **schema** is Rust types: packet
 families, node ids, role slots, value kinds. It changes rarely and by commit.
 The **inventory** is data in CultCache: the concepts, frames, roles, relation
 types, speech acts and nuance features (hedge, certainty, warmth, irony and
-whatever the loop finds missing) that the schema's slots name by id. Every open slot in a packet is an inventory id; a packet's only free text is
-form-bounded referent names and the trace. No door judges text for leakage:
+whatever the loop finds missing) that the schema's slots name by id. Every open slot in a packet is an inventory id; a referent names an entity by id
+from the entity store, and a packet's only free text is the trace. No door judges text for leakage:
 what each model call may see, and what a score may count, own that
 (`weksa-lowering:ruling:leak-owned-by-flow-and-scorer-3`). The golf loop improves the spec
 mostly by growing and refining the inventory, which is fast; schema changes are
