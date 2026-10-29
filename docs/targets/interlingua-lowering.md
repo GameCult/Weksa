@@ -65,8 +65,14 @@ reader, and gives Weksa's Persona a working body when her mind
   schema and a validator that refuses malformed packets at the door.
 - `lowering-traced`: every surface text carries a trace naming the packet, the
   target profile and the choices made.
-- `profile-owns-register`: address, politeness and forbidden flattenings come
-  from the target profile, never from the lowerer's defaults.
+- `persona-drives-register`: every surface choice that marks who is speaking
+  and how (regional origin, socioeconomic status, relative status within the
+  scene, affect, and how restrained the speaker is with it) is selected by the
+  target language's ontology from typed speaker state that the persona and
+  scene supply, never from the lowerer's defaults. Every language, conlangs
+  included, carries an ontology with its own such axes; that is how alien
+  languages match the expressiveness of human ones. Operator, 2026-10-29: "The
+  linguistic ontology holds this data and drives it from the persona."
 - `no-eve`: no new Eve surface; operator view waits on Thing 2.
 - `no-surface-leak`: a packet carries no target-language surface wording, so a
   lowering cannot score by copying text the encoder saw.
