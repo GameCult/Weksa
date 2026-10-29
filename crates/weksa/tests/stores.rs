@@ -541,7 +541,7 @@ fn retiring_keeps_the_entry_for_earlier_revisions() {
 fn revision_one_survives_revision_two() {
     let inv = inventory();
     let revisions: Vec<(u32, usize)> = inv.revisions().map(|r| (r.n, r.changes.len())).collect();
-    assert_eq!(revisions, vec![(1, 54), (2, 6), (3, 1), (4, 1)]);
+    assert_eq!(revisions, vec![(1, 61), (2, 6), (3, 1), (4, 1)]);
     // A packet of revision 1 is judged by the inventory of revision 1: the
     // revision is known (no V10), and it names nothing that came later.
     let mut p = good();
