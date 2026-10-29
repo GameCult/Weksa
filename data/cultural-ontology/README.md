@@ -20,7 +20,6 @@ may retrieve candidates, but accepted ontology remains typed state.
 
 - `cultures/`: culture or life-history profiles that can shape lowering when a
   Persona explicitly references them.
-- `subcultures/`: community-of-practice and register profiles.
 - `referents/`: bounded source-text, mythic, literary, ritual, or historical
   referents. These are not whole-culture profiles; they preserve reusable
   role, salience, affordance, and forbidden-flattening pressure.

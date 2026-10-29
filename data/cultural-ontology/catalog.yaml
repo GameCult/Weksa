@@ -14,18 +14,8 @@ qdrant:
     Qdrant owns retrieval over culture/subculture chunks. It does not own
     accepted ontology, activation, or lowering authority.
 profiles:
-  - profile_id: weksa.culture.dutch_american_diaspora.v0
-    path: data/cultural-ontology/cultures/dutch-american-diaspora.yaml
   - profile_id: weksa.culture.western_europe_maritime_childhood.v0
     path: data/cultural-ontology/cultures/western-europe-maritime-childhood.yaml
-  - profile_id: weksa.culture.portugal_resident_algarve_lisbon.v0
-    path: data/cultural-ontology/cultures/portugal-resident-algarve-lisbon.yaml
-  - profile_id: weksa.culture.texas_houston_us_adolescence.v0
-    path: data/cultural-ontology/cultures/texas-houston-us-adolescence.yaml
-  - profile_id: weksa.subculture.online_game_dev_discord_pre2025.v0
-    path: data/cultural-ontology/subcultures/online-game-dev-discord-pre2025.yaml
-  - profile_id: weksa.subculture.gamecult_open_source_crypto_anarchist.v0
-    path: data/cultural-ontology/subcultures/gamecult-open-source-crypto-anarchist.yaml
   - profile_id: weksa.cultural_referent.old_norse_edda_source_tradition.v0
     path: data/cultural-ontology/referents/old-norse-edda-source-tradition.yaml
   - profile_id: weksa.cultural_referent.old_norse_edda_brokkr_skaldskaparmal.v0

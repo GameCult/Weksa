@@ -18,7 +18,7 @@ requests, and utterance handoff documents.
 ## Current Mechanism
 
 There is no long-running runtime loop yet. The repo contains persistent state
-surfaces and a provider advertisement fixture that define the intended data flow
+surfaces that define the intended data flow
 and the ownership boundaries future code must respect.
 
 The first shared contract is the [Interlingua Standard](./interlingua-standard.md):

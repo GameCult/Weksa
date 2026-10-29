@@ -10,8 +10,8 @@ community:
     - coastal_western_europe
   speech_community: >
     Mobile childhood organized around sailing, ports, and cross-border Western
-    European movement. This profile is owner-attested for the Metame fixture and
-    needs more Discord corroboration before broader use.
+    European movement. This profile is owner-attested and needs corroboration
+    before broader use.
 activation:
   allowed_when:
     - persona_state_references_profile
@@ -35,11 +35,6 @@ salience_axes:
           - scene_has_no_mobility_or_home_salience
         evidence_refs:
           - owner:2026-06-10:sailboat_france_spain_portugal_until_6
-evidence_ledger:
-  - ref: owner:2026-06-10:sailboat_france_spain_portugal_until_6
-    quote: "I was born in the Netherlands, grew up on a sailboat traveling France, Spain, staying in Portugal until I was 6, moved to the US."
-  - ref: discord-search-gap:sailboat_childhood
-    summary: First semantic search did not locate a direct Discord message for this exact childhood account.
 linguistic_affordances:
   grammar_features: []
   phonology_features: []
