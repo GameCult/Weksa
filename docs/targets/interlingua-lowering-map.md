@@ -180,7 +180,7 @@ operator-attested annotations alone. Who annotates is question
   carries its name spans (byte ranges of its text, each naming an entity and
   on extended grapheme cluster boundaries of its NFC text and equal to one of that
   entity's NFC forms in the item's language; an entity holds at most 8 languages
-  of BCP 47-form tags, 8 forms each, a form at most 64 bytes and 4 words), and its speaker
+  of BCP 47-form tags, 8 forms each, a form at most 64 bytes with no invisible format character), and its speaker
   and prior-turn speakers are entity ids. The packet store refuses a packet
   whose referent cites an entity the store lacks, and a packet with a
   `corpus_item` (required, typed `CorpusItemId`) that cites an entity neither annotated on that item nor one of

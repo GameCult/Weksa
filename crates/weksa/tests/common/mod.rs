@@ -63,6 +63,7 @@ pub fn cast() -> Source {
     Source::CastAuthored {
         persona: "nibu".into(),
         fixture: "f.yaml".into(),
+        author: "Ada Writer".into(),
     }
 }
 
@@ -91,6 +92,7 @@ pub fn ent(slug: &str, language: &str, forms: &[&str]) -> Entity {
         }],
         origin: EntityOrigin::Cast {
             persona: slug.into(),
+            fixture: "f.yaml".into(),
         },
     }
 }

@@ -6,13 +6,14 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::path::Path;
 
+use caseless::default_case_fold_str;
 use cultcache_rs::{CultCache, SingleFileMessagePackBackingStore};
-use unicode_normalization::is_nfc;
+use unicode_normalization::{UnicodeNormalization, char::is_combining_mark, is_nfc};
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::corpus::{CorpusItem, CorpusItemId, item_key, key_slug};
-use crate::entity::Entity;
-use crate::form::is_language_tag;
+use crate::corpus::{CorpusItem, CorpusItemId, Source, item_key, key_slug};
+use crate::entity::{Entity, EntityOrigin};
+use crate::form::{is_attestation, is_joining_only, is_language_tag, is_refused_format};
 use crate::inventory::{Change, InvId, Inventory, InventoryEntry, InventoryRevision, revision_key};
 use crate::packet::{EntityId, Packet};
 use crate::validate::{Refusal, validate};
@@ -88,15 +89,12 @@ pub enum EntityBound {
     Forms,
     /// A form of more than 64 bytes.
     FormBytes,
-    /// A form of more than 4 words.
-    FormWords,
 }
 
 impl EntityBound {
     pub const MAX_LANGUAGES: usize = 8;
     pub const MAX_FORMS: usize = 8;
     pub const MAX_FORM_BYTES: usize = 64;
-    pub const MAX_FORM_WORDS: usize = 4;
 }
 
 #[derive(Debug)]
@@ -185,7 +183,7 @@ impl CorpusStore {
     }
 
     /// The next free key for `slug`; withdrawn items keep their numbers.
-    pub fn next_key(&self, slug: &str) -> anyhow::Result<String> {
+    pub fn next_key(&self, slug: &str) -> Result<String, StoreError> {
         let highest = self
             .all()?
             .iter()
@@ -193,7 +191,10 @@ impl CorpusStore {
             .filter_map(|i| i.id.rsplit_once(':')?.1.parse::<u32>().ok())
             .max()
             .unwrap_or(0);
-        Ok(item_key(slug, highest + 1))
+        let next = highest
+            .checked_add(1)
+            .ok_or_else(|| malformed(slug, "slug has no free key"))?;
+        Ok(item_key(slug, next))
     }
 
     /// The item `id` names, or `UnknownCorpusItem` when it holds nothing.
@@ -236,8 +237,14 @@ impl CorpusStore {
         if !is_nfc(&item.text) || item.prior_turns.iter().any(|t| !is_nfc(&t.text)) {
             return Err(StoreRefusal::NotNfc { key: item.id }.into());
         }
-        check_entities(&item, entities)?;
         let text = normalized(&item.text);
+        if !text.chars().any(char::is_alphanumeric) {
+            return Err(malformed(&item.id, "text has no alphanumeric character"));
+        }
+        if let Some(why) = empty_attestation(&item.source) {
+            return Err(malformed(&item.id, why));
+        }
+        check_entities(&item, entities)?;
         for held in self.all()? {
             if normalized(&held.text) == text && item.supersedes.as_deref() != Some(&held.id) {
                 return Err(StoreRefusal::S6TextHeld {
@@ -350,13 +357,56 @@ fn check_entities(item: &CorpusItem, entities: &EntityStore) -> Result<(), Store
     Ok(())
 }
 
-/// Lowercased alphanumerics only, so case, spacing and punctuation variants of
-/// a text compare equal.
+/// The S6 key of a text: Unicode compatibility caseless matching (D146: NFKC,
+/// default case fold, NFKC) keeping letters, digits and combining marks
+/// (General_Category L, N, M) so tone marks and viramas keep words apart. Composed and decomposed,
+/// fullwidth, ligature and case-fold variants (straße, STRASSE) and spacing and
+/// punctuation variants compare equal. Homoglyphs across scripts (Cyrillic a for
+/// Latin a) stay apart: no key here reads what a character looks like.
 fn normalized(text: &str) -> String {
-    text.chars()
-        .flat_map(char::to_lowercase)
-        .filter(|c| c.is_alphanumeric())
+    let folded = default_case_fold_str(&text.nfkc().collect::<String>());
+    folded
+        .nfkc()
+        .filter(|c| c.is_alphanumeric() || is_combining_mark(*c))
         .collect()
+}
+
+/// The field that holds an unattested provenance string, if any: a string with
+/// no alphanumeric, a control or format character, or over 200 bytes attests
+/// nothing.
+fn empty_attestation(source: &Source) -> Option<&'static str> {
+    let empty = |s: &String| !is_attestation(s);
+    let empty_some = |s: &Option<String>| s.as_ref().is_some_and(empty);
+    match source {
+        Source::CastAuthored { persona, .. } if empty(persona) => {
+            Some("a cast-authored source names its persona")
+        }
+        Source::CastAuthored { fixture, .. } if empty(fixture) => {
+            Some("a cast-authored source names its fixture")
+        }
+        Source::CastAuthored { author, .. } if empty(author) => {
+            Some("a cast-authored source names its author")
+        }
+        Source::OperatorApproved { note } if empty(note) => {
+            Some("an operator-approved source carries its note")
+        }
+        Source::PublicDomain { work, .. } if empty(work) => {
+            Some("a public-domain source names its work")
+        }
+        Source::PublicDomain { author, .. } if empty(author) => {
+            Some("a public-domain source names its author")
+        }
+        Source::PublicDomain { edition_url, .. } if empty(edition_url) => {
+            Some("a public-domain source names its edition url")
+        }
+        Source::ModelWritten { generator, .. } if empty_some(generator) => {
+            Some("a model-written source names a non-empty generator")
+        }
+        Source::ModelWritten { prompt_digest, .. } if empty_some(prompt_digest) => {
+            Some("a model-written source carries a non-empty prompt digest")
+        }
+        _ => None,
+    }
 }
 
 pub struct EntityStore {
@@ -384,8 +434,9 @@ impl EntityStore {
     /// every stored language and form in order and origin as it was, and only
     /// appends: forms grow, never shrink, reorder or change. An entity has 1 to
     /// 8 languages, each a BCP 47-form tag named once, with 1 to 8 NFC forms of
-    /// 1 to 64 bytes and at most 4 words, no control character, no edge
-    /// whitespace, none repeated.
+    /// 1 to 64 bytes, no control or invisible format character (joiners and
+    /// variation selectors stay), no edge whitespace, none repeated; the origin
+    /// attests where it came from with strings that hold an alphanumeric, no control or format character and at most 200 bytes.
     pub fn put(&mut self, entity: Entity) -> Result<AddOutcome, StoreError> {
         let key = entity.id.to_string();
         check_entity_shape(&entity)?;
@@ -418,6 +469,20 @@ fn check_entity_shape(entity: &Entity) -> Result<(), StoreError> {
         }
         .into()
     };
+    let (persona, fixture, work) = match &entity.origin {
+        EntityOrigin::Cast { persona, fixture } => (Some(persona), Some(fixture), None),
+        EntityOrigin::Live { persona } => (Some(persona), None, None),
+        EntityOrigin::PublicDomain { work } => (None, None, Some(work)),
+    };
+    if persona.is_some_and(|s| !is_attestation(s)) {
+        return Err(bad("an origin names its persona"));
+    }
+    if fixture.is_some_and(|s| !is_attestation(s)) {
+        return Err(bad("a cast origin names its fixture"));
+    }
+    if work.is_some_and(|s| !is_attestation(s)) {
+        return Err(bad("a public-domain origin names its work"));
+    }
     if entity.forms.is_empty() {
         return Err(bad("an entity has forms in at least one language"));
     }
@@ -443,9 +508,6 @@ fn check_entity_shape(entity: &Entity) -> Result<(), StoreError> {
             if f.len() > EntityBound::MAX_FORM_BYTES {
                 return Err(bound(EntityBound::FormBytes));
             }
-            if f.split_whitespace().count() > EntityBound::MAX_FORM_WORDS {
-                return Err(bound(EntityBound::FormWords));
-            }
             if !is_nfc(f) {
                 return Err(StoreRefusal::NotNfc {
                     key: entity.id.to_string(),
@@ -456,6 +518,12 @@ fn check_entity_shape(entity: &Entity) -> Result<(), StoreError> {
                 return Err(bad(
                     "a form is not empty and has no control character or edge whitespace",
                 ));
+            }
+            if f.chars().any(is_refused_format) {
+                return Err(bad("a form holds an invisible format character"));
+            }
+            if f.chars().all(is_joining_only) {
+                return Err(bad("a form is more than joiners and selectors"));
             }
             if !seen.insert(f) {
                 return Err(bad("a form is not repeated within its language"));

@@ -22,6 +22,7 @@ fn cast() -> Source {
     Source::CastAuthored {
         persona: "p".into(),
         fixture: "f".into(),
+        author: "a".into(),
     }
 }
 

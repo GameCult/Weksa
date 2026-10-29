@@ -143,6 +143,17 @@ fn corpus_keys_are_canonical() {
     }
     // An alias of a stored key is not a corpus item id at all.
     assert!(weksa::CorpusItemId::parse("item:nibu:01").is_err());
+    // The last free number is handed out; past u32::MAX the slug has no free
+    // key, and asking neither wraps nor panics.
+    store
+        .add(item("item:b:4294967294", "one before the last"), &ents(&d))
+        .unwrap();
+    assert_eq!(store.next_key("b").unwrap(), "item:b:4294967295");
+    let full = "a".repeat(48);
+    assert_eq!(
+        refusal(store.next_key(&full)),
+        malformed(&full, "slug has no free key")
+    );
 }
 
 #[test]
@@ -261,6 +272,322 @@ fn corpus_admission_rules() {
         refusal(store.withdraw("item:nibu:7")),
         malformed("item:nibu:7", "no such item")
     );
+}
+
+#[test]
+fn s6_reads_text_under_compatibility_case_folding() {
+    let d = dir();
+    let mut store = CorpusStore::open(&d.path().join("c.cc")).unwrap();
+    // Each pair is one text to the key: fullwidth, ligature, superscript and
+    // circled-digit compatibility forms and full case folds (straße, STRASSE).
+    let pairs = [
+        ("Brokkr", "\u{ff22}\u{ff52}\u{ff4f}\u{ff4b}\u{ff4b}\u{ff52}"),
+        ("fine", "\u{fb01}ne"),
+        ("room 2", "room \u{b2}"),
+        ("gate 1", "gate \u{2460}"),
+        ("stra\u{df}e", "STRASSE"),
+        (
+            "\u{3a3}\u{3af}\u{3c3}\u{3c5}\u{3c6}\u{3bf}\u{3c2}",
+            "\u{3c3}\u{3af}\u{3c3}\u{3c5}\u{3c6}\u{3bf}\u{3c3}",
+        ),
+        // The first NFKC step: a compatibility letter folds only after it is
+        // mapped (math-bold S has no case fold of its own; black-letter H is
+        // not a case variant of h until NFKC reads it as H).
+        (
+            "sigrun",
+            "\u{1d412}\u{1d422}\u{1d420}\u{1d42b}\u{1d42e}\u{1d427}",
+        ),
+        ("h", "\u{210c}"),
+        // The second NFKC step: a full case fold can leave a decomposed or
+        // reordered sequence that only a second NFKC composes to the same key
+        // (dialytika tonos, caron under line, macron below).
+        ("\u{390}", "\u{3aa}\u{301}"),
+        ("\u{3b0}", "\u{3ab}\u{301}"),
+        ("\u{1e96}\u{30c}", "\u{21e}\u{331}"),
+    ];
+    for (n, (a, b)) in pairs.into_iter().enumerate() {
+        let (first, second) = (
+            format!("item:s6:{}", 2 * n + 1),
+            format!("item:s6:{}", 2 * n + 2),
+        );
+        store.add(item(&first, a), &ents(&d)).unwrap();
+        assert_eq!(
+            refusal(store.add(item(&second, b), &ents(&d))),
+            StoreRefusal::S6TextHeld {
+                key: second.clone(),
+                held_by: first.clone()
+            },
+            "{a:?} vs {b:?}"
+        );
+        assert!(store.get(&second).unwrap().is_none());
+    }
+    // A decomposed text never reaches the key: the door refuses it as not NFC.
+    assert_eq!(
+        refusal(store.add(item("item:s6:90", "Bro\u{308}kkr"), &ents(&d))),
+        StoreRefusal::NotNfc {
+            key: "item:s6:90".into()
+        }
+    );
+    // Cyrillic a is not Latin a: homoglyphs across scripts stay apart.
+    store.add(item("item:s6:91", "cat"), &ents(&d)).unwrap();
+    store
+        .add(item("item:s6:92", "c\u{430}t"), &ents(&d))
+        .unwrap();
+}
+
+#[test]
+fn s6_keeps_tone_marks_and_viramas_apart() {
+    let d = dir();
+    let mut store = CorpusStore::open(&d.path().join("c.cc")).unwrap();
+    // Minimal pairs that differ only by a combining mark: Thai mai tho and mai
+    // ek on one word, Thai tone on a short vowel, a Devanagari virama.
+    let pairs = [
+        ("\u{e19}\u{e49}\u{e33}", "\u{e19}\u{e33}"),
+        ("\u{e44}\u{e21}\u{e49}", "\u{e44}\u{e21}\u{e48}"),
+        ("\u{915}\u{94d}\u{92f}", "\u{915}\u{92f}"),
+    ];
+    for (n, (a, b)) in pairs.into_iter().enumerate() {
+        store
+            .add(item(&format!("item:mk:{}", 2 * n + 1), a), &ents(&d))
+            .unwrap_or_else(|e| panic!("{a:?}: {e}"));
+        store
+            .add(item(&format!("item:mk:{}", 2 * n + 2), b), &ents(&d))
+            .unwrap_or_else(|e| panic!("{b:?} held by {a:?}: {e}"));
+    }
+    // A mark alone is still no text.
+    for (n, text) in ["\u{e49}", "\u{94d}"].into_iter().enumerate() {
+        let key = format!("item:mk:{}", 90 + n);
+        assert_eq!(
+            refusal(store.add(item(&key, text), &ents(&d))),
+            malformed(&key, "text has no alphanumeric character")
+        );
+    }
+}
+
+#[test]
+fn an_attestation_holds_something_readable() {
+    let d = dir();
+    let mut store = CorpusStore::open(&d.path().join("c.cc")).unwrap();
+    let s = |x: &str| x.to_string();
+    type Build = fn(String) -> Source;
+    let builders: [(Build, &'static str); 9] = [
+        (
+            |v| Source::CastAuthored {
+                persona: v,
+                fixture: "f".into(),
+                author: "a".into(),
+            },
+            "a cast-authored source names its persona",
+        ),
+        (
+            |v| Source::CastAuthored {
+                persona: "p".into(),
+                fixture: v,
+                author: "a".into(),
+            },
+            "a cast-authored source names its fixture",
+        ),
+        (
+            |v| Source::CastAuthored {
+                persona: "p".into(),
+                fixture: "f".into(),
+                author: v,
+            },
+            "a cast-authored source names its author",
+        ),
+        (
+            |v| Source::OperatorApproved { note: v },
+            "an operator-approved source carries its note",
+        ),
+        (
+            |v| Source::PublicDomain {
+                work: v,
+                author: "a".into(),
+                edition_url: "u".into(),
+            },
+            "a public-domain source names its work",
+        ),
+        (
+            |v| Source::PublicDomain {
+                work: "w".into(),
+                author: v,
+                edition_url: "u".into(),
+            },
+            "a public-domain source names its author",
+        ),
+        (
+            |v| Source::PublicDomain {
+                work: "w".into(),
+                author: "a".into(),
+                edition_url: v,
+            },
+            "a public-domain source names its edition url",
+        ),
+        (
+            |v| Source::ModelWritten {
+                family: ModelFamily::Unrecorded,
+                generator: Some(v),
+                prompt_digest: None,
+            },
+            "a model-written source names a non-empty generator",
+        ),
+        (
+            |v| Source::ModelWritten {
+                family: ModelFamily::Unrecorded,
+                generator: None,
+                prompt_digest: Some(v),
+            },
+            "a model-written source carries a non-empty prompt digest",
+        ),
+    ];
+    let unreadable = [
+        s("  "),
+        s("\t"),
+        s("\n"),
+        s("\u{200b}"),
+        s("\u{200d}"),
+        s("\0"),
+        s("--"),
+        s("\u{e49}"),
+        s("ok\u{200b}ok"),
+        s("ok\u{200d}ok"),
+        s("ok\u{2028}ok"),
+        s("ok\nok"),
+        s("ok\0ok"),
+        "x".repeat(201),
+        "x".repeat(2 * 1024 * 1024),
+    ];
+    let mut n = 0;
+    for (build, why) in &builders {
+        for bad in &unreadable {
+            n += 1;
+            let key = format!("item:att:{n}");
+            let refused = item_in(&key, &format!("line {n}"), "scene-1", build(bad.clone()));
+            assert_eq!(
+                refusal(store.add(refused, &ents(&d))),
+                malformed(&key, why),
+                "{why}: {:?}",
+                bad.chars().take(12).collect::<String>()
+            );
+        }
+    }
+    assert!(store.all().unwrap().is_empty());
+    // 200 bytes and plain words with spaces attest; 201 does not.
+    for (m, (build, _)) in builders.iter().enumerate() {
+        for (k, good) in ["x".repeat(200), s("two words, 2 more")]
+            .into_iter()
+            .enumerate()
+        {
+            let key = format!("item:att-ok:{}", 2 * m + k + 1);
+            store
+                .add(
+                    item_in(&key, &format!("fine {m} {k}"), "scene-1", build(good)),
+                    &ents(&d),
+                )
+                .unwrap_or_else(|e| panic!("{key}: {e}"));
+        }
+    }
+}
+
+#[test]
+fn a_text_with_no_alphanumeric_character_is_refused() {
+    let d = dir();
+    let mut store = CorpusStore::open(&d.path().join("c.cc")).unwrap();
+    for (n, text) in ["...", "?!", "   ", "\u{2014}\u{2014}", "\u{ff01}"]
+        .into_iter()
+        .enumerate()
+    {
+        let key = format!("item:p:{}", n + 1);
+        assert_eq!(
+            refusal(store.add(item(&key, text), &ents(&d))),
+            malformed(&key, "text has no alphanumeric character"),
+            "{text:?}"
+        );
+    }
+    assert!(store.all().unwrap().is_empty());
+    store.add(item("item:p:1", "a..."), &ents(&d)).unwrap();
+}
+
+#[test]
+fn an_item_source_attests_with_non_empty_strings() {
+    let d = dir();
+    let mut store = CorpusStore::open(&d.path().join("c.cc")).unwrap();
+    let s = |x: &str| x.to_string();
+    let cast = |persona: &str, fixture: &str, author: &str| Source::CastAuthored {
+        persona: s(persona),
+        fixture: s(fixture),
+        author: s(author),
+    };
+    let model = |generator: Option<&str>, digest: Option<&str>| Source::ModelWritten {
+        family: ModelFamily::Unrecorded,
+        generator: generator.map(s),
+        prompt_digest: digest.map(s),
+    };
+    let public = |work: &str, author: &str, url: &str| Source::PublicDomain {
+        work: s(work),
+        author: s(author),
+        edition_url: s(url),
+    };
+    let cases: [(Source, &'static str); 9] = [
+        (
+            cast("", "f", "a"),
+            "a cast-authored source names its persona",
+        ),
+        (
+            cast("p", "", "a"),
+            "a cast-authored source names its fixture",
+        ),
+        (
+            cast("p", "f", ""),
+            "a cast-authored source names its author",
+        ),
+        (
+            Source::OperatorApproved { note: s("") },
+            "an operator-approved source carries its note",
+        ),
+        (
+            public("", "a", "u"),
+            "a public-domain source names its work",
+        ),
+        (
+            public("w", "", "u"),
+            "a public-domain source names its author",
+        ),
+        (
+            public("w", "a", ""),
+            "a public-domain source names its edition url",
+        ),
+        (
+            model(Some(""), None),
+            "a model-written source names a non-empty generator",
+        ),
+        (
+            model(None, Some("")),
+            "a model-written source carries a non-empty prompt digest",
+        ),
+    ];
+    for (n, (source, why)) in cases.into_iter().enumerate() {
+        let key = format!("item:prov:{}", n + 1);
+        let refused = item_in(&key, &format!("line {n}"), "scene-1", source);
+        assert_eq!(refusal(store.add(refused, &ents(&d))), malformed(&key, why));
+    }
+    assert!(store.all().unwrap().is_empty());
+    // The same sources with every string present are admitted.
+    for (n, source) in [
+        cast("p", "f", "a"),
+        Source::OperatorApproved { note: s("n") },
+        Source::OperatorWritten,
+        public("w", "a", "u"),
+        model(Some("g"), Some("d")),
+        model(None, None),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let key = format!("item:prov:{}", n + 1);
+        let item = item_in(&key, &format!("line {n}"), "scene-1", source);
+        assert_eq!(store.add(item, &ents(&d)).unwrap(), AddOutcome::Added);
+    }
 }
 
 #[test]
@@ -842,6 +1169,23 @@ fn the_committed_stores_load_and_hold_clean_data() {
         "no item claims a recorded human author"
     );
     assert_eq!(items.len(), 3);
+    // Every committed entity attests, with non-empty strings, where it came
+    // from, and a cast entity's fixture is a file of this repository.
+    let entities = EntityStore::open(&root.join("data/entity/entity.cc"))
+        .unwrap()
+        .all()
+        .unwrap();
+    assert!(!entities.is_empty());
+    for e in &entities {
+        match &e.origin {
+            weksa::entity::EntityOrigin::Cast { persona, fixture } => {
+                assert!(!persona.is_empty(), "{}", e.id);
+                assert!(root.join(fixture).is_file(), "{}: {fixture}", e.id);
+            }
+            weksa::entity::EntityOrigin::Live { persona } => assert!(!persona.is_empty()),
+            weksa::entity::EntityOrigin::PublicDomain { work } => assert!(!work.is_empty()),
+        }
+    }
 }
 
 #[test]

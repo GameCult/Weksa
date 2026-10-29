@@ -1,6 +1,6 @@
 mod common;
 use std::process::{Command, Output};
-use weksa::{InventoryStore, PacketStore};
+use weksa::{CorpusStore, EntityStore, InventoryStore, PacketStore};
 
 fn weksa(dir: &std::path::Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_weksa"))
@@ -35,6 +35,8 @@ fn cast_entities(dir: &std::path::Path, slugs: &[&str]) {
                 "cast",
                 "--persona",
                 slug,
+                "--fixture",
+                "f.yaml",
             ],
         );
         assert!(put.status.success(), "{}", out(&put));
@@ -81,7 +83,7 @@ fn seed_add_dump_split_withdraw() {
         "{dump}"
     );
 
-    // A cast-authored item needs its persona and fixture.
+    // A cast-authored item needs its persona, fixture and author.
     let missing = weksa(d.path(), &ADD);
     assert!(
         !missing.status.success() && out(&missing).contains("--persona"),
@@ -89,7 +91,14 @@ fn seed_add_dump_split_withdraw() {
         out(&missing)
     );
     let mut add = ADD.to_vec();
-    add.extend(["--persona", "nibu", "--fixture", "f.yaml"]);
+    add.extend([
+        "--persona",
+        "nibu",
+        "--fixture",
+        "f.yaml",
+        "--author",
+        "Ada Writer",
+    ]);
     let added = weksa(d.path(), &add);
     assert!(
         added.status.success() && out(&added).contains("Added item:nibu:1"),
@@ -294,7 +303,15 @@ fn schema_writes_the_published_files() {
 fn entity_put_and_name_spans() {
     let d = tempfile::tempdir().unwrap();
     let put = |args: &[&str]| {
-        let mut all = vec!["entity", "put", "entity:kay", "--origin", "cast"];
+        let mut all = vec![
+            "entity",
+            "put",
+            "entity:kay",
+            "--origin",
+            "cast",
+            "--fixture",
+            "f.yaml",
+        ];
         all.extend_from_slice(args);
         weksa(d.path(), &all)
     };
@@ -386,24 +403,59 @@ fn entity_origin_flags_must_match_origin() {
         weksa(d.path(), &all)
     };
     for mismatched in [
-        &["--origin", "live", "--persona", "kay"][..],
-        &["--origin", "live", "--work", "edda"],
-        &["--origin", "cast", "--persona", "kay", "--work", "edda"],
+        &["--origin", "live"][..],
+        &["--origin", "live", "--persona", "kay", "--work", "edda"],
         &[
             "--origin",
-            "public-domain",
+            "live",
             "--persona",
             "kay",
+            "--fixture",
+            "f.yaml",
+        ],
+        &["--origin", "cast", "--persona", "kay"],
+        &["--origin", "cast", "--fixture", "f.yaml"],
+        &[
+            "--origin",
+            "cast",
+            "--persona",
+            "kay",
+            "--fixture",
+            "f.yaml",
             "--work",
             "edda",
         ],
-        &["--origin", "public-domain", "--persona", "kay"],
+        &["--origin", "public-domain"],
+        &[
+            "--origin",
+            "public-domain",
+            "--work",
+            "edda",
+            "--persona",
+            "kay",
+        ],
+        &[
+            "--origin",
+            "public-domain",
+            "--work",
+            "edda",
+            "--fixture",
+            "f.yaml",
+        ],
+        &["--origin", "cast", "--persona", "", "--fixture", "f.yaml"],
+        &["--origin", "cast", "--persona", "kay", "--fixture", ""],
+        &["--origin", "live", "--persona", ""],
+        &["--origin", "public-domain", "--work", ""],
     ] {
         let o = put(mismatched);
         assert!(!o.status.success(), "{mismatched:?}: {}", out(&o));
     }
     assert!(!out(&weksa(d.path(), &["entity", "dump"])).contains("entity:kay"));
-    assert!(put(&["--origin", "live"]).status.success());
+    assert!(
+        put(&["--origin", "live", "--persona", "kay"])
+            .status
+            .success()
+    );
     let work = weksa(
         d.path(),
         &[
@@ -436,6 +488,8 @@ fn intake_normalizes_to_nfc() {
             "fr=Rene\u{301}",
             "--origin",
             "live",
+            "--persona",
+            "rene",
         ],
     );
     assert!(put.status.success(), "{}", out(&put));
@@ -466,4 +520,225 @@ fn intake_normalizes_to_nfc() {
     assert!(add.status.success(), "{}", out(&add));
     let dump = out(&weksa(d.path(), &["corpus", "dump"]));
     assert!(dump.contains("Ren\u{e9} part."), "{dump}");
+}
+
+/// `corpus add` of "Mind the hatch." by `entity:nibu` under `source`, with
+/// `extra` flags.
+fn add_with(dir: &std::path::Path, source: &str, extra: &[&str]) -> Output {
+    let mut args = vec![
+        "corpus",
+        "add",
+        "--slug",
+        "nibu",
+        "--text",
+        "Mind the hatch.",
+        "--speaker",
+        "entity:nibu",
+        "--group",
+        "scene-1",
+        "--admitted-on",
+        "2026-10-29",
+        "--source",
+        source,
+    ];
+    args.extend_from_slice(extra);
+    weksa(dir, &args)
+}
+
+#[test]
+fn source_flags_must_match_the_source() {
+    let d = tempfile::tempdir().unwrap();
+    cast_entities(d.path(), &["nibu"]);
+    // A provenance flag that does not apply to --source refuses, naming the flag.
+    for (source, extra, flag) in [
+        ("operator-written", &["--persona", "p"][..], "--persona"),
+        (
+            "operator-approved",
+            &["--note", "n", "--work", "w"],
+            "--work",
+        ),
+        (
+            "public-domain",
+            &[
+                "--work",
+                "w",
+                "--author",
+                "a",
+                "--edition-url",
+                "u",
+                "--note",
+                "n",
+            ],
+            "--note",
+        ),
+        (
+            "cast-authored",
+            &[
+                "--persona",
+                "p",
+                "--fixture",
+                "f",
+                "--author",
+                "a",
+                "--generator",
+                "g",
+            ],
+            "--generator",
+        ),
+        (
+            "model-written",
+            &["--model-family", "unrecorded", "--edition-url", "u"],
+            "--edition-url",
+        ),
+        (
+            "operator-written",
+            &["--model-family", "unrecorded"],
+            "--model-family",
+        ),
+        (
+            "model-written",
+            &[
+                "--model-family",
+                "unrecorded",
+                "--prompt-digest",
+                "d",
+                "--fixture",
+                "f",
+            ],
+            "--fixture",
+        ),
+        // A source missing a flag it needs.
+        (
+            "cast-authored",
+            &["--persona", "p", "--fixture", "f"],
+            "--author",
+        ),
+        (
+            "public-domain",
+            &["--work", "w", "--edition-url", "u"],
+            "--author",
+        ),
+        // Empty provenance strings.
+        (
+            "model-written",
+            &["--model-family", "unrecorded", "--generator", ""],
+            "",
+        ),
+        (
+            "model-written",
+            &["--model-family", "unrecorded", "--prompt-digest", ""],
+            "",
+        ),
+        (
+            "cast-authored",
+            &["--persona", "", "--fixture", "f", "--author", "a"],
+            "",
+        ),
+        ("operator-approved", &["--note", ""], ""),
+    ] {
+        let o = add_with(d.path(), source, extra);
+        assert!(!o.status.success(), "{source} {extra:?}: {}", out(&o));
+        assert!(out(&o).contains(flag), "{source} {extra:?}: {}", out(&o));
+    }
+    assert!(!out(&weksa(d.path(), &["corpus", "dump"])).contains("item:"));
+    // A source whose flags all apply is admitted; --author reaches a
+    // cast-authored item.
+    let cast = add_with(
+        d.path(),
+        "cast-authored",
+        &["--persona", "p", "--fixture", "f", "--author", "Ada Writer"],
+    );
+    assert!(cast.status.success(), "{}", out(&cast));
+    let dump = out(&weksa(d.path(), &["corpus", "dump"]));
+    assert!(dump.contains("author: \"Ada Writer\""), "{dump}");
+}
+
+#[test]
+fn malformed_intake_never_echoes_its_values() {
+    const CANARY: &str = "CANARY-7f3a";
+    let d = tempfile::tempdir().unwrap();
+    cast_entities(d.path(), &["nibu"]);
+    let shape = |value: &str| format!("{CANARY}{value}");
+    let puts = [
+        (vec![shape("")], "--form"),
+        (vec![shape("_x=Kay")], ""),
+        (vec![format!("en-US={CANARY}\u{7}")], ""),
+        (vec![format!("{CANARY}_x=Kay")], ""),
+    ];
+    for (forms, flag) in puts {
+        let mut args = vec![
+            "entity",
+            "put",
+            "entity:kay",
+            "--origin",
+            "live",
+            "--persona",
+            "kay",
+        ];
+        for f in &forms {
+            args.extend(["--form", f]);
+        }
+        let o = weksa(d.path(), &args);
+        assert!(!o.status.success(), "{forms:?}: {}", out(&o));
+        assert!(!out(&o).contains(CANARY), "{forms:?}: {}", out(&o));
+        assert!(out(&o).contains(flag), "{forms:?}: {}", out(&o));
+    }
+    let bad_turn = [shape(""), format!("{CANARY}=hello")];
+    let bad_name = [
+        shape(""),
+        format!("0..1={CANARY}"),
+        format!("{CANARY}..1=entity:nibu"),
+        format!("0..{CANARY}=entity:nibu"),
+    ];
+    let cases = bad_turn
+        .iter()
+        .map(|t| ("--prior-turn", t))
+        .chain(bad_name.iter().map(|n| ("--name", n)));
+    for (flag, value) in cases {
+        let o = add_with(d.path(), "operator-written", &[flag, value]);
+        assert!(!o.status.success(), "{flag} {value}: {}", out(&o));
+        assert!(!out(&o).contains(CANARY), "{flag} {value}: {}", out(&o));
+        assert!(out(&o).contains(flag), "{flag} {value}: {}", out(&o));
+    }
+}
+
+#[test]
+fn every_decomposed_form_and_turn_is_stored_composed() {
+    let d = tempfile::tempdir().unwrap();
+    cast_entities(d.path(), &["nibu"]);
+    let put = weksa(
+        d.path(),
+        &[
+            "entity",
+            "put",
+            "entity:rene",
+            "--form",
+            "fr=Rene\u{301}",
+            "--form",
+            "fr=Zoe\u{308}",
+            "--origin",
+            "live",
+            "--persona",
+            "rene",
+        ],
+    );
+    assert!(put.status.success(), "{}", out(&put));
+    let rene = EntityStore::open(&d.path().join("e.cc"))
+        .unwrap()
+        .get(&"entity:rene".parse().unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(rene.forms[0].forms, ["Ren\u{e9}", "Zo\u{eb}"]);
+    let add = add_with(
+        d.path(),
+        "operator-written",
+        &["--prior-turn", "entity:rene=Cafe\u{301} now"],
+    );
+    assert!(add.status.success(), "{}", out(&add));
+    let item = CorpusStore::open(&d.path().join("c.cc"))
+        .unwrap()
+        .get("item:nibu:1")
+        .unwrap()
+        .unwrap();
+    assert_eq!(item.prior_turns[0].text, "Caf\u{e9} now");
 }

@@ -17,10 +17,13 @@ pub struct Turn {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum Source {
-    /// A line from a cast member's hand-authored fixture.
+    /// A line from a cast member's hand-authored fixture, with the human who
+    /// wrote it. A fixture that records no author is `ModelWritten` with family
+    /// `Unrecorded`, never this (`corpus-labels-tell-truth`).
     CastAuthored {
         persona: String,
         fixture: String,
+        author: String,
     },
     OperatorWritten,
     OperatorApproved {

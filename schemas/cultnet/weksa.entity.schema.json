@@ -31,18 +31,22 @@
       "description": "Where an entity was minted.",
       "oneOf": [
         {
-          "description": "From a cast member's fixture.",
+          "description": "From a cast member's fixture: the persona and the fixture path the\nentity came from.",
           "type": "object",
           "properties": {
             "Cast": {
               "type": "object",
               "properties": {
+                "fixture": {
+                  "type": "string"
+                },
                 "persona": {
                   "type": "string"
                 }
               },
               "required": [
-                "persona"
+                "persona",
+                "fixture"
               ]
             }
           },
@@ -73,9 +77,25 @@
           ]
         },
         {
-          "description": "Minted live by a persona before it names the entity.",
-          "type": "string",
-          "const": "Live"
+          "description": "Minted live by the named persona before it names the entity.",
+          "type": "object",
+          "properties": {
+            "Live": {
+              "type": "object",
+              "properties": {
+                "persona": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "persona"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Live"
+          ]
         }
       ]
     },
@@ -84,7 +104,7 @@
       "type": "object",
       "properties": {
         "forms": {
-          "description": "1 to 64 bytes each, no control character, no edge whitespace, none repeated.",
+          "description": "1 to 64 bytes each, no control or invisible format character, no edge\nwhitespace, none repeated.",
           "type": "array",
           "items": {
             "type": "string"

@@ -13,19 +13,21 @@ use crate::packet::EntityId;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct LanguageForms {
     pub language: String,
-    /// 1 to 64 bytes each, no control character, no edge whitespace, none repeated.
+    /// 1 to 64 bytes each, no control or invisible format character, no edge
+    /// whitespace, none repeated.
     pub forms: Vec<String>,
 }
 
 /// Where an entity was minted.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum EntityOrigin {
-    /// From a cast member's fixture.
-    Cast { persona: String },
+    /// From a cast member's fixture: the persona and the fixture path the
+    /// entity came from.
+    Cast { persona: String, fixture: String },
     /// From a public-domain work.
     PublicDomain { work: String },
-    /// Minted live by a persona before it names the entity.
-    Live,
+    /// Minted live by the named persona before it names the entity.
+    Live { persona: String },
 }
 
 /// Key: the entity id. Forms only grow: see `EntityStore::put`.

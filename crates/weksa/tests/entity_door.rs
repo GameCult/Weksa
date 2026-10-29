@@ -163,28 +163,33 @@ fn entity_capacity_is_bounded() {
     let make = |forms: Vec<LanguageForms>| Entity {
         id: eid("big"),
         forms,
-        origin: EntityOrigin::Live,
+        origin: EntityOrigin::Live {
+            persona: "p".into(),
+        },
     };
 
-    // A whole line is not a name: 7 words.
-    let line = "I will never leave you, not ever.";
-    let e = make(vec![lf("en-US", one(line))]);
-    assert_eq!(
-        refusal(w.entities.put(e.clone())),
-        bounds(&e, EntityBound::FormWords)
-    );
-    // Four words is the edge; five is over. 64 bytes is the edge; 65 is over.
-    w.entities
-        .put(Entity {
-            id: eid("four"),
-            ..make(vec![lf("en-US", one("Mary of the Isles"))])
-        })
-        .unwrap();
-    let five = make(vec![lf("en-US", one("Mary of the Isles too"))]);
-    assert_eq!(
-        refusal(w.entities.put(five.clone())),
-        bounds(&five, EntityBound::FormWords)
-    );
+    // A form is bounded by bytes, not words: a spaced name of any word count and
+    // names in scripts that write no spaces are admitted (the Thai name counts
+    // five UAX #29 words, a Han name one per character).
+    for (i, name) in [
+        "I will never leave you, not ever.",
+        "Mary of the Isles too",
+        "de la Cruz y Garcia",
+        "\u{e2a}\u{e21}\u{e0a}\u{e32}\u{e22} \u{e43}\u{e08}\u{e14}\u{e35}",
+        "\u{5c71}\u{7530}\u{592a}\u{90ce}",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        w.entities
+            .put(Entity {
+                id: eid(&format!("name-{i}")),
+                ..make(vec![lf("en-US", one(name))])
+            })
+            .unwrap();
+    }
+    // 64 bytes is the edge; 65 is over, counted in bytes (21 Han characters are
+    // 63 bytes, 22 are 66).
     let wide = make(vec![lf("en-US", one(&"a".repeat(65)))]);
     assert_eq!(
         refusal(w.entities.put(wide.clone())),
@@ -196,6 +201,17 @@ fn entity_capacity_is_bounded() {
             ..make(vec![lf("en-US", one(&"a".repeat(64)))])
         })
         .unwrap();
+    w.entities
+        .put(Entity {
+            id: eid("han-edge"),
+            ..make(vec![lf("ja", one(&"\u{5c71}".repeat(21)))])
+        })
+        .unwrap();
+    let han = make(vec![lf("ja", one(&"\u{5c71}".repeat(22)))]);
+    assert_eq!(
+        refusal(w.entities.put(han.clone())),
+        bounds(&han, EntityBound::FormBytes)
+    );
 
     // 8 forms per language is the edge.
     let forms = |n: usize| (0..n).map(|i| format!("form{i}")).collect::<Vec<_>>();
@@ -321,6 +337,7 @@ fn entities_are_append_only_and_replay_needs_them() {
     let mut persona = base.clone();
     persona.origin = EntityOrigin::Cast {
         persona: "someone-else".into(),
+        fixture: "f.yaml".into(),
     };
     assert_eq!(refusal(w.entities.put(persona)), not_append);
     let mut duplicate = base.clone();
@@ -345,4 +362,277 @@ fn entities_are_append_only_and_replay_needs_them() {
             entity: eid("nibu")
         }
     );
+}
+
+/// One entity holding `form` as its only en-US form.
+fn with_form(slug: &str, form: &str) -> Entity {
+    Entity {
+        id: eid(slug),
+        forms: vec![LanguageForms {
+            language: "en-US".into(),
+            forms: vec![form.into()],
+        }],
+        origin: EntityOrigin::Live {
+            persona: "p".into(),
+        },
+    }
+}
+
+#[test]
+fn invisible_format_characters_are_refused_in_forms() {
+    let mut w = world();
+    let hidden = |slug: &str| StoreRefusal::Malformed {
+        key: format!("entity:{slug}"),
+        why: "a form holds an invisible format character",
+    };
+    let at = |code: u32| char::from_u32(code).unwrap();
+    // Every Cf code point except the joiners, plus U+2028 and U+2029, listed
+    // from Python's unicodedata. The code-point sweep in form.rs pins the edges
+    // of the rule; this checks the door applies it, in each position.
+    let listed: Vec<u32> = include_str!("format_refused.txt")
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .map(|l| u32::from_str_radix(l, 16).unwrap())
+        .collect();
+    assert_eq!(listed.len(), 170);
+    for (n, code) in listed.iter().enumerate() {
+        let c = at(*code);
+        let mut forms = vec![format!("Ka{c}y")];
+        if !c.is_whitespace() {
+            forms.extend([format!("{c}Kay"), format!("Kay{c}")]);
+        }
+        for form in forms {
+            assert_eq!(
+                refusal(w.entities.put(with_form("fmt", &form))),
+                hidden("fmt"),
+                "U+{code:X} (#{n}) in {form:?}"
+            );
+        }
+    }
+    // Default_Ignorable fillers that are not Cf: Hangul and Khmer.
+    for code in [0x115f, 0x1160, 0x17b4, 0x17b5, 0x3164, 0xffa0] {
+        assert_eq!(
+            refusal(
+                w.entities
+                    .put(with_form("fmt", &format!("Ka{}y", at(code))))
+            ),
+            hidden("fmt"),
+            "U+{code:X}"
+        );
+    }
+    assert!(w.entities.get(&eid("fmt")).unwrap().is_none());
+
+    // The neighbours of the refused ranges, ZWNJ, ZWJ, CGJ, variation
+    // selectors and the Mongolian selectors (all Mn) are admitted in a form.
+    let admitted: [u32; 33] = [
+        0xac,
+        0xae,
+        0x34f,
+        0x5ff,
+        0x606,
+        0x61b,
+        0x61d,
+        0x6dc,
+        0x6de,
+        0x70e,
+        0x710,
+        0x88f,
+        0x892,
+        0x8e1,
+        0x8e3,
+        0x180b,
+        0x180c,
+        0x180d,
+        0x180f,
+        0x200a,
+        0x200c,
+        0x200d,
+        0x2010,
+        0x202f,
+        0x2065,
+        0x2070,
+        0xfe00,
+        0xfe0f,
+        0xfeff - 1,
+        0xfffc,
+        0x110be,
+        0x1d172,
+        0xe0100,
+    ];
+    for (n, code) in admitted.into_iter().enumerate() {
+        let form = format!("Ka{}y", at(code));
+        w.entities
+            .put(with_form(&format!("ok-{n}"), &form))
+            .unwrap_or_else(|e| panic!("U+{code:X}: {e}"));
+    }
+    // ZWNJ in a Persian form, ZWJ in an emoji sequence, VS16 and a Mongolian
+    // free variation selector beside a letter.
+    for (n, form) in [
+        "\u{645}\u{6cc}\u{200c}\u{62e}\u{648}\u{627}\u{647}\u{645}",
+        "\u{1f469}\u{200d}\u{1f4bb}",
+        "\u{2764}\u{fe0f}",
+        "\u{1820}\u{180b}",
+        "\u{1f600}\u{e0100}",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        w.entities
+            .put(with_form(&format!("script-{n}"), form))
+            .unwrap();
+    }
+    // A form of only joiners, variation selectors, CGJ or Mongolian selectors
+    // shows nothing and is refused.
+    let empty_looking = |slug: &str| StoreRefusal::Malformed {
+        key: format!("entity:{slug}"),
+        why: "a form is more than joiners and selectors",
+    };
+    for form in [
+        "\u{200d}",
+        "\u{200c}",
+        "\u{200c}\u{200d}",
+        "\u{fe0f}",
+        "\u{fe00}\u{fe0f}",
+        "\u{34f}",
+        "\u{180b}\u{180c}\u{180d}\u{180f}",
+        "\u{e0100}",
+        "\u{e01ef}\u{34f}\u{200d}",
+    ] {
+        assert_eq!(
+            refusal(w.entities.put(with_form("blank", form))),
+            empty_looking("blank"),
+            "{form:?}"
+        );
+    }
+    assert!(w.entities.get(&eid("blank")).unwrap().is_none());
+}
+
+#[test]
+fn an_origin_attests_where_the_entity_came_from() {
+    let mut w = world();
+    let bad = |slug: &str, why: &'static str| StoreRefusal::Malformed {
+        key: format!("entity:{slug}"),
+        why,
+    };
+    let with = |slug: &str, origin: EntityOrigin| Entity {
+        origin,
+        ..with_form(slug, "Kay")
+    };
+    let cast = |persona: &str, fixture: &str| EntityOrigin::Cast {
+        persona: persona.into(),
+        fixture: fixture.into(),
+    };
+    assert_eq!(
+        refusal(w.entities.put(with("a", cast("", "f.yaml")))),
+        bad("a", "an origin names its persona")
+    );
+    assert_eq!(
+        refusal(w.entities.put(with("b", cast("kay", "")))),
+        bad("b", "a cast origin names its fixture")
+    );
+    assert_eq!(
+        refusal(w.entities.put(with(
+            "c",
+            EntityOrigin::Live {
+                persona: String::new()
+            }
+        ))),
+        bad("c", "an origin names its persona")
+    );
+    assert_eq!(
+        refusal(w.entities.put(with(
+            "d",
+            EntityOrigin::PublicDomain {
+                work: String::new()
+            }
+        ))),
+        bad("d", "a public-domain origin names its work")
+    );
+    for slug in ["a", "b", "c", "d"] {
+        assert!(w.entities.get(&eid(slug)).unwrap().is_none());
+    }
+    w.entities.put(with("e", cast("kay", "f.yaml"))).unwrap();
+    w.entities
+        .put(with(
+            "f",
+            EntityOrigin::PublicDomain {
+                work: "edda".into(),
+            },
+        ))
+        .unwrap();
+}
+
+#[test]
+fn an_origin_attestation_holds_something_readable() {
+    let mut w = world();
+    let with = |slug: &str, origin: EntityOrigin| Entity {
+        origin,
+        ..with_form(slug, "Kay")
+    };
+    type Build = fn(String) -> EntityOrigin;
+    let origins: [(Build, &str); 4] = [
+        (
+            |v| EntityOrigin::Cast {
+                persona: v,
+                fixture: "f.yaml".into(),
+            },
+            "an origin names its persona",
+        ),
+        (
+            |v| EntityOrigin::Cast {
+                persona: "kay".into(),
+                fixture: v,
+            },
+            "a cast origin names its fixture",
+        ),
+        (
+            |v| EntityOrigin::Live { persona: v },
+            "an origin names its persona",
+        ),
+        (
+            |v| EntityOrigin::PublicDomain { work: v },
+            "a public-domain origin names its work",
+        ),
+    ];
+    let unreadable = [
+        "  ".to_string(),
+        "\t".into(),
+        "\n".into(),
+        "\u{200b}".into(),
+        "\u{200d}".into(),
+        "\0".into(),
+        "--".into(),
+        "ok\u{200b}ok".into(),
+        "ok\u{2028}ok".into(),
+        "ok\0ok".into(),
+        "x".repeat(201),
+        "x".repeat(2 * 1024 * 1024),
+    ];
+    let mut n = 0;
+    for (build, why) in &origins {
+        for bad in &unreadable {
+            n += 1;
+            let slug = format!("o-{n}");
+            assert_eq!(
+                refusal(w.entities.put(with(&slug, build(bad.clone())))),
+                StoreRefusal::Malformed {
+                    key: format!("entity:{slug}"),
+                    why
+                },
+                "{why}: {:?}",
+                bad.chars().take(12).collect::<String>()
+            );
+            assert!(w.entities.get(&eid(&slug)).unwrap().is_none());
+        }
+    }
+    for (m, (build, _)) in origins.iter().enumerate() {
+        for (k, good) in ["x".repeat(200), "two words, 2 more".to_string()]
+            .into_iter()
+            .enumerate()
+        {
+            w.entities
+                .put(with(&format!("g-{}", 2 * m + k), build(good)))
+                .unwrap();
+        }
+    }
 }

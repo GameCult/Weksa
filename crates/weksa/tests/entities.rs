@@ -105,7 +105,11 @@ fn entity_forms_only_grow() {
         },
         |e| e.forms.reverse(),
         |e| e.forms[1].language = "fi".into(),
-        |e| e.origin = EntityOrigin::Live,
+        |e| {
+            e.origin = EntityOrigin::Live {
+                persona: "kay".into(),
+            }
+        },
     ];
     assert_eq!(
         refusal(store.put(ent("kay", "en-US", &["Kay"]))),

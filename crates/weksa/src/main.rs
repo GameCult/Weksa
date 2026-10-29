@@ -88,9 +88,12 @@ struct PutArgs {
     forms: Vec<String>,
     #[arg(long, value_enum)]
     origin: OriginKind,
-    /// The persona of a `cast` origin; refused with any other origin.
+    /// The persona of a `cast` or `live` origin; refused with any other origin.
     #[arg(long)]
     persona: Option<String>,
+    /// The fixture path a `cast` entity came from; refused with any other origin.
+    #[arg(long)]
+    fixture: Option<String>,
     /// The work of a `public-domain` origin; refused with any other origin.
     #[arg(long)]
     work: Option<String>,
@@ -107,9 +110,7 @@ impl PutArgs {
     fn entity(self) -> Result<Entity> {
         let mut forms: Vec<LanguageForms> = Vec::new();
         for f in &self.forms {
-            let (language, form) = f
-                .split_once('=')
-                .with_context(|| format!("--form {f:?} is not language=form"))?;
+            let (language, form) = f.split_once('=').context("--form is not language=form")?;
             match forms.iter_mut().find(|lf| lf.language == language) {
                 Some(lf) => lf.forms.push(form.nfc().collect()),
                 None => forms.push(LanguageForms {
@@ -118,16 +119,19 @@ impl PutArgs {
                 }),
             }
         }
-        let origin = match (self.origin, self.persona, self.work) {
-            (OriginKind::Cast, persona, None) => EntityOrigin::Cast {
+        let origin = match (self.origin, self.persona, self.fixture, self.work) {
+            (OriginKind::Cast, persona, fixture, None) => EntityOrigin::Cast {
                 persona: need(persona, "persona")?,
+                fixture: need(fixture, "fixture")?,
             },
-            (OriginKind::PublicDomain, None, work) => EntityOrigin::PublicDomain {
+            (OriginKind::PublicDomain, None, None, work) => EntityOrigin::PublicDomain {
                 work: need(work, "work")?,
             },
-            (OriginKind::Live, None, None) => EntityOrigin::Live,
+            (OriginKind::Live, persona, None, None) => EntityOrigin::Live {
+                persona: need(persona, "persona")?,
+            },
             _ => bail!(
-                "--persona is only for --origin cast and --work only for --origin public-domain"
+                "--fixture is only for --origin cast, --persona only for --origin cast or live and --work only for --origin public-domain"
             ),
         };
         Ok(Entity {
@@ -202,6 +206,7 @@ struct AddArgs {
     note: Option<String>,
     #[arg(long)]
     work: Option<String>,
+    /// Who wrote the line: for `cast-authored` and `public-domain`.
     #[arg(long)]
     author: Option<String>,
     #[arg(long)]
@@ -226,10 +231,37 @@ fn need(value: Option<String>, flag: &str) -> Result<String> {
 impl AddArgs {
     fn source(&self) -> Result<Source> {
         let get = |v: &Option<String>, flag: &str| need(v.clone(), flag);
+        let applies: &[&str] = match self.source {
+            SourceKind::CastAuthored => &["persona", "fixture", "author"],
+            SourceKind::OperatorWritten => &[],
+            SourceKind::OperatorApproved => &["note"],
+            SourceKind::PublicDomain => &["work", "author", "edition-url"],
+            SourceKind::ModelWritten => &["model-family", "generator", "prompt-digest"],
+        };
+        let given = [
+            ("persona", self.persona.is_some()),
+            ("fixture", self.fixture.is_some()),
+            ("author", self.author.is_some()),
+            ("note", self.note.is_some()),
+            ("work", self.work.is_some()),
+            ("edition-url", self.edition_url.is_some()),
+            ("model-family", self.family.is_some()),
+            ("generator", self.generator.is_some()),
+            ("prompt-digest", self.prompt_digest.is_some()),
+        ];
+        let stray: Vec<String> = given
+            .into_iter()
+            .filter(|(flag, given)| *given && !applies.contains(flag))
+            .map(|(flag, _)| format!("--{flag}"))
+            .collect();
+        if !stray.is_empty() {
+            bail!("{} does not apply to this --source", stray.join(", "));
+        }
         Ok(match self.source {
             SourceKind::CastAuthored => Source::CastAuthored {
                 persona: get(&self.persona, "persona")?,
                 fixture: get(&self.fixture, "fixture")?,
+                author: get(&self.author, "author")?,
             },
             SourceKind::OperatorWritten => Source::OperatorWritten,
             SourceKind::OperatorApproved => Source::OperatorApproved {
@@ -258,9 +290,11 @@ impl AddArgs {
             .map(|t| {
                 let (speaker, text) = t
                     .split_once('=')
-                    .with_context(|| format!("--prior-turn {t:?} is not speaker=text"))?;
+                    .context("--prior-turn is not speaker=text")?;
                 Ok(Turn {
-                    speaker: speaker.parse()?,
+                    speaker: speaker.parse().map_err(|_| {
+                        anyhow::anyhow!("--prior-turn speaker is not entity:<slug>")
+                    })?,
                     text: text.nfc().collect(),
                 })
             })
@@ -269,13 +303,13 @@ impl AddArgs {
             .names
             .iter()
             .map(|n| {
-                let bad = || format!("--name {n:?} is not start..end=entity:<slug>");
-                let (range, entity) = n.split_once('=').with_context(bad)?;
-                let (start, end) = range.split_once("..").with_context(bad)?;
+                let bad = || anyhow::anyhow!("--name is not start..end=entity:<slug>");
+                let (range, entity) = n.split_once('=').ok_or_else(bad)?;
+                let (start, end) = range.split_once("..").ok_or_else(bad)?;
                 Ok(NameSpan {
-                    entity: entity.parse()?,
-                    start: start.parse().with_context(bad)?,
-                    end: end.parse().with_context(bad)?,
+                    entity: entity.parse().map_err(|_| bad())?,
+                    start: start.parse().map_err(|_| bad())?,
+                    end: end.parse().map_err(|_| bad())?,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -338,7 +372,7 @@ fn main() -> Result<()> {
         }
         Command::Corpus(CorpusCommand::Add(args)) => {
             let mut store = CorpusStore::open(&cli.corpus)?;
-            let key = store.next_key(&args.slug)?;
+            let key = store.next_key(&args.slug).map_err(refused)?;
             let entities = EntityStore::open(&cli.entities)?;
             let outcome = store
                 .add((*args).item(key.clone())?, &entities)

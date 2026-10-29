@@ -121,12 +121,15 @@
           ]
         },
         {
-          "description": "A line from a cast member's hand-authored fixture.",
+          "description": "A line from a cast member's hand-authored fixture, with the human who\nwrote it. A fixture that records no author is `ModelWritten` with family\n`Unrecorded`, never this (`corpus-labels-tell-truth`).",
           "type": "object",
           "properties": {
             "CastAuthored": {
               "type": "object",
               "properties": {
+                "author": {
+                  "type": "string"
+                },
                 "fixture": {
                   "type": "string"
                 },
@@ -136,7 +139,8 @@
               },
               "required": [
                 "persona",
-                "fixture"
+                "fixture",
+                "author"
               ]
             }
           },
