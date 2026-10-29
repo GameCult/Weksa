@@ -28,13 +28,13 @@ means no store holds it and nothing writes it.
 
 | Kind | What names it | Lifecycle | Who decides |
 |---|---|---|---|
-| Packet | Key `packet:<item-id>:r<inventory-rev>:<encoder-digest>`; CultCache type `weksa.interlingua_packet`, carrying `schema_version` and `inventory_rev` | Minted by an encoder for one corpus item under one spec version; immutable; a new spec version means a new packet, never an edit. Admitted only through the validator | The encoder writes; the validator refuses malformed packets at the door (`typed-packet`); nothing else writes packets |
+| Packet | Key `packet:<16 hex>`, an opaque digest of item, inventory revision and encoder (the item key lives in `provenance.corpus_item`, which the lowerer never sees); CultCache type `weksa.interlingua_packet`, carrying `schema_version` and `inventory_rev`. Every id inside is an opaque form type (`n<k>` nodes, `encoder:<16 hex>`, canonical `<family>:<n>`) | Minted by an encoder for one corpus item under one spec version; immutable; a new spec version means a new packet, never an edit. Admitted only through `PacketStore::admit`, which validates against the inventory store at the packet's revision and checks names against the item | The encoder writes; the form types refuse malformed ids at construction and load, the validator refuses broken references (`typed-packet`); nothing else writes packets |
 | Schema version | `weksa.interlingua_packet.v<N>` constant in `crates/weksa`; published JSON Schema at `schemas/cultnet/` | Bumped by a commit that changes the Rust types; the published schema is regenerated in the same commit and a test fails on drift | A cut (Hands, under a spec); never the loop |
-| Inventory entry | Key `<family>:<n>` (families: concept, frame, role, relation, speech_act, feature); type `weksa.inventory_entry`, with gloss, value kind, `introduced_rev`, optional `retired_rev` | Added or retired by an inventory revision; never edited in place (a changed meaning is a retire plus an add); a retired id still resolves for packets of earlier revisions | The loop's accepted rounds; Self on merge to main |
+| Inventory entry | Key `<family>:<n>`, `n` canonical decimal >= 1 (families: concept, frame, role, relation, speech_act, feature, referent_kind, extension); type `weksa.inventory_entry`, with a bounded gloss, value kind (option labels bounded), `introduced_rev`, optional `retired_rev`, and `minted_for` (the Train item it was minted for, none for the seed) | Added or retired by an inventory revision; never edited in place (a changed meaning is a retire plus an add); a retired id still resolves for packets of earlier revisions | The loop's accepted rounds; Self on merge to main. Admission refuses a gloss or option label that shares a word 3-gram with its `minted_for` item, and an entry minted for a held-out item |
 | Inventory revision | Key `rev:<n>`, type `weksa.inventory_revision`, with parent, change list and `frozen` | Appended per accepted round; exactly one revision is ever marked frozen, by the convergence test | The loop's accept rule appends; the convergence test freezes; Self records the freeze as a ruling |
 | Target profile | Locale or language-project id (`en-US`, `ja-JP`, a conlang's slug) plus a revision | Authored, revised by commit or by an accepted round that changed the lowering; each lowering names the revision it used | Profile authors and accepted rounds (`profile-owns-register`); never the lowerer's defaults |
 | Corpus item | Key `item:<source-slug>:<n>`; type `weksa.corpus_item` with text, language, speaker, split group, prior turns, source | Admitted once; the text is immutable (a correction is a new item that `supersedes` the old); withdrawn, never deleted, so old scores stay explainable | Importers and `weksa corpus add`, under `corpus-cast-plus-public-domain`; the source enum has no variant for Discord or any training-forbidden source (`corpus-clean`) |
-| Split assignment | Derived: `split(scheme, item.group)` | Fixed for a scheme; a new scheme is a new constant, never a reassignment. Model-written items never land in test | The hash function. Nobody assigns by hand, so there is no writer to forbid |
+| Split assignment | Derived: `split(scheme, item.group)` | Fixed for a scheme; a new scheme is a new constant, never a reassignment. A model-written item whose group derives test is in no split; a superseding item keeps its predecessor's group | The hash function. Nobody assigns by hand, so there is no writer to forbid |
 | Loop round | Key `run:<label>:round:<n>`; type `weksa.loop_round` with spec version, profile revisions, model ids and prompt digests, sampled train items, proposed change, validation scores before and after, outcome | Opened, scored, closed accepted or rejected; immutable once closed. Lives in the run store on Yggdrasil | The loop driver's accept rule (validation composite improves past the measured noise floor and no metric regresses past tolerance) |
 | Score | Key `<lowering-key>:<metric>@<metric-version>`; type `weksa.score` | Immutable; a new metric version scores again under a new key | The scorer, deterministic given the metric version and the embedder's model id |
 | Lowering trace | Key `lowering:<packet-key>:<profile>@<rev>:<lowerer-digest>:<sample>`; type `weksa.lowering` holding the surface text and its trace together | Immutable. A surface text cannot exist without its trace, because they are one record (`lowering-traced`) | The lowerer emits; the lowerer sees the packet without its `trace` (the input type has no such field), never the corpus item |
@@ -74,10 +74,11 @@ means no store holds it and nothing writes it.
   lexicon adherence for a conlang: the share of tokens that parse against its
   lexicon and morphology.
 - A style axis follows as its own cut, behind the same scorer port.
-- Leak check: an inventory entry minted in a round is refused if its gloss
-  shares a word 3-gram with the corpus item it was minted for. The packet's
-  only free text is proper names and the trace, so the gloss is the channel to
-  guard.
+- Leak check: an inventory entry minted in a round is refused at admission if
+  its gloss or an option label shares a word 3-gram with the corpus item it was
+  minted for. A packet's ids are opaque form types; its free text is bounded
+  proper names (checked against the item by case) and the trace, which the
+  lowerer never sees (cut-packet-store.r2, after Soul s1 found five slots).
 
 ## Where things live and run (`rust-single-crate`, `loop-runs-on-yggdrasil`)
 
@@ -109,7 +110,8 @@ the training set is the whole corpus re-encoded under the frozen revision.
 One line per cut; only the first two have specs.
 
 1. `park-node-body`: park the Node daemon, MiMo command, RUDP shims, launchers and the Discord-sourced Metame harness at tag `parked/weksa-node-body`; README front door tells the truth. Waits on nothing. (spec)
-2. `packet-store`: Rust crate with packet, inventory and corpus types, the validator, the derived split, the stores and the `weksa` CLI; the standard reconciled to the types. Waits on nothing; sibling of 1. (spec)
+2. `packet-store`: Rust crate with packet, inventory and corpus types, the validator, the derived split, the stores and the `weksa` CLI; the standard reconciled to the types. Waits on nothing; sibling of 1. (spec r2: the s1 fix pass)
+2b. `packet-store-corpus`: corpus labels tell the truth. `Source::ModelWritten { family: ModelFamily, generator: Option<String>, prompt_digest: Option<String> }`, `ModelFamily` an enum of vendor families (Anthropic, OpenAi, Google, Alibaba, Meta, Mistral, Unrecorded) so the scorer can refuse a model-backed metric of the item's own family (Unrecorded matches every family); `item:nibu:1` ModelWritten (Unrecorded) until the operator attests it; `item:brokkr:1` and its fixture carry the true generator `codex-local-source-aware-draft`, family OpenAi; corpus.cc reseeded; the codex/openai negative grep narrowed to code. Waits on 2 and a Self ruling recording the label decision.
 3. `scorer`: chrF, meaning cosine behind an `Embedder` port (Ollama on Yggdrasil), the leak check wired, `weksa score`. Waits on 2.
 4. `pd-importer`: public-domain play and fiction dialogue into the corpus with speaker, scene group and edition provenance. Waits on 2 and follow-up `gutenberg-terms`.
 5. `golf-loop-en`: the loop driver, `ModelPort` with the `claude -p` adapter, encoder and lowerer prompts, round records, the accept rule, the detached unit on Yggdrasil. Waits on 3, 4 and follow-up `claude-on-yggdrasil`.
