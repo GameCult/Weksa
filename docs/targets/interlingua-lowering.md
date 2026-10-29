@@ -74,8 +74,11 @@ reader, and gives Weksa's Persona a working body when her mind
   languages match the expressiveness of human ones. Operator, 2026-10-29: "The
   linguistic ontology holds this data and drives it from the persona."
 - `no-eve`: no new Eve surface; operator view waits on Thing 2.
-- `no-surface-leak`: a packet carries no target-language surface wording, so a
-  lowering cannot score by copying text the encoder saw.
+- `no-surface-leak`: no score the loop reads may rise because the scored
+  item's own text reached a packet or the inventory. Owners (ruling
+  leak-owned-by-flow-and-scorer): the loop's context builder lets only Train
+  items reach whoever mints inventory, and the scorer masks referent names
+  before scoring.
 - `corpus-clean`: no corpus item comes from Discord or another source whose
   terms forbid training use.
 
