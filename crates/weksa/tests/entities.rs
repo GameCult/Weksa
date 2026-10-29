@@ -418,5 +418,8 @@ fn packet_schema_v2() {
     assert!(published.contains_key("weksa.entity.schema.json"));
     // v4: the packet carries the speaker's stance, a bare feature list.
     assert!(packet["properties"].get("stance").is_some(), "{packet}");
-    assert_eq!(packet["$defs"]["Stance"]["properties"]["features"]["type"], "array");
+    assert_eq!(
+        packet["$defs"]["Stance"]["properties"]["features"]["type"],
+        "array"
+    );
 }

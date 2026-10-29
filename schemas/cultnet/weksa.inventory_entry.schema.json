@@ -74,7 +74,8 @@
         "Discourse",
         "Referent",
         "Predication",
-        "Relation"
+        "Relation",
+        "Stance"
       ]
     },
     "ValueKind": {
