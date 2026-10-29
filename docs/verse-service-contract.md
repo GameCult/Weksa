@@ -1,5 +1,9 @@
 # Weksa Verse Service Contract
 
+> Status: planned contract. No daemon runs on main; the Node body is at tag
+> `parked/weksa-node-body`. A service is earned by cut `live-lowering`
+> (see [the lowering map](./targets/interlingua-lowering-map.md)).
+
 Weksa is the language-intent daemon. It turns writing, dialogue pressure, and
 agent state into typed conversational intent, then lowers that intent into
 utterance documents for speech, text, and synthesis consumers.
@@ -73,14 +77,8 @@ Early exporters may publish fixtures before a daemon loop exists, but the
 witness names are not decorative. These are the state surfaces the daemon must
 commit when the runtime lands.
 
-The local Starfire daemon is launched by `scripts/start-weksa-daemon.ps1`,
-checked by `scripts/health-weksa-daemon.cmd`, and restarted by
-`scripts/restart-weksa-daemon.cmd`. Its daemon-owned health path publishes
-`weksa.cultnet-rudp-provider-health` to Idunn over
-`cultnet.transport.rudp.v0` after each serialized witness refresh, and MiMo
-VoiceDesign commands arrive on `rudp://127.0.0.1:8813` as
-`weksa.mimo_voicedesign_command.v0` documents. Health and operator truth live
-in `.weksa/*.cc` witnesses; the HTTP daemon surface is deleted.
+No daemon runs. The Node daemon, its launchers and its RUDP health and command
+shims are parked at tag `parked/weksa-node-body`.
 
 ## CultMesh Verses
 

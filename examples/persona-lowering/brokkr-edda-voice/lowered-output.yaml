@@ -1,6 +1,6 @@
 schema_version: weksa.persona_lowering_output.v0
 fixture_id: brokkr-edda-voice
-generator: codex-local-source-aware-draft
+generator: local-source-aware-draft
 items:
   - id: command-without-receipt
     utterance: "The command has no receipt. It is not truth."

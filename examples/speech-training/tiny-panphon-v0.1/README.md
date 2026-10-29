@@ -24,8 +24,8 @@ shape, and pending AquaSynth-owned output lanes.
 Run it from the Weksa repo root:
 
 ```powershell
-& 'C:\Users\Meta\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' tools\emit_tiny_panphon_handoffs.py
-& 'C:\Users\Meta\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' tools\validate_tiny_panphon_handoffs.py
+py -3 tools\emit_tiny_panphon_handoffs.py
+py -3 tools\validate_tiny_panphon_handoffs.py
 ```
 
 `batch.json` is the training entrypoint for AquaSynth. The individual packet

@@ -1,12 +1,32 @@
 # Weksa
 
 Weksa is a procedural language engine for alien grammars grounded in concept,
-culture, and constraint.
+culture, and constraint, and the planned lowerer that turns an agent's
+meaning packet into the reader's display language.
 
-The project starts from a blunt rule: English words are not the source of truth.
-Meaning is decomposed into an ontology, passed through a worldview, constrained
-by grammar, shaped by phonology, distorted by history, and only then rendered as
-surface text.
+**What is valuable here.** The interlingua standard and the lowering design: a
+meaning packet owns what is meant, a target-language profile owns register,
+address and politeness, and a lowerer owns surface text and leaves a trace.
+
+**The problem it solves.** An agent's outward speech today is one English
+string the model chose, so meaning, register and voice are fused and nobody can
+inspect or re-target it. Packets separate them, so the same meaning can be
+lowered into English, other languages and conlangs, and the loss can be
+measured.
+
+**Entry points.**
+
+- [Interlingua Standard](./docs/interlingua-standard.md): the packet contract.
+- [Lowering target](./docs/targets/interlingua-lowering.md) and
+  [its map](./docs/targets/interlingua-lowering-map.md): the design, scoring
+  and cut sequence.
+- `data/`: the cultural ontology and target-language profile data.
+- `settings/`: setting-specific proving grounds for language projects.
+
+**Live versus planned.** Live: docs, fixtures, examples and ontology data.
+Planned: the packet crate `crates/weksa` (cut `packet-store`), lowering, and
+the golf loop that scores lowered English against an expressive corpus. No
+daemon runs; the earlier Node daemon is parked at tag `parked/weksa-node-body`.
 
 ## Ownership Model
 
@@ -40,9 +60,10 @@ for the LLM-free hot path.
 See [Interlingua Standard](./docs/interlingua-standard.md) for the shared
 meaning-packet contract Weksa clients should target.
 
-See [Verse Service Contract](./docs/verse-service-contract.md) for the daemon
-contract: Weksa owns typed conversational intent, pronunciation plans, utterance
-handoffs, and the typed CultMesh state that makes those documents inspectable. Eve is deprecated and Thing 2 is its successor; the operator Eve surface is quarantined (see the contract).
+See [Verse Service Contract](./docs/verse-service-contract.md) for the planned
+service contract: Weksa would own typed conversational intent, pronunciation
+plans, utterance handoffs, and the typed CultMesh state that makes those
+documents inspectable. No daemon runs yet.
 
 See [Multilingual Utterance Lowering](./docs/multilingual-utterance-lowering.md)
 for the shared lowering target: interlingua projected through speaker state into
@@ -63,11 +84,11 @@ AquaSynth or expanding pronunciation coverage.
 
 ## Implementation Status
 
-The first committed artifact is the persistent state spine: map, scratch,
-schemas, docs, examples, and a read-only provider advertisement fixture. The
-daemon runtime still needs implementation, but its authority is no longer
-ambiguous: writing and agent state enter Weksa as intent pressure, and typed
-utterance documents leave for AquaSynth.
+The persistent state spine is live: map, scratch, schemas, docs, examples and
+data. Packet storage, lowering and the service are planned (see the cut
+sequence in [the lowering map](./docs/targets/interlingua-lowering-map.md)).
+Writing and agent state will enter Weksa as intent pressure, and typed utterance
+documents will leave for AquaSynth.
 
 [Eusocial Interbeing / Zyphos](./settings/eusocial-interbeing/README.md) is the
 current higher-priority setting target. [Rust to Dust](./settings/rust-to-dust/README.md)

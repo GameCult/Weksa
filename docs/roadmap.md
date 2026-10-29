@@ -25,10 +25,9 @@
   IPA.
 - Add one toy utterance embedding handoff fixture, then replace hand-authored
   values with the AquaSynth-owned learned encoder.
-- Add a daemon loop that commits conversational intent, pronunciation plans, and
-  utterance handoffs as typed CultCache witnesses.
-- Publish the provider advertisement through CultMesh for Odin discovery; the
-  operator view returns on Thing 2 (Eve is deprecated).
+- Follow the cut sequence in
+  [the lowering map](./targets/interlingua-lowering-map.md): packet store,
+  lowering, the golf loop, then a service if one is earned.
 - Preserve the first English-only lowering proof under
   `examples/english-lowering/`, and the shared multilingual proof under
   `examples/multilingual-lowering/`.
@@ -39,7 +38,7 @@
 - Render glossed output through grammar, morphology, phonology, and diachrony.
 - Emit a trace explaining which stage made each decision.
 - Keep runtime LLM-free; model use belongs in authoring and critique.
-- Keep CLI tools, fixtures, and daemon jobs on the same commit and
+- Keep CLI tools and fixtures on the same commit and
   derivation paths so Weksa does not grow split-brained intent truth.
 
 ## Later

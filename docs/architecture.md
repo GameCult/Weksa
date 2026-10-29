@@ -1,7 +1,8 @@
 # Architecture
 
-Weksa is the language-intent daemon surface: currently a state spine, pipeline
-map, fixtures, and service contract waiting for its runtime loop.
+Weksa is a language-intent engine: currently a state spine, pipeline map,
+fixtures, ontology data and a planned service contract. No daemon runs; the
+planned packet crate is `crates/weksa` (cut `packet-store`).
 
 See [Verse Service Contract](./verse-service-contract.md) for the
 CultCache/CultMesh authority map.
@@ -9,8 +10,8 @@ CultCache/CultMesh authority map.
 ## Objective
 
 Build a procedural alien-language engine whose outputs are grounded in
-worldview, semantics, grammar, phonology, morphology, and history. As a daemon,
-Weksa also turns writing plus agent state into typed conversational intent, then
+worldview, semantics, grammar, phonology, morphology, and history. Once a service is
+earned (planned), Weksa also turns writing plus agent state into typed conversational intent, then
 lowers that intent into written realizations, pronunciation plans, speech-provider
 requests, and utterance handoff documents.
 

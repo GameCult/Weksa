@@ -180,9 +180,10 @@ meaning sources. A provider request must consume the target-language
 `spoken_text` that Weksa already accepted and must carry a trace back to the
 interlingua packet, projected speaker context, and target-language profile.
 
-MiMo V2.5 TTS is the first external provider target. Its natural-language style
+MiMo V2.5 TTS is a candidate external provider target; its lowering path is
+parked at tag `parked/weksa-node-body`. Its natural-language style
 instruction is a projection of Weksa delivery intent, and its assistant content
-is the selected target-language spoken text. See [MiMo TTS Lowering](./mimo-tts-lowering.md).
+is the selected target-language spoken text.
 
 AquaSynth remains the GameCult-owned synthesis path for learned utterance
 embeddings and synth-control work. MiMo and AquaSynth are sibling target
