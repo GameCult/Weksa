@@ -7,6 +7,7 @@ pub mod corpus;
 pub mod entity;
 pub mod form;
 pub mod inventory;
+pub mod lower;
 pub mod packet;
 pub mod schema;
 pub mod score;
@@ -21,6 +22,7 @@ pub use inventory::{
     Change, Family, InvId, Inventory, InventoryEntry, InventoryRevision, OptionLabel, OptionSet,
     Slot, ValueKind,
 };
+pub use lower::{LowerError, lower};
 pub use packet::{
     EncoderId, EntityId, Grade, NodeId, Packet, PacketId, PacketKind, SCHEMA_VERSION,
 };

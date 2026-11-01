@@ -454,3 +454,38 @@ pub fn seed() -> (InventoryRevision, Vec<InventoryEntry>) {
         entries,
     )
 }
+
+/// Revision 2: the concepts and frames the `nibu-proof-001` packet names, which
+/// the seed leaves open. Hand-seeded like [`seed`] until the golf loop's
+/// minting round owns concepts and frames.
+pub fn proof_revision() -> (InventoryRevision, Vec<InventoryEntry>) {
+    let mut entries: Vec<InventoryEntry> = Vec::new();
+    for (family, glosses) in [
+        (
+            Family::Concept,
+            ["endanger", "prevent", "player", "control", "ship_mind"].as_slice(),
+        ),
+        (Family::Frame, ["hazard_warning", "intervention"].as_slice()),
+    ] {
+        for (i, gloss) in glosses.iter().enumerate() {
+            entries.push(InventoryEntry {
+                id: family.id(NonZeroU32::MIN.saturating_add(i as u32)),
+                gloss: gloss.to_string(),
+                value_kind: None,
+                applies_to: vec![],
+                introduced_rev: 2,
+                retired_rev: None,
+            });
+        }
+    }
+    let changes = entries.iter().map(|e| Change::Add(e.id)).collect();
+    (
+        InventoryRevision {
+            n: 2,
+            parent: Some(1),
+            changes,
+            frozen: false,
+        },
+        entries,
+    )
+}

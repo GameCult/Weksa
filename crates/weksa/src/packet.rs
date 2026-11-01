@@ -337,3 +337,85 @@ pub struct Trace {
     pub notes: Vec<String>,
     pub rejected_readings: Vec<String>,
 }
+
+/// The `nibu-proof-001` packet: the meaning of `examples/english-lowering/nibu-proof-001/interlingua.yaml`
+/// (warn the player off the damaged control; Nibu prevents it for them) as typed
+/// ids of inventory revision 2, for the corpus item `item:nibu:1`. No features:
+/// nothing here is style.
+pub fn proof_packet() -> Packet {
+    fn id(s: &str) -> InvId {
+        InvId::parse(s).expect("proof ids are well formed")
+    }
+    fn node(s: &str) -> NodeId {
+        NodeId::parse(s).expect("proof nodes are well formed")
+    }
+    let referent = |n: &str, kind: &str, concept: &str, entity: Option<&str>| Referent {
+        id: node(n),
+        kind: id(kind),
+        concept: id(concept),
+        entity: entity.map(|e| EntityId::parse(e).expect("proof entity is well formed")),
+        features: vec![],
+    };
+    let fill = |role: &str, filler: &str| RoleFill {
+        role: id(role),
+        filler: node(filler),
+    };
+    Packet {
+        id: PacketId::parse("packet:6e6962752d303031").expect("proof id"),
+        schema_version: SCHEMA_VERSION,
+        inventory_rev: 2,
+        kind: PacketKind::DialogueLine,
+        provenance: Provenance {
+            source: ProvenanceSource::Authored,
+            corpus_item: CorpusItemId::parse("item:nibu:1").expect("proof item"),
+            encoder: EncoderId::parse("encoder:6f70657261746f72").expect("proof encoder"),
+            confidence: Grade::new(900).expect("proof grade"),
+        },
+        context: Context::default(),
+        discourse: Discourse {
+            speech_act: Some(id("speech_act:5")),
+            addressee: Some(node("n1")),
+            features: vec![],
+        },
+        referents: vec![
+            referent("n1", "referent_kind:1", "concept:3", None),
+            referent("n2", "referent_kind:5", "concept:4", None),
+            referent("n3", "referent_kind:1", "concept:5", Some("entity:nibu")),
+        ],
+        predications: vec![
+            Predication {
+                id: node("n4"),
+                concept: id("concept:1"),
+                frame: id("frame:1"),
+                roles: vec![
+                    fill("role:1", "n1"),
+                    fill("role:4", "n2"),
+                    fill("role:2", "n1"),
+                ],
+                features: vec![],
+            },
+            Predication {
+                id: node("n5"),
+                concept: id("concept:2"),
+                frame: id("frame:2"),
+                roles: vec![
+                    fill("role:1", "n3"),
+                    fill("role:2", "n4"),
+                    fill("role:8", "n1"),
+                ],
+                features: vec![],
+            },
+        ],
+        relations: vec![],
+        constraints: Constraints {
+            preserve: vec![node("n1"), node("n2")],
+            deterministic: true,
+            max_latency_ms: None,
+        },
+        extensions: vec![],
+        trace: Trace {
+            notes: vec!["First proof packet for Nibu flavored-English lowering.".to_string()],
+            rejected_readings: vec![],
+        },
+    }
+}

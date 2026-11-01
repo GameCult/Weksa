@@ -328,6 +328,60 @@ checkpoint the test-split composite is within the noise floor of validation.
 The test split is read only at checkpoints. Self then records the freeze, and
 the training set is the whole corpus re-encoded under the frozen revision.
 
+## Lowerer first cut (`golf-loop-lowerer-cut`)
+
+Authority map for the smallest lowerer, written before its code (Imagination
+pass by the Weksa Self run, 2026-11-01). The cut exists to give the golf loop a
+measurable baseline from a packet: `lower` gives text, `score` gives numbers.
+
+| Decision | Owner | Inputs | Outputs | Not the owner |
+|---|---|---|---|---|
+| Whether a packet exists | `validate` / `PacketStore::admit` (unchanged) | packet, inventory, corpus, entities | admitted packet or typed refusal | the lowerer |
+| Wording of a packet in English | `crates/weksa/src/lower.rs`: `lower(&LoweringInput, &Inventory) -> Result<String, LowerError>` | the validated lowering view and the inventory at its revision | text, or a typed refusal naming the missing template | the corpus item, the scorer, any model |
+| English template table (concept words, frame templates, speech-act openers) | the same module, as rows `(inventory id, gloss it speaks for, surface)` | none; it is data in code | rows the lowerer looks up | the inventory (it owns the ids and glosses, not the English) |
+| The inventory's concepts and frames | an inventory revision; here `inventory::proof_revision()` (rev 2), hand-seeded as `seed()` is | none | the 5 concepts and 2 frames `nibu-proof-001` names | the lowerer |
+| What a score counts | `Scorer::score` (unchanged) | output text, reference text | `ItemScore` | `weksa score`, which only reads text and calls it |
+| The proof packet | `packet::proof_packet()`, typed ids of rev 2, admitted by `weksa packet proof <store>` through `PacketStore::admit`. Not JSON: `Packet`'s serde is CultCache's positional tuple, and JSON in is the xenos boundary the cut 7 encoder owns | none | admitted packet | the CLI decides nothing about validity |
+
+Decisions this map makes, and why:
+
+- **`lower` takes `&LoweringInput`, not `&Packet`.** A `Packet` carries `trace`
+  and `provenance.corpus_item`; the model page says the lowerer sees the packet
+  without its trace and never the corpus item (`lowering-traced`,
+  `leak-owned-by-flow-and-scorer-3`). `validate` already yields the view, so the
+  CLI runs `validate` and hands it over. Cut 4 narrows the door to
+  `PacketStore::admit`; this cut does not wait on it.
+- **The frame owns the verb phrase; a predication's concept must resolve but is
+  not rendered.** Referent concepts supply nouns. A frame template names its
+  roles by inventory gloss (`{agent}`), resolved against the inventory at the
+  packet's revision, so a retired or re-glossed role cannot be silently
+  mis-keyed. A row whose gloss differs from the inventory's entry for its id is
+  a `LowerError`, so a table row cannot speak for a different meaning than its
+  id now carries.
+- **Rendering rules, all deterministic and all from packet fields:** the
+  discourse addressee renders "you" ("yourself" when it already filled a role
+  in the same predication), other referents render "the <concept word>", a
+  predication filling a role renders "that", the speech-act row supplies an
+  optional opener, sentences are capitalised and end in a full stop.
+  Entity-bearing referents render by concept word: the lowerer does not read
+  the entity store in this cut (follow-up: entity forms in the lowerer).
+- **No style, no register, no features.** Hedge, certainty, modality and
+  polarity are not rendered, so the baseline scores what meaning alone buys.
+  A lowerer that ignores `polarity: negative` would assert the opposite, so
+  `lower` refuses any packet that carries a feature, relation or extension it
+  does not render rather than render it wrong (`packet-owns-meaning`); features arrive as templates
+  learn them.
+- **Deleted by later cuts, not this one:** the table in `lower.rs` and
+  `proof_revision()` are temporary owners. Cut 5 (`language-ontology`) moves
+  the table to `weksa.ontology_entry` documents selected by the target
+  profile; cut 7 replaces `proof_revision()` with the loop's minting round.
+  Nothing is deleted today because no earlier lowerer exists; the YAML
+  `examples/english-lowering/` hand-lowerings are fixtures, not owners, and
+  stay.
+- **`weksa score` is a thin reader of `Scorer::score`**: `weksa score <item>...
+  [--output FILE]` embeds the output text once against every named item. It
+  stores nothing (Score documents arrive with cut 7) and gates nothing.
+
 ## Cut sequence
 
 One line per cut; specs exist for the cuts about to run (2d and 4, siblings on `869c82b`; 2d merges first and 4 rebases onto it).
@@ -338,6 +392,7 @@ One line per cut; specs exist for the cuts about to run (2d and 4, siblings on `
 2c. Landed. `entity-store`: `ProperName` and `Referent.name` deleted; `EntityId`, `Referent.entity`, the `weksa.entity` document and its store; corpus name spans and entity-id speakers; the packet store's entity checks; seed entities and spans for the cast items; schema v2. Waits on 2b. (spec r1)
 3. Landed at `869c82b`. `scorer`: chrF, meaning cosine behind an `Embedder` port (Ollama adapter with `num_thread`), leak diagnostics, aggregation by derived split; library only, `weksa score` comes with the loop. h2 landed the r2 fix pass on its branch; r3 deletes the name mask (the scorer reads output and reference only) and pools novel coverage per order over word keys that split joined labels. Waits on 2c for merge order. (spec r3)
 2d. `entity-door-lows`: invisible format characters refused in entity forms (ZWJ, ZWNJ, CGJ and variation selectors kept); the form length bound per question `form-word-bound` (recommended: bytes only); attested origins (`Cast { persona, fixture }`, `Live { persona }`) and `CastAuthored.author`; empty provenance strings refused at the store; S6 under NFKC plus case fold and no-alphanumeric texts refused; `next_key` refuses at `u32::MAX`; CLI flags that do not apply refuse and no error echoes a value. Owns follow-ups `entity-door-lows` and `s6-unicode-normal-form`. (spec r1)
+3b. `lowerer-first-cut` (follow-up `golf-loop-lowerer-cut`): the section above. `lower`, `weksa lower`, `weksa score`, `weksa packet proof`, inventory rev 2 for `nibu-proof-001`.
 4. `speaker-state`: packet `stance` (felt affect and restraint, slot `Stance`, packet schema v4); formality, warmth and intensity out of the seed and the standard; only `PacketStore::admit` yields a `LoweringInput`, and it refuses packets for withdrawn items (follow-up `lowering-input-from-packet-store`). (spec r1)
 4b. `speaker-scene`: slots `Speaker` and `Scene` with their seed features; `weksa.speaker` (`speaker:<entity-slug>@<n>`) and `weksa.scene` (`scene:<group>@<n>`, participants and ordered-pair relations) documents with `Annotator` `Operator` and `Model { family, generator }`, validated by the packet's shared feature check, append-only per key; their stores, `weksa speaker` and `weksa scene` commands, published schemas; Model-annotated cast speakers and scenes for the committed items. Waits on 2d and 4; `pd-speaker-annotation` blocks only the public-domain annotator.
 5. `language-ontology`: `weksa.community` from `data/cultural-ontology/` (owns follow-up `edda-referent-yaml-parse`), `weksa.ontology_entry` for en-US and ja-JP from `data/target-language-ontology/` (YAML deleted), speaker communities, deterministic `select`, the lowering view (packet without trace, speaker, scene, selected entries). Waits on 4.

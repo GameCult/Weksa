@@ -742,3 +742,128 @@ fn every_decomposed_form_and_turn_is_stored_composed() {
         .unwrap();
     assert_eq!(item.prior_turns[0].text, "Caf\u{e9} now");
 }
+
+/// An Ollama stand-in: every text embeds to `[1, its length]`, so identical
+/// texts have cosine 1.
+fn fake_embedder() -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let mut buf = vec![0u8; 65536];
+            let mut n = 0;
+            let body = loop {
+                n += stream.read(&mut buf[n..]).unwrap();
+                let text = String::from_utf8_lossy(&buf[..n]).into_owned();
+                if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                    let want: usize = head
+                        .to_lowercase()
+                        .split("content-length: ")
+                        .nth(1)
+                        .unwrap()
+                        .split("\r\n")
+                        .next()
+                        .unwrap()
+                        .parse()
+                        .unwrap();
+                    if body.len() >= want {
+                        break body.to_string();
+                    }
+                }
+            };
+            let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+            let vectors: Vec<Vec<f64>> = body["input"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| vec![1.0, t.as_str().unwrap().len() as f64])
+                .collect();
+            let reply = serde_json::json!({ "embeddings": vectors }).to_string();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{reply}",
+                reply.len()
+            )
+            .unwrap();
+        }
+    });
+    url
+}
+
+#[test]
+fn proof_packet_lowers_and_the_lowering_scores_against_items() {
+    let d = tempfile::tempdir().unwrap();
+    cast_entities(d.path(), &["nibu"]);
+    for args in [&["inventory", "seed"][..], &["inventory", "proof"]] {
+        let run = weksa(d.path(), args);
+        assert!(run.status.success(), "{}", out(&run));
+    }
+    let item = weksa(
+        d.path(),
+        &[
+            "corpus",
+            "add",
+            "--slug",
+            "nibu",
+            "--text",
+            "Warning: you may endanger yourself by touching the control. The ship mind will prevent that to protect you.",
+            "--speaker",
+            "entity:nibu",
+            "--group",
+            "scene-1",
+            "--admitted-on",
+            "2026-11-01",
+            "--source",
+            "operator-written",
+        ],
+    );
+    assert!(item.status.success(), "{}", out(&item));
+    let admitted = weksa(d.path(), &["packet", "proof", "./p.cc"]);
+    assert!(
+        admitted.status.success() && out(&admitted).contains("admitted packet:6e6962752d303031"),
+        "{}",
+        out(&admitted)
+    );
+    let lowered = weksa(d.path(), &["lower", "./p.cc", "packet:6e6962752d303031"]);
+    assert!(lowered.status.success(), "{}", out(&lowered));
+    let text = String::from_utf8(lowered.stdout).unwrap();
+    assert!(
+        text.starts_with("Warning: you may endanger yourself"),
+        "{text}"
+    );
+
+    let missing = weksa(d.path(), &["lower", "./p.cc", "packet:0000000000000000"]);
+    assert!(!missing.status.success() && out(&missing).contains("no packet"));
+
+    std::fs::write(d.path().join("out.txt"), &text).unwrap();
+    let url = fake_embedder();
+    let scored = weksa(
+        d.path(),
+        &[
+            "score",
+            "item:nibu:1",
+            "--output",
+            "out.txt",
+            "--ollama-url",
+            &url,
+        ],
+    );
+    assert!(scored.status.success(), "{}", out(&scored));
+    assert_eq!(
+        out(&scored).trim(),
+        "item:nibu:1 chrf=100.00 meaning=1.0000"
+    );
+    let unknown = weksa(
+        d.path(),
+        &[
+            "score",
+            "item:nibu:9",
+            "--output",
+            "out.txt",
+            "--ollama-url",
+            &url,
+        ],
+    );
+    assert!(!unknown.status.success() && out(&unknown).contains("no item item:nibu:9"));
+}

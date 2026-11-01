@@ -8,10 +8,12 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use unicode_normalization::UnicodeNormalization;
 use weksa::corpus::{CorpusItem, ModelFamily, NameSpan, Source, Turn};
 use weksa::entity::{Entity, EntityOrigin, LanguageForms};
-use weksa::inventory::seed;
+use weksa::inventory::{proof_revision, seed};
+use weksa::packet::proof_packet;
+use weksa::score::ScoreInput;
 use weksa::{
-    CorpusStore, EntityId, EntityStore, InventoryStore, PacketStore, SplitScheme, StoreError,
-    validate,
+    CorpusStore, EntityId, EntityStore, InventoryStore, OllamaEmbedder, PacketStore, Scorer,
+    SplitScheme, StoreError, lower, validate,
 };
 
 #[derive(Parser)]
@@ -43,6 +45,12 @@ enum Command {
     Inventory(InventoryCommand),
     #[command(subcommand)]
     Entity(EntityCommand),
+    #[command(subcommand)]
+    Packet(PacketCommand),
+    /// Lower a stored packet to English text.
+    Lower { store: PathBuf, key: String },
+    /// Score output text (stdin, or --output) against corpus items, one embed call.
+    Score(ScoreArgs),
     /// Print the split of a corpus item.
     Split { item_key: String },
     /// Write the published JSON Schemas.
@@ -50,6 +58,26 @@ enum Command {
         #[arg(long, default_value = "schemas/cultnet")]
         out: PathBuf,
     },
+}
+
+#[derive(Subcommand)]
+enum PacketCommand {
+    /// Admit the nibu-proof-001 packet through `PacketStore::admit`.
+    Proof { store: PathBuf },
+}
+
+#[derive(Args)]
+struct ScoreArgs {
+    /// Corpus item keys, the references.
+    #[arg(required = true)]
+    items: Vec<String>,
+    /// The text to score; stdin when absent.
+    #[arg(long)]
+    output: Option<PathBuf>,
+    #[arg(long, default_value = "http://127.0.0.1:11434")]
+    ollama_url: String,
+    #[arg(long, default_value = "qwen3-embedding:0.6b")]
+    model: String,
 }
 
 #[derive(Subcommand)]
@@ -68,6 +96,8 @@ enum InventoryCommand {
     Dump,
     /// Admit revision 1, the standard's enumerated values and the nuance features.
     Seed,
+    /// Admit revision 2, the concepts and frames the nibu-proof-001 packet names.
+    Proof,
 }
 
 #[derive(Subcommand)]
@@ -433,6 +463,75 @@ fn main() -> Result<()> {
                 .admit_revision(rev, entries)
                 .map_err(refused)?;
             println!("seeded rev:1 with {count} entries");
+        }
+        Command::Inventory(InventoryCommand::Proof) => {
+            let (rev, entries) = proof_revision();
+            let count = entries.len();
+            InventoryStore::open(&cli.inventory)?
+                .admit_revision(rev, entries)
+                .map_err(refused)?;
+            println!("admitted rev:2 with {count} entries");
+        }
+        Command::Packet(PacketCommand::Proof { store }) => {
+            let packet = proof_packet();
+            let key = packet.id.to_string();
+            PacketStore::open(&store)?
+                .admit(
+                    packet,
+                    &InventoryStore::open(&cli.inventory)?,
+                    &CorpusStore::open(&cli.corpus)?,
+                    &EntityStore::open(&cli.entities)?,
+                )
+                .map_err(refused)?;
+            println!("admitted {key}");
+        }
+        Command::Lower { store, key } => {
+            let inventory = InventoryStore::open(&cli.inventory)?.inventory()?;
+            let packet = PacketStore::open(&store)?
+                .get(&key)?
+                .with_context(|| format!("no packet {key}"))?;
+            let view = validate(&packet, &inventory).map_err(|refusals| {
+                anyhow::anyhow!(
+                    "{}",
+                    refusals
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                )
+            })?;
+            println!("{}", lower(&view, &inventory)?);
+        }
+        Command::Score(args) => {
+            let output = match &args.output {
+                Some(path) => std::fs::read_to_string(path)?,
+                None => std::io::read_to_string(std::io::stdin())?,
+            };
+            let corpus = CorpusStore::open(&cli.corpus)?;
+            let references = args
+                .items
+                .iter()
+                .map(|key| {
+                    Ok(corpus
+                        .get(key)?
+                        .with_context(|| format!("no item {key}"))?
+                        .text)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let inputs: Vec<ScoreInput> = references
+                .iter()
+                .map(|reference| ScoreInput {
+                    reference,
+                    output: output.trim(),
+                })
+                .collect();
+            let scorer = Scorer::new(OllamaEmbedder::new(&args.ollama_url, &args.model));
+            for (key, score) in args.items.iter().zip(scorer.score(&inputs)?) {
+                match score.meaning {
+                    Some(m) => println!("{key} chrf={:.2} meaning={m:.4}", score.chrf),
+                    None => println!("{key} chrf={:.2} meaning=none", score.chrf),
+                }
+            }
         }
         Command::Split { item_key } => {
             let item = CorpusStore::open(&cli.corpus)?
