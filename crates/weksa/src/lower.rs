@@ -2,9 +2,11 @@
 //! fixed table keyed by inventory ids. It renders predications, referents and the
 //! speech act, and nothing else: no style, no model, no corpus text. It takes a
 //! [`LoweringInput`], so it cannot see the trace or the corpus item. A packet
-//! carrying anything it does not render is refused, because rendering part of a
-//! meaning would assert a different one (`polarity: negative` dropped says the
-//! opposite).
+//! carrying a feature, relation, extension, role fill or referent it does not
+//! render is refused, because rendering part of a meaning would assert a different
+//! one (`polarity: negative` dropped says the opposite). Context, kind and
+//! constraints steer delivery and are not rendered; the concept of a predication
+//! must resolve but the frame owns the verb.
 //!
 //! The table is a temporary owner. Each row speaks for an inventory entry and
 //! names the gloss it speaks for, so a row cannot outlive a change of what its id
@@ -112,6 +114,15 @@ pub fn lower(input: &LoweringInput, inv: &Inventory) -> Result<String, LowerErro
     for p in input.predications() {
         sentences.push(clause(input, inv, p)?);
     }
+    let mentioned = |r: &NodeId| {
+        input
+            .predications()
+            .iter()
+            .any(|p| p.roles.iter().any(|f| &f.filler == r))
+    };
+    if input.referents().iter().any(|r| !mentioned(&r.id)) {
+        return unrendered("a referent no role mentions");
+    }
     let mut out = String::new();
     for (i, clause) in sentences.iter().enumerate() {
         if i > 0 {
@@ -164,6 +175,11 @@ fn clause(input: &LoweringInput, inv: &Inventory, p: &Predication) -> Result<Str
         said.push(&fill.filler);
     }
     out.push_str(rest);
+    if p.roles.len() != said.len() {
+        return Err(LowerError::Unrendered {
+            what: "a role the frame does not name",
+        });
+    }
     Ok(out)
 }
 

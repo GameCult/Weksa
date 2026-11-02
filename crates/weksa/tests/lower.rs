@@ -113,12 +113,26 @@ fn a_packet_carrying_what_the_lowerer_does_not_render_is_refused() {
         })
     };
     let no_predication = |p: &mut Packet| p.predications.clear();
+    let extra_role = |p: &mut Packet| {
+        let filler = p.predications[0].roles[0].filler.clone();
+        p.predications[0].roles.push(weksa::packet::RoleFill {
+            role: iv("role:3"),
+            filler,
+        })
+    };
+    let lone_referent = |p: &mut Packet| {
+        let mut r = p.referents[0].clone();
+        r.id = nd("n99");
+        p.referents.push(r)
+    };
     for (what, edit) in [
         ("features", &discourse as &dyn Fn(&mut Packet)),
         ("features", &predication),
         ("relations", &relation),
         ("extensions", &extension),
         ("no predication", &no_predication),
+        ("a role the frame does not name", &extra_role),
+        ("a referent no role mentions", &lone_referent),
     ] {
         let mut p = proof_packet();
         edit(&mut p);
