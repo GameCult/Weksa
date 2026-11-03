@@ -3,6 +3,7 @@ use common::*;
 use tempfile::TempDir;
 use weksa::corpus::{CorpusItem, ModelFamily, Source, Turn};
 use weksa::inventory::{Change, seed};
+use weksa::packet::PacketId;
 use weksa::{
     AddOutcome, CorpusStore, EntityStore, Family, InventoryEntry, InventoryRevision,
     InventoryStore, PacketStore, Refusal, Slot, SplitScheme, StoreError, StoreRefusal, ValueKind,
@@ -867,7 +868,7 @@ fn retiring_keeps_the_entry_for_earlier_revisions() {
 fn revision_one_survives_revision_two() {
     let inv = inventory();
     let revisions: Vec<(u32, usize)> = inv.revisions().map(|r| (r.n, r.changes.len())).collect();
-    assert_eq!(revisions, vec![(1, 54), (2, 6), (3, 1), (4, 1)]);
+    assert_eq!(revisions, vec![(1, 61), (2, 6), (3, 1), (4, 1)]);
     // A packet of revision 1 is judged by the inventory of revision 1: the
     // revision is known (no V10), and it names nothing that came later.
     let mut p = good();
@@ -891,7 +892,7 @@ fn the_seed_is_the_standards_enumerations_and_the_nuance_features() {
     assert_eq!(count(Family::Relation), 16);
     assert_eq!(count(Family::Role), 8);
     assert_eq!(count(Family::SpeechAct), 8);
-    assert_eq!(count(Family::Feature), 11);
+    assert_eq!(count(Family::Feature), 18);
     assert_eq!(
         count(Family::Concept) + count(Family::Frame) + count(Family::Extension),
         0
@@ -909,6 +910,46 @@ fn the_seed_is_the_standards_enumerations_and_the_nuance_features() {
         inv.entry(&iv(IRONY)).unwrap().value_kind,
         Some(ValueKind::Flag)
     );
+    // Felt affect and restraint: Grade features in slot Stance alone.
+    for (id, name) in [
+        (ANGER, "anger"),
+        (AFFECTION, "affection"),
+        (RESTRAINT, "restraint"),
+    ] {
+        let e = inv.entry(&iv(id)).unwrap();
+        assert_eq!(e.gloss, name);
+        assert_eq!(e.value_kind, Some(ValueKind::Grade));
+        assert_eq!(e.applies_to, vec![Slot::Stance]);
+    }
+    let stance_names: Vec<&str> = inv
+        .entries()
+        .filter(|e| e.applies_to == [Slot::Stance])
+        .map(|e| e.gloss.as_str())
+        .collect();
+    assert_eq!(
+        stance_names,
+        [
+            "anger",
+            "fear",
+            "sadness",
+            "joy",
+            "disgust",
+            "surprise",
+            "contempt",
+            "affection",
+            "shame",
+            "restraint"
+        ]
+    );
+    // Hedge, certainty and irony stay on content; displayed formality, warmth
+    // and intensity are each language's ontology's, not the seed's.
+    for e in inv.entries() {
+        assert!(
+            !["warmth", "formality", "intensity"].contains(&e.gloss.as_str()),
+            "{}",
+            e.gloss
+        );
+    }
     assert!(
         inv.entries()
             .all(|e| e.well_formed() && e.introduced_rev == 1 && e.retired_rev.is_none())
@@ -945,7 +986,7 @@ fn gloss_is_bounded_text() {
 
 #[test]
 fn packet_admission_goes_through_the_validator() {
-    let w = world();
+    let mut w = world();
     let mut store = PacketStore::open(&w.dir.path().join("p.cc")).unwrap();
     let mut bad = good();
     bad.schema_version = 5;
@@ -960,13 +1001,18 @@ fn packet_admission_goes_through_the_validator() {
         other => panic!("{other:?}"),
     }
     assert!(store.all().unwrap().is_empty());
-    store
+    // The door yields the lowering view, stance included.
+    let view = store
         .admit(good(), &w.inventory, &w.corpus, &w.entities)
         .unwrap();
-    // The same packet is idempotent; a different one under the same key is refused.
-    store
+    assert_eq!(view.stance(), &good().stance);
+    assert!(!view.stance().features.is_empty());
+    // The same packet is idempotent and yields the same view; a different one
+    // under the same key is refused.
+    let replay = store
         .admit(good(), &w.inventory, &w.corpus, &w.entities)
         .unwrap();
+    assert_eq!(replay, view);
     let mut other = good();
     other.provenance.confidence = grade(1);
     assert_eq!(
@@ -974,6 +1020,24 @@ fn packet_admission_goes_through_the_validator() {
         StoreRefusal::PacketImmutable {
             key: PACKET_ID.into()
         }
+    );
+    assert_eq!(store.all().unwrap().len(), 1);
+    assert_eq!(store.get(PACKET_ID).unwrap(), Some(good()));
+    // A withdrawn item admits no packet, a replay included; the packet admitted
+    // before the withdrawal stays stored and readable.
+    w.corpus.withdraw("item:nibu:1").unwrap();
+    let mut fresh = good();
+    fresh.id = PacketId::parse("packet:00000000000000aa").unwrap();
+    let withdrawn = StoreRefusal::WithdrawnCorpusItem {
+        key: "item:nibu:1".into(),
+    };
+    assert_eq!(
+        refusal(store.admit(fresh, &w.inventory, &w.corpus, &w.entities)),
+        withdrawn
+    );
+    assert_eq!(
+        refusal(store.admit(good(), &w.inventory, &w.corpus, &w.entities)),
+        withdrawn
     );
     assert_eq!(store.all().unwrap().len(), 1);
     assert_eq!(store.get(PACKET_ID).unwrap(), Some(good()));
@@ -1206,6 +1270,21 @@ fn seed_reseeded() {
         .all()
         .unwrap();
     assert_eq!(items.len(), 3);
+    // The committed inventory is the seed, reseeded (stance features in, the
+    // displayed-affect features out), then the nibu-proof revision.
+    let committed = InventoryStore::open(&root.join("data/interlingua/inventory.cc"))
+        .unwrap()
+        .inventory()
+        .unwrap();
+    let (rev, mut entries) = seed();
+    let (proof, proof_entries) = weksa::inventory::proof_revision();
+    assert!(committed.has_revision(rev.n) && committed.has_revision(proof.n));
+    entries.extend(proof_entries);
+    let mut have: Vec<_> = committed.entries().cloned().collect();
+    let mut want = entries;
+    have.sort_by_key(|e| e.id);
+    want.sort_by_key(|e| e.id);
+    assert_eq!(have, want);
     let d = dir();
     let mut replay = CorpusStore::open(&d.path().join("c.cc")).unwrap();
     for i in items {

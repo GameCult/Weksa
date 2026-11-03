@@ -24,7 +24,7 @@ pub use inventory::{
 };
 pub use lower::{LowerError, lower};
 pub use packet::{
-    EncoderId, EntityId, Grade, NodeId, Packet, PacketId, PacketKind, SCHEMA_VERSION,
+    EncoderId, EntityId, Grade, NodeId, Packet, PacketId, PacketKind, SCHEMA_VERSION, Stance,
 };
 pub use score::{Embedder, ItemScore, OllamaEmbedder, Scorer, chrf};
 pub use split::{Split, SplitScheme};

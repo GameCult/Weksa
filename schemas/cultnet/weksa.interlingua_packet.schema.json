@@ -55,6 +55,9 @@
       "format": "uint32",
       "minimum": 0
     },
+    "stance": {
+      "$ref": "#/$defs/Stance"
+    },
     "trace": {
       "$ref": "#/$defs/Trace"
     }
@@ -72,7 +75,8 @@
     "relations",
     "constraints",
     "extensions",
-    "trace"
+    "trace",
+    "stance"
   ],
   "$defs": {
     "Constraints": {
@@ -444,6 +448,21 @@
       "required": [
         "role",
         "filler"
+      ]
+    },
+    "Stance": {
+      "description": "The speaker's felt affect and restraint, never displayed affect: how the\nspeaker shows a feeling is each language's ontology's business. A\nheld-back feeling is not a claim, so it is never a predication.",
+      "type": "object",
+      "properties": {
+        "features": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FeatureValue"
+          }
+        }
+      },
+      "required": [
+        "features"
       ]
     },
     "Trace": {

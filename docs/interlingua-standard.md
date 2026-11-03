@@ -127,6 +127,7 @@ Packet
   constraints  { preserve, deterministic, max_latency_ms }
   extensions   [ { key: InvId (family extension), value: Grade | Option | Flag } ]
   trace        { notes, rejected_readings }
+  stance       { features }
 ```
 
 `schema_version` and `inventory_rev` name the exact schema and inventory
@@ -135,8 +136,10 @@ revision a packet was written against. A grade is an integer permille,
 
 ### Validation
 
-A packet exists only if `validate` passes; every path that admits or lowers a
-packet calls it. A refusal names the rule.
+A packet exists only if the validator's rules pass and the packet store admits
+it. `validate` judges and returns `Ok(())` or the refusals; the packet store's
+`admit` is the one door and the only source of the lowering view. A refusal
+names the rule.
 
 - V1: `schema_version` is the version these types define.
 - V2: at least one of `referents`, `predications`, `relations` is present.
@@ -158,9 +161,11 @@ packet calls it. A refusal names the rule.
   (a calibration constant, capacity and not meaning).
 
 V9 is retired and not renumbered: the form of a key or a grade is its type, and
-an extension key's family is V6. `validate` returns the lowering view of a
-packet that passes; it carries no packet id, no provenance and no trace, and is
-built nowhere else. A packet is admitted against the inventory the packet store
+an extension key's family is V6. `PacketStore::admit` returns the lowering view of a
+packet it admits; the view carries the meaning and the stance, no packet id, no
+provenance and no trace, and is built nowhere else. The store also refuses a
+packet that names a withdrawn corpus item (packets admitted before the
+withdrawal stay stored). A packet is admitted against the inventory the packet store
 reads at the packet's revision, never one the caller supplies.
 
 ### `kind`
@@ -182,9 +187,22 @@ ids.
 ### `discourse`
 
 Why the packet is said: `speech_act` is a speech-act id, `addressee` a node id,
-and `features` carry source-side nuance (hedge, certainty, warmth, formality,
-intensity, irony and whatever the inventory grows). This is source-side
-communicative pressure, not target-language register.
+and `features` carry source-side nuance on content (hedge, certainty, irony and
+whatever the inventory grows). This is source-side communicative pressure, not
+target-language register.
+
+### `stance`
+
+The speaker's felt affect and how much of it the speaker holds back. `features`
+is a feature list in slot `Stance`, checked like every other (V5 to V8, V11).
+The seed carries felt affect as grades of how strongly it is felt (anger, fear, sadness,
+joy, disgust, surprise, contempt, affection, shame) and `restraint`, a grade for
+how much of the felt affect is suppressed (0 none, 1000 fully). The stance is
+what is felt, never what is displayed: how a feeling shows, and how much of a
+restrained one leaks, are cultural, and each language's ontology maps felt
+affect and restraint to its own register. A held-back feeling is not a claim
+about the world, so it is never a predication. An empty stance is valid. The
+stance reaches the lowerer in the lowering view.
 
 ### `referents`
 
