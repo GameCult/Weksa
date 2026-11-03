@@ -1,7 +1,7 @@
 mod common;
 use common::*;
 use weksa::packet::*;
-use weksa::{Family, Refusal, Slot, validate};
+use weksa::{Family, PacketStore, Refusal, Slot, validate};
 
 fn refusals(p: &Packet) -> Vec<Refusal> {
     validate(p, &inventory()).err().unwrap_or_default()
@@ -335,6 +335,83 @@ fn v8_feature_applies_to() {
 }
 
 #[test]
+fn stance_features_apply_to_the_stance_only() {
+    // Affect and restraint sit in slot Stance and nowhere else.
+    assert_eq!(refusals(&good()), vec![]);
+    for id in [ANGER, RESTRAINT] {
+        let mut p = good();
+        p.discourse
+            .features
+            .push(feat(id, FeatValue::Grade(grade(1))));
+        assert_eq!(
+            refusals(&p),
+            vec![Refusal::V8NotApplicable {
+                feature: iv(id),
+                slot: Slot::Discourse
+            }]
+        );
+    }
+    let mut referent = good();
+    referent.referents[0]
+        .features
+        .push(feat(AFFECTION, FeatValue::Grade(grade(1))));
+    assert_eq!(
+        refusals(&referent),
+        vec![Refusal::V8NotApplicable {
+            feature: iv(AFFECTION),
+            slot: Slot::Referent
+        }]
+    );
+    let mut predication = good();
+    predication.predications[0]
+        .features
+        .push(feat(ANGER, FeatValue::Grade(grade(1))));
+    assert_eq!(
+        refusals(&predication),
+        vec![Refusal::V8NotApplicable {
+            feature: iv(ANGER),
+            slot: Slot::Predication
+        }]
+    );
+    // Hedge is a stance on content, not a felt state: not in the stance.
+    let mut p = good();
+    p.stance
+        .features
+        .push(feat(HEDGE, FeatValue::Grade(grade(1))));
+    assert_eq!(
+        refusals(&p),
+        vec![Refusal::V8NotApplicable {
+            feature: iv(HEDGE),
+            slot: Slot::Stance
+        }]
+    );
+    // A stance feature takes its inventory's value kind (V7) and must exist (V5).
+    let mut flag = good();
+    flag.stance.features = vec![feat(ANGER, FeatValue::Flag(true))];
+    assert_eq!(
+        refusals(&flag),
+        vec![Refusal::V7ValueKind { what: ANGER.into() }]
+    );
+    let mut missing = good();
+    missing.stance.features = vec![feat("feature:99", FeatValue::Grade(grade(1)))];
+    assert_eq!(refusals(&missing), vec![unresolved("feature:99")]);
+    // A default stance is valid: the packet records no felt state.
+    let mut none = good();
+    none.stance = Stance::default();
+    assert_eq!(refusals(&none), vec![]);
+}
+
+#[test]
+fn displayed_formality_warmth_and_intensity_are_not_in_the_inventory() {
+    // Felt affect is the packet's; how it is displayed is each language's
+    // ontology's, so no feature carries it.
+    let inv = inventory();
+    for gone in ["warmth", "formality", "intensity"] {
+        assert!(inv.entries().all(|e| e.gloss != gone), "{gone}");
+    }
+}
+
+#[test]
 fn v10_rev_exists() {
     let mut p = good();
     p.inventory_rev = 9;
@@ -358,7 +435,12 @@ fn lowering_input_carries_no_trace_id_or_provenance() {
     let mut p = good();
     p.trace.notes = vec!["SECRET-NOTE".into()];
     p.trace.rejected_readings = vec!["SECRET-READING".into()];
-    let input = validate(&p, &inventory()).unwrap();
+    // Only the packet store's door yields the view.
+    let w = world();
+    let mut store = PacketStore::open(&w.dir.path().join("p.cc")).unwrap();
+    let input = store
+        .admit(p.clone(), &w.inventory, &w.corpus, &w.entities)
+        .unwrap();
     let seen = format!("{input:?}");
     for hidden in [PACKET_ID, ENCODER_ID, "item:nibu:1", "SECRET"] {
         assert!(!seen.contains(hidden), "{hidden} reached the input: {seen}");
@@ -373,6 +455,9 @@ fn lowering_input_carries_no_trace_id_or_provenance() {
     assert_eq!(input.context(), &p.context);
     assert_eq!(input.discourse(), &p.discourse);
     assert_eq!(input.constraints(), &p.constraints);
+    // The speaker's stance is meaning, not provenance: it reaches the lowerer.
+    assert_eq!(input.stance(), &p.stance);
+    assert!(!p.stance.features.is_empty());
 }
 
 #[test]
@@ -435,6 +520,14 @@ fn v11_duplicate_feature_each_slot() {
         refusals(&relation),
         vec![v11(Some(Slot::Relation), FEAT_ALL)]
     );
+    let mut stance = good();
+    stance.stance.features = vec![grade_feature(1), grade_feature(2)];
+    assert_eq!(refusals(&stance), vec![v11(Some(Slot::Stance), FEAT_ALL)]);
+    let mut felt = good();
+    felt.stance
+        .features
+        .push(feat(ANGER, FeatValue::Grade(grade(5))));
+    assert_eq!(refusals(&felt), vec![v11(Some(Slot::Stance), ANGER)]);
     let mut extension = good();
     extension.extensions.push(Extension {
         key: iv(EXT),

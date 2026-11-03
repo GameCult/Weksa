@@ -22,8 +22,24 @@ fn committed() -> (Inventory, tempfile::TempDir) {
     (inv.inventory().unwrap(), tempfile::tempdir().unwrap())
 }
 
-fn view(packet: &Packet, inv: &Inventory) -> LoweringInput {
-    validate(packet, inv).unwrap()
+/// A `LoweringInput` has one source, `PacketStore::admit`, so every packet
+/// under test goes through a throwaway store backed by the committed stores.
+fn view(packet: &Packet, _inv: &Inventory) -> LoweringInput {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let inventory = InventoryStore::open(&root.join("data/interlingua/inventory.cc")).unwrap();
+    admitted(packet, &inventory)
+}
+
+/// The same door against an inventory store the test built.
+fn admitted(packet: &Packet, inventory: &InventoryStore) -> LoweringInput {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let corpus = CorpusStore::open(&root.join("data/corpus/corpus.cc")).unwrap();
+    let entities = EntityStore::open(&root.join("data/entity/entity.cc")).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    PacketStore::open(&dir.path().join("p.cc"))
+        .unwrap()
+        .admit(packet.clone(), inventory, &corpus, &entities)
+        .unwrap()
 }
 
 fn lowered(packet: &Packet, inv: &Inventory) -> Result<String, LowerError> {
@@ -137,7 +153,7 @@ fn a_packet_carrying_what_the_lowerer_does_not_render_is_refused() {
         let mut p = proof_packet();
         edit(&mut p);
         assert_eq!(
-            lower(&view(&p, &inv), &inv),
+            lower(&admitted(&p, &store), &inv),
             Err(LowerError::Unrendered { what }),
             "{what}"
         );
@@ -187,7 +203,7 @@ fn a_row_cannot_speak_for_an_id_whose_gloss_differs() {
     store.admit_revision(rev2, entries).unwrap();
     let inv = store.inventory().unwrap();
     assert_eq!(
-        lowered(&proof_packet(), &inv),
+        lower(&admitted(&proof_packet(), &store), &inv),
         Err(LowerError::GlossMismatch {
             id: iv("concept:4"),
             row: "control"

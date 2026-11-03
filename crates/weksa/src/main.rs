@@ -486,20 +486,22 @@ fn main() -> Result<()> {
             println!("admitted {key}");
         }
         Command::Lower { store, key } => {
-            let inventory = InventoryStore::open(&cli.inventory)?.inventory()?;
-            let packet = PacketStore::open(&store)?
+            let inventory_store = InventoryStore::open(&cli.inventory)?;
+            let inventory = inventory_store.inventory()?;
+            let mut packets = PacketStore::open(&store)?;
+            let packet = packets
                 .get(&key)?
                 .with_context(|| format!("no packet {key}"))?;
-            let view = validate(&packet, &inventory).map_err(|refusals| {
-                anyhow::anyhow!(
-                    "{}",
-                    refusals
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                        .join("; ")
+            // Admission is the only source of a LoweringInput; re-admitting the
+            // stored packet is a no-op write that re-runs every door check.
+            let view = packets
+                .admit(
+                    packet,
+                    &inventory_store,
+                    &CorpusStore::open(&cli.corpus)?,
+                    &EntityStore::open(&cli.entities)?,
                 )
-            })?;
+                .map_err(refused)?;
             println!("{}", lower(&view, &inventory)?);
         }
         Command::Score(args) => {

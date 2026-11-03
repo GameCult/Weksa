@@ -51,3 +51,13 @@ The live state architecture is ported from EpiphanyAgent in reduced form:
 Project truth does not belong in agent personality memory. If Weksa later grows
 role dossiers or heartbeat scheduling, those surfaces must remain separate from
 language-project truth.
+
+## Building And Verifying
+
+- `crates/weksa` depends on CultLib's `cultcache-rs` as a git dependency pinned by
+  `rev`, fetched from GitHub. With the default `CARGO_HOME` that fetch fails on a
+  Mind's host. Use the pre-fetched home:
+  `CARGO_HOME=/var/lib/mind-weksa-self/cargo-home cargo test --workspace`.
+- `weksa packet proof <store>` admits the nibu proof packet under the key
+  `packet:6e6962752d303031` (hex of `nibu-001`), not `nibu-proof-001`. Use that key
+  with `weksa lower <store> <key>`.
