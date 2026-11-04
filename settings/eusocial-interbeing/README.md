@@ -20,7 +20,7 @@ register, and history.
 - Weksa owns the language-project pipeline: ontology projection, grammar,
   morphology, phonology, diachrony, rendering, glossing, and critique.
 - A future language project owns one inhabitant language. Airawa imperial
-  register, pre-imperial Airawa registers, Sa'auei'a family-unit speech, ritual
+  register, pre-imperial Airawa registers, Sa'ueia family-unit speech, ritual
   breeding-ground registers, and ecological-partner contact systems should not
   collapse into one universal naming soup.
 
@@ -40,7 +40,7 @@ surfaces:
 - Airawa continent: mother-tree memory networks, archival dependency,
   disconnected networks, and the Airawa Empire's biological-memetic
   infrastructure.
-- Sa'auei'a continent: advanced nomadic civilization, family-unit political
+- Sa'ueia continent: advanced nomadic civilization, family-unit political
   movement, sacred breeding-ground commons, remembered routes, and reciprocal
   ecological relationships.
 

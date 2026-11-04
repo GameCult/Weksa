@@ -49,7 +49,7 @@ rights, witnessed warrior promise, and honorable scar evidence. See
 ### Provisional Airawa Phonology Notes
 
 Airawa phonology is not finalized, but the current design pressure distinguishes
-it from Sa'auei'a softness. Airawa names should feel sharper, more dorsal and
+it from Sa'ueia softness. Airawa names should feel sharper, more dorsal and
 coronal, and more willing to close around hard edges.
 
 Provisional tendencies:
@@ -58,9 +58,9 @@ Provisional tendencies:
 - sibilant and postalveolar fricatives should carry social texture: `s`, `z`,
   `sh` / `zh`;
 - `r` may be trilled in some Airawa registers;
-- syllables can tolerate clipped or closed shapes where Sa'auei'a forms would
+- syllables can tolerate clipped or closed shapes where Sa'ueia forms would
   flow longer and wetter;
-- avoid making native Airawa names read like smooth Sa'auei'a route names unless
+- avoid making native Airawa names read like smooth Sa'ueia route names unless
   the form is explicitly a loan, exonym, or cross-continental register.
 
 The current room consensus pushes this further for introductory speech: Airawa
@@ -75,9 +75,9 @@ voiced postalveolar fricative /zh/ [ʒ]. The name is being considered for a
 Zyphos Face drawn from a non-imperial Airawa archival/fungal-road tradition: an
 archivist shaped by memory as kinship, not content.
 
-## Sa'auei'a Pressures
+## Sa'ueia Pressures
 
-Sa'auei'a language work must account for:
+Sa'ueia language work must account for:
 
 - advanced nomadic civilization without permanent urban dominance
 - squad-sized family units
@@ -88,7 +88,7 @@ Sa'auei'a language work must account for:
 - reciprocity routes and seasonal corridors
 - camps, commons, and partner sites as distinct name targets
 
-The Sa'auei'a continent should not read as empty wilderness. Its language should
+The Sa'ueia continent should not read as empty wilderness. Its language should
 have ways to name civilization that moves, recurs, bargains, and is remembered by
 ecology.
 
