@@ -92,6 +92,42 @@ The Sa'ueia continent should not read as empty wilderness. Its language should
 have ways to name civilization that moves, recurs, bargains, and is remembered by
 ecology.
 
+## Sa'ueia Sound (Proposal For Deru To Cut)
+
+Status: proposal. Deru approved the outline in #zyphos on 2026-11-04; only the
+species name Sa'ueia is canon. Everything below is a working draft in
+`sa-ueia/table.yaml`, each entry marked `deru` or `weksa-placeholder`, and
+`sa-ueia/check.py` enforces what is mechanical.
+
+Taken from Deru's words:
+
+- five vowels: `a e i o u`;
+- no `h`, `q`, `y`; `k` where a `q` might have been;
+- short words, soft and open;
+- suffixing morphology; the one suffix so far is `-um`, a verb suffix;
+- identical letters merge at a morpheme join: `weru` + `um` gives `werum`,
+  `ila` + `werum` gives `ilawerum` (walk of knowledge);
+- a vowel only where one is needed.
+
+First roots, all Deru's: `ila` walk, `weru` know, `Olune` breeding ground
+(unanalyzed).
+
+Proposed, for Deru to accept or cut:
+
+- the apostrophe in Sa'ueia is orthographic, and is not counted as a letter;
+- "short" means at most 10 letters in a joined word, as a warning only;
+- no doubled letter inside a morpheme, so a double can only arise at a join
+  and the merge rule removes it.
+
+Open, not guessed:
+
+- the consonant inventory. Only `l m n r s w` appear in Deru's words so far,
+  and that is attestation, not an inventory;
+- whether the know root is `weru` or `wer-` (both give `werum`);
+- syllable shapes, stress, and what "vowel only where needed" means once the
+  inventory is known (the checker does not test it);
+- the phonological role of the apostrophe.
+
 ## Naming Brief Shape
 
 A Weksa naming brief should capture at least:

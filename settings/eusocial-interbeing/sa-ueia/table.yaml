@@ -1,0 +1,81 @@
+# Sa'ueia workshop table, first cut.
+# Source: Deru's words in #zyphos, 2026-11-04. Setting owner: Deru (the Zyphos vault).
+# Every entry carries provenance:
+#   deru               - said by Deru, or part of the sound outline Deru approved
+#   weksa-placeholder  - Weksa's stand-in so the checker can run; Deru may cut it
+# Only the species name Sa'ueia is canon. Everything else here is a working
+# draft, even when its provenance is deru.
+
+roots:
+  - form: ila
+    gloss: walk
+    provenance: deru
+  - form: weru
+    gloss: know
+    provenance: deru
+    note: >
+      Deru gave "werum" (knowledge, maybe a verb) and was asked whether -um
+      suffixes wer- or weru. "weru" is the reading under which the join rule
+      does visible work (weru + um -> werum); wer- gives the same surface form.
+      Open for Deru.
+  - form: olune
+    gloss: breeding ground
+    provenance: deru
+    analysis: unanalyzed   # no morpheme boundaries known
+  - form: sa'ueia
+    gloss: the species name
+    provenance: deru
+    canon: true
+    analysis: unanalyzed
+    note: Apostrophe is part of the canon spelling; its phonological role is open.
+
+suffixes:
+  - form: um
+    gloss: verb suffix
+    provenance: deru
+
+rules:
+  vowels:
+    value: [a, e, i, o, u]
+    provenance: deru
+  forbidden_letters:
+    value: [h, q, y]
+    provenance: deru
+    note: k is used where q might have been.
+  join_merge_identical:
+    value: true
+    provenance: deru
+    note: >
+      When one morpheme ends in the letter the next begins with, they merge to
+      one letter at the join (weru + um -> werum, ila + werum -> ilawerum).
+  morphology_direction:
+    value: suffixing
+    provenance: deru
+  short_words:
+    provenance: deru
+    checked: false   # no number from Deru
+  max_word_letters:
+    value: 10
+    provenance: weksa-placeholder
+    severity: warning
+    note: Stand-in for "short words"; apostrophes not counted. Deru sets the real bound.
+  no_doubled_letters_inside_morpheme:
+    value: true
+    provenance: weksa-placeholder
+    note: Follows from the merge rule only if doubles never occur inside a morpheme either.
+  vowel_only_where_needed:
+    provenance: deru
+    checked: false   # not mechanically decidable without the consonant inventory
+
+consonants:
+  inventory: open   # Deru has not given it. The checker does not guess.
+  seen_in_deru_words: [l, m, n, r, s, w]   # attested above, not an inventory
+
+# Joined forms the checker must reproduce. Each: morphemes in order, expected surface.
+compositions:
+  - morphemes: [weru, um]
+    expected: werum
+    provenance: deru      # "werum" is Deru's form
+  - morphemes: [ila, werum]
+    expected: ilawerum
+    provenance: deru      # "Ilawerum", walk of knowledge
