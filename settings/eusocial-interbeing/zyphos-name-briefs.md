@@ -22,13 +22,12 @@ Both brief sets wait on Meta's answers to `vq-first-language` and
 - **Airawa** has a provisional list (R-A below). It is a tendency list, not a
   phonology: no vowel inventory, no photactic limits, no stress rule beyond
   "heavy on socially important forms".
-- **Sa'ueia has no phonology section at all.** The only rules are negative and
-  comparative: softer than Airawa, "flow longer and wetter", route names read
-  smooth, and "avoid making native Airawa names read like smooth Sa'ueia route
-  names unless the form is explicitly a loan, exonym, or cross-continental
-  register". Briefs below that cite R-S1..R-S3 are citing that one paragraph.
-  Accepting or rejecting a Sa'ueia name on sound alone is therefore weak
-  evidence until someone writes a Sa'ueia sound section.
+- **Sa'ueia has a working sound section**
+  ([Sa'ueia Sound](./language-design.md#saueia-sound-proposal-for-deru-to-cut),
+  enforced by `sa-ueia/check.py` against `sa-ueia/table.yaml`). It is a
+  proposal Deru approved in outline; only the species name is canon. Rule
+  labels R-S4..R-S8 below cite it. The consonant inventory, syllable shapes and
+  stress are still open, so sound arguments beyond the letter rules stay weak.
 - The **imperial Airawa register** has no sound rules either. It is only
   described as "an artificial quarter-continent clausiform exception imposed
   through biological-memetic control", not "named like a normal state with wet
@@ -47,6 +46,11 @@ Rule labels used below (quoted or paraphrased from `language-design.md`):
 | R-S1 | Sa'ueia is softer than Airawa. |
 | R-S2 | Sa'ueia forms flow longer and wetter than Airawa. |
 | R-S3 | Sa'ueia route names read smooth. |
+| R-S4 | Sa'ueia letters: vowels `a e i o u`; forbidden `h q y` (`k` where a `q` might have been). |
+| R-S5 | Sa'ueia: short words, soft and open; at most 10 letters joined (warning, Weksa placeholder). |
+| R-S6 | Sa'ueia: suffixing morphology; identical letters merge at a join (`weru`+`um` -> `werum`). |
+| R-S7 | Sa'ueia: no doubled letter inside a morpheme (Weksa placeholder); a double arises only at a join, and the merge removes it. |
+| R-S8 | Sa'ueia roots from Deru: `ila` walk, `weru` know, `olune` breeding ground (unanalyzed), `-um` verb suffix. Composed: `werum`, `ilawerum` (walk of knowledge). |
 | R-N | Naming rule: meaning decomposition first; define the speaker's scale, name type (endonym, exonym, ritual avoidance, technical, imperial administrative, route-name, child-name, trade gloss), what the speaker's ontology makes obligatory, and whether the name is stable, seasonal, situational, inherited or evasive. |
 
 Existing scratch evidence to keep in view: `Druzkai` (Face for a non-imperial
@@ -104,8 +108,8 @@ namer:
     minus if it was only a sound resemblance.
   - `Dozkai`: closed first syllable, open second ending in a diphthong `ai`.
     Fits R-A1/R-A2 but the open `-ai` tail is the softer shape R-A4 contrasts
-    against. Also one phoneme away from the scratch name `Druzkai`; two names
-    with that near neighbourhood will blur unless one is explicitly derived from
+    against. Also two edits from the scratch name `Druzkai` (insert `r`, `o` to
+    `u`); two names with that near neighbourhood will blur unless one is explicitly derived from
     the other.
   - `Tegzhir`: `t-g-zh` cluster, closed final syllable, clean fit. The only
     candidate with a front vowel in the stressed syllable, which may or may not
@@ -253,7 +257,8 @@ Common context: the Sa'ueia civilization is mobile, family-unit based
 sacred communal breeding grounds and reciprocal ecological partners. A name
 earns its place by revealing the ecological deal, reproductive pressure,
 memory technology or route consequence (`language-design.md`, design target).
-The sound rules available are only R-S1..R-S3 and R-A5; see the caveat above.
+The sound rules available are R-S1..R-S8 and R-A5; the inventory, syllable
+shapes and stress are still open.
 
 ### S1. Sa'ueia self-name (candidates: `Ellumaiwa`, `Sauwele`) — DRAFT
 
@@ -279,11 +284,14 @@ target:
   vault as the species/continent ethnonym; the candidates may be (a) family-unit
   *kind* names, (b) nicknames for the people derived from it, or (c) a
   competing ethnonym. This needs `vq-name-scope` before judging.
-- **Sound rules that apply:** R-S1, R-S2; R-A5 as a negative check.
-- **Per-candidate read (judgment):**
-  - `Ellumaiwa`: long, open, liquid-heavy (`l`, `m`, `w`); matches R-S1/R-S2
-    strongly. Four syllables.
-  - `Sauwele`: short, open vowels and `w`, `l`; matches R-S1/R-S2, but it
+- **Sound rules that apply:** R-S1, R-S2, R-S4, R-S5, R-S7; R-A5 as a negative check.
+- **Per-candidate read (judgment, then the letter rules):**
+  - `Ellumaiwa`: long, open, liquid-heavy. Fails R-S7: `ll` is a doubled
+    letter inside a morpheme, with no join to merge it, unless the form
+    is parsed as `el`+`lumaiwa` (then the merge rule would give `elumaiwa`).
+    Also 9 letters, near the R-S5 bound. Needs a respelling or a parse, not a
+    patch.
+  - `Sauwele`: short, open vowels and `w`, `l`; passes R-S4/R-S5/R-S7, but it
     begins `Sa-u-` exactly like `Sa'ueia`. Reads as a respelling or derivation
     of the existing name rather than an independent self-name.
 - **Reject if:** the owner has not decided the target scale; `Sauwele` is
@@ -293,7 +301,7 @@ target:
   "nomad" is a camera-angle word); it cannot take a family-specific modifier
   when a particular unit needs naming.
 
-### S2. Breeding ground (`Oluneihe`) — DRAFT
+### S2. Breeding ground (`Olune`, Deru's root; `Oluneihe` withdrawn) — DRAFT
 
 ```yaml
 target:
@@ -317,16 +325,21 @@ target:
   these visibly different). If the name is a *kind* name, it has to be
   generic enough to name every ground; if it names one ground, it needs a
   proper-name layer.
-- **Sound rules that apply:** R-S1, R-S2, R-S3.
-- **Read:** `Oluneihe` is long, liquid, open, ends on the `-ihe` vowel
-  sequence. Strong fit to R-S1/R-S2. The `-eihe` tail does not resemble `-ia`
-  of `Sa'ueia`; no collision.
-- **Reject if:** it decomposes to "home", "village", "city" or "capital" (the
-  breeding ground failing as a capital is a stated system failure); it equals
-  or contains the route word (S3) or the family self-name (S1), which would
-  merge distinct targets; it is used for a camp.
+- **Sound rules that apply:** R-S1, R-S2, R-S3, R-S4, R-S8.
+- **Read:** the target already has a name from Deru: `olune`, breeding ground
+  (R-S8), unanalyzed. The earlier candidate `Oluneihe` is withdrawn: it
+  contains `h`, which R-S4 forbids, and its stem `Olune` is Deru's own root, so
+  the candidate only added a suffix to a word that already answers the brief.
+  What remains open for this brief is whether `olune` is the kind-word, a
+  single ground's name, or needs a proper-name layer; and its morpheme
+  boundaries, which Deru has not given.
+- **Reject if:** any proposed form contains `h`, `q` or `y`; it decomposes to
+  "home", "village", "city" or "capital" (the breeding ground failing as a
+  capital is a stated system failure); it equals or contains the route word
+  (S3) or the family self-name (S1), which would merge distinct targets; it is
+  used for a camp; it replaces `olune` without Deru's say.
 
-### S3. Route as obligation (`Ilawerum`) — DRAFT
+### S3. Route as obligation (no candidate) — DRAFT
 
 ```yaml
 target:
@@ -348,15 +361,16 @@ target:
   distinguishes *the way* from *the debt*. If both senses are one word, the
   language is making a commitment about their identity that the vault does
   not make.
-- **Sound rules that apply:** R-S2, R-S3 (route names read smooth). Also R-A5:
+- **Sound rules that apply:** R-S2, R-S3 (route names read smooth), R-S4..R-S8. Also R-A5:
   Sa'ueia route names are what Airawa native names must not accidentally
   resemble.
-- **Read:** `Ilawerum` is smooth through most of the word but ends in `-rum`,
-  a closed syllable with a nasal coda, which is the one place it trends toward
-  the clipped shapes the Airawa rule assigns to the other language. Not a
-  failure by R-S3 (no stated rule against closed syllables in Sa'ueia), but
-  worth a note: the project should state whether Sa'ueia permits final nasals.
-- **Reject if:** it is a plain toponym (no debt sense); it is the same word as
+- **Read:** `Ilawerum` is not a candidate. It is Deru's own composition,
+  `ila` (walk) + `werum` (knowledge, verb form `weru`+`um`), glossed "walk of
+  knowledge" (R-S8). It names a different thing, and the checker reproduces it
+  as a fixed composition. Any route-as-obligation word should be built from
+  Deru's roots or new roots she accepts, and must not be confused with, or
+  collide with, `ilawerum`.
+- **Reject if:** it is `ilawerum` or only a respelling of it; it is a plain toponym (no debt sense); it is the same word as
   the breeding ground (S2) or shares its stem without a morphological reason;
   the owner decides route and obligation are two words and this is only one.
 
@@ -368,32 +382,9 @@ target:
 - **First language:** Airawa vs imperial Airawa vs Sa'ueia vs a narrow
   naming-brief interlingua (`vq-first-language`; `state/map.yaml`). The Airawa
   briefs are better supported by existing sound evidence; the Sa'ueia briefs
-  have no phonology to defend them.
-- **A Sa'ueia sound section** in `language-design.md` is the missing piece for
-  S1-S3 to be judged on more than the one paragraph of contrast.
+  have only the working sound section, which leaves the inventory open.
+- **Sa'ueia open items** (inventory, syllable shapes, stress, apostrophe role,
+  `weru` versus `wer-`) are Deru's; S1-S3 are judged on the letter rules only
+  until she cuts them.
 - **Imperial register sound rules** for A4.
 - **`kh` in `Kharzdun`**: add to the Airawa inventory or respell.
-
-## Spelling state: Sa'auei'a vs Sa'ueia (as of 2026-11-03)
-
-The rename is incomplete in both repos. Observed, not fixed here:
-
-- **Zyphos vault** (`GameCult/Zyphos`, head `7661e1f`): the vault's own git log
-  has the rename ("Renamed mother trees and Sa'ueia", `3afb94f`, 2026-07-01).
-  Prose still mixes both spellings: roughly 45 `Sa'ueia` occurrences against 41
-  `Sa'auei'a`, across 27 files that still contain the old form (including
-  `AGENTS.md`, `notes/*`, and mid-sentence mixtures such as `World/index.md`,
-  which writes `[[Sa'ueia Continent]]` next to "Sa'auei'a nomadic
-  civilization"). One filename keeps the old form:
-  `Technologies/Sa'auei'a Mobile Technologies.md` (and its index entry).
-  Five filenames already use `Sa'ueia`.
-- **Weksa** (this repo): `settings/eusocial-interbeing/language-design.md` (6
-  occurrences) and `README.md` (2) and `state/map.yaml` (2) still use
-  `Sa'auei'a`; `.voidbot/state/weksa-birth-seed-operations.json` quotes it in
-  summaries. This brief set uses `Sa'ueia` (the spelling the follow-up uses)
-  and leaves `language-design.md` alone, so the rule table above quotes rules
-  that the source file spells `Sa'auei'a`.
-- The two spellings differ by more than an apostrophe: the old form has an
-  internal glottal (`Sa'auei'a`), the new one does not (`Sa'ueia`). Any
-  phonological argument that depended on the glottal (the old name's
-  syllable-break) has no support in the new spelling.
