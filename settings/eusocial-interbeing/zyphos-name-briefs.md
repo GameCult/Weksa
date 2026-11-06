@@ -15,6 +15,76 @@ from the Zyphos vault (`Species/Airawa`, `Species/Matriarch Trees`,
 Both brief sets wait on Meta's answers to `vq-first-language` and
 `vq-name-scope`. Where a brief's scope depends on them it says so.
 
+## Deru's answers, 2026-11-06 (canon for Zyphos and Sa'ueia)
+
+Source: Deru in #swarm, relayed in Weksa's memories of 2026-11-06 (12:03Z and
+12:07Z). Each line is marked **settled** (Deru said it) or **invented** (this
+file's reading). Where it overrides a brief or rule below, that text is marked
+SUPERSEDED in place.
+
+| Fact | Status |
+| --- | --- |
+| The main word comes first in a Sa'ueia compound (`ilawerum`: walk of knowledge). | **settled** |
+| Sharing memories and knowledge is emphasised in Sa'ueia culture. No reputation attaches to the act of remembering, to the partner or to the memory. | **settled** |
+| Each Airawa tribe has its own name, all linked to matriarch trees. | **settled** |
+| Phonotactics, for **both** Airawa and Sa'ueia: two consonants never meet; two identical vowels never meet; no `q`, only `k` (so `qerath` is impossible). | **settled** |
+| "`th` is not a cluster" (as relayed). | **settled**, but how far it extends is open: the checker reads it as `th` = one consonant. `sh`, `zh` and `kh` are treated as two consonants until Deru says otherwise. |
+| The Airawa label for the Sa'ueia is one word, not unkind, with no discrimination. | **settled** |
+| Individual names are given by matriarch trees, in both continents. Names are not inherited, only given through trees. | **settled** |
+| High titles (shaman, leader) can serve as names. | **settled** |
+| Airawa names can change after a deed meaningful to the whole tribe. Sa'ueia names change by council consensus. | **settled** |
+| The remaining Airawa sound tendencies (hard plosives, textured sibilants, heavy stress) and the Sa'ueia open items (inventory, syllable shapes, stress, `weru` vs `wer-`, apostrophe role) stay as written. | unchanged, still **invented** or open |
+
+What this retires, by id:
+
+- **A1..A3 (Airawa) are about a tribe, not a people.** The pan-Airawa self-name
+  question (`vq-name-scope`) is answered: names are per tribe, each linked to a
+  matriarch tree. A1's text below still describes a pan-Airawa word and is
+  **SUPERSEDED** in that respect; it is not yet rewritten as a per-tribe pattern.
+  The tribes' actual names are Deru's.
+- **S1 and S3 lose the reputation argument.** The briefs' reading that "standing
+  is the partners' memory of generosity" and "being recognized as beneficial"
+  conflicts with answer 2. The Sa'ueia value *sharing* memory and knowledge, so
+  memory-as-currency is **SUPERSEDED**; `muna` ("memory") stays only as a
+  neutral word for what is shared.
+- **Individual names** (Zyphos names note, section "Individuals") are no longer
+  blocked on "how names are earned": they are **given by matriarch trees**.
+  Airawa: the tree gives the name and a deed can change it. Sa'ueia: the tree
+  gives it and council consensus changes it. Titles may be used as names.
+  Nothing is proposed for individuals beyond this pattern.
+- **R-A4 is SUPERSEDED** (closed syllables): a closed syllable followed by a
+  consonant-initial syllable puts two consonants together, which Deru forbids.
+  Only a word-final consonant survives.
+- **R-A1 and `qatar`-like forms:** `q` is gone; the first-contact slice's
+  `qatar`, `daruq`, `karuq`, `qerath`, `thaleq` all need a `k` respelling.
+  `Druzkai` breaks the adjacency rule (`dr`, `zk`) and `Serak` passes. Neither is
+  canon.
+- **R-S7 is SUPERSEDED** by Deru's two vowel and consonant rules: a doubled
+  letter is now excluded wherever it appears, not only inside a morpheme.
+
+Phonotactic check of every earlier candidate, with `sa-ueia/check.py`
+(see `sa-ueia/names.yaml` for the current names, which all pass):
+
+| Candidate | Result |
+| --- | --- |
+| `Qazhkar` | fails: `q`; `zh`, `hk` as adjacent consonants |
+| `Dozkai` | fails: `zk` |
+| `Tegzhir` | fails: `gz`, `zh` |
+| `Kharzdun` | fails: `kh`, `rz`, `zd` |
+| `Qetoz` | fails: `q` |
+| `Gisqat` | fails: `q`, `sq` |
+| `Zhedkor` | fails: `zh`, `dk` |
+| `Tkarzet` | fails: `tk`, `rz` |
+| `Ellumaiwa` | fails: `ll` |
+| `Sauwele` | passes (but still too close to `Sa'ueia`, see S1) |
+| `Oluneihe` | fails: `h` (already withdrawn) |
+| `Druzkai` | fails: `dr`, `zk` |
+
+The Zyphos names note (PR 2) proposed six Airawa names from closed-syllable
+roots; all six fail the same rules and are replaced there by names built from
+open roots. Those roots are Weksa placeholders and `kerath` is the slice's
+`qerath` with `q` replaced and `th` kept: both as invented as before.
+
 ## What the sound rules actually give us
 
 `language-design.md` is thin, and the briefs should not pretend otherwise.
@@ -37,19 +107,19 @@ Rule labels used below (quoted or paraphrased from `language-design.md`):
 
 | Label | Rule |
 | --- | --- |
-| R-A1 | Airawa: dorsal and coronal plosives prominent (`k g q t d`). |
+| R-A1 | Airawa: dorsal and coronal plosives prominent (`k g t d`; `q` retired, Deru 2026-11-06). |
 | R-A2 | Airawa: sibilants and postalveolars carry social texture (`s z sh zh`). |
 | R-A3 | Airawa: `r` may be trilled in some registers. |
-| R-A4 | Airawa: clipped or closed syllables tolerated, where Sa'ueia would flow longer and wetter. |
+| R-A4 | SUPERSEDED (Deru, 2026-11-06): no two consonants meet, so only a word-final consonant closes a syllable. |
 | R-A5 | Native Airawa names must not read like smooth Sa'ueia route names unless explicitly loan, exonym or cross-continental register. |
 | R-A6 | Room consensus: hard edges, clipped/closed syllables, heavy stress on socially important forms, so claims land with weight. |
 | R-S1 | Sa'ueia is softer than Airawa. |
 | R-S2 | Sa'ueia forms flow longer and wetter than Airawa. |
 | R-S3 | Sa'ueia route names read smooth. |
-| R-S4 | Sa'ueia letters: vowels `a e i o u`; forbidden `h q y` (`k` where a `q` might have been). |
+| R-S4 | Sa'ueia letters: vowels `a e i o u`; forbidden `h q y` (`k` where a `q` might have been). `q` is forbidden in Airawa too (Deru, 2026-11-06). |
 | R-S5 | Sa'ueia: short words, soft and open; at most 10 letters joined (warning, Weksa placeholder). |
 | R-S6 | Sa'ueia: suffixing morphology; identical letters merge at a join (`weru`+`um` -> `werum`). |
-| R-S7 | Sa'ueia: no doubled letter inside a morpheme (Weksa placeholder); a double arises only at a join, and the merge removes it. |
+| R-S7 | SUPERSEDED (Deru, 2026-11-06): no two consonants and no two identical vowels meet, anywhere, in Sa'ueia and Airawa. |
 | R-S8 | Sa'ueia roots from Deru: `ila` walk, `weru` know, `olune` breeding ground (unanalyzed), `-um` verb suffix. Composed: `werum`, `ilawerum` (walk of knowledge). |
 | R-N | Naming rule: meaning decomposition first; define the speaker's scale, name type (endonym, exonym, ritual avoidance, technical, imperial administrative, route-name, child-name, trade gloss), what the speaker's ontology makes obligatory, and whether the name is stable, seasonal, situational, inherited or evasive. |
 

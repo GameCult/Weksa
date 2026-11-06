@@ -1,0 +1,45 @@
+# Proposed names, run through check.py by `check.py --names names.yaml`.
+# Mirrors notes/inhabitant-names-draft.md in the Zyphos repo (PR 2). Every name
+# is a draft; none is canon. Deru's roots are in table.yaml and are not repeated.
+# Each name lists its morphemes; the checker joins them (identical letters merge
+# at a join) and applies Deru's rules (2026-11-06), which bind both languages:
+# no adjacent consonants, no identical adjacent vowels, k and never q.
+
+roots:
+  saueia:
+    - {form: muna, gloss: memory; to remember, provenance: weksa-placeholder}
+    - {form: sela, gloss: gift; giving, provenance: weksa-placeholder}
+    - {form: rena, gloss: return; come back, provenance: weksa-placeholder}
+    - {form: kasu, gloss: ecological partner, provenance: weksa-placeholder}
+    - {form: mano, gloss: kin, provenance: weksa-placeholder}
+    - {form: sulo, gloss: stay; be rooted, provenance: weksa-placeholder}
+  # Airawa roots were closed syllables (gor, dak, zeg, sar, tez, -ur). Those put
+  # two consonants together at every join, so each is respelled open here. The
+  # tribe-linked-to-a-matriarch-tree fact (Deru) is not a root: see the briefs.
+  airawa:
+    - {form: gora, gloss: mother-tree body, provenance: weksa-placeholder}
+    - {form: daka, gloss: keep; hold in memory, provenance: weksa-placeholder}
+    - {form: zege, gloss: sever, provenance: weksa-placeholder}
+    - {form: sara, gloss: web; network, provenance: weksa-placeholder}
+    - {form: teza, gloss: order; ordinance, provenance: weksa-placeholder}
+    - {form: ur, gloss: pending; awaiting (imperial register suffix), provenance: weksa-placeholder}
+    - {form: kerath, gloss: obligation; sworn bond (the slice's qerath without q), provenance: weksa-placeholder}
+
+names:
+  # Sa'ueia
+  - {form: Manoila, language: saueia, morphemes: [mano, ila]}
+  - {form: Selamuna, language: saueia, morphemes: [sela, muna]}
+  - {form: Ilamuna, language: saueia, morphemes: [ila, muna]}
+  - {form: Ilarena, language: saueia, morphemes: [ila, rena]}
+  - {form: Munaila, language: saueia, morphemes: [muna, ila]}
+  - {form: Kasu, language: saueia, morphemes: [kasu]}
+  - {form: Kasumuna, language: saueia, morphemes: [kasu, muna]}
+  - {form: Olunerena, language: saueia, morphemes: [olune, rena]}
+  - {form: Munasulo, language: saueia, morphemes: [muna, sulo]}
+  # Airawa
+  - {form: Goradaka, language: airawa, morphemes: [gora, daka]}
+  - {form: Gorakerath, language: airawa, morphemes: [gora, kerath]}
+  - {form: Zegedaka, language: airawa, morphemes: [zege, daka]}
+  - {form: Gorasara, language: airawa, morphemes: [gora, sara]}
+  - {form: Tezasara, language: airawa, morphemes: [teza, sara]}
+  - {form: Saratezaur, language: airawa, morphemes: [sara, teza, ur]}
