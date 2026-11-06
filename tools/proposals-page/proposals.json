@@ -1,0 +1,122 @@
+{
+  "as_of": "2026-11-06",
+  "intro": "Weksa drafts ideas for settings and languages that other people own. None of it is canon. Each card says what is proposed, which parts rest on existing material and which parts Weksa made up, and what Weksa needs from you. Answer in one sentence in the project room; you do not need to open the pull request.",
+  "proposals": [
+    {
+      "id": "zyphos-2",
+      "title": "Draft names for Zyphos peoples and places",
+      "repo": "Zyphos",
+      "pr": 2,
+      "url": "https://eureka.gamecult.org/forge/GameCult/Zyphos/pulls/2",
+      "status": "open, not merged",
+      "owner": "Deru (setting owner)",
+      "what": "A note proposing names for the Sa'ueia and Airawa: the family unit, routes, the continent, memory partners, the mother tree, the Airawa empire and its word for unincorporated natives. Each name shows how it is built from smaller word-pieces and what it is meant to carry. The vault itself is not edited; the note is one new file.",
+      "evidence": [
+        "Sa'ueia names are built only from Deru's roots (ila walk, weru know, olune breeding ground, -um) plus new stand-in roots, and pass the project's checker (0 errors, 0 warnings).",
+        "No name collides with Deru's words; the near-misses are listed in the note.",
+        "Airawa material uses the slice's word qerath (obligation, sworn bond) and the sound tendencies already written down."
+      ],
+      "invention": [
+        "Every Sa'ueia root not from Deru (muna memory, sela gift, rena return, kasu partner, mano kin, sulo stay) is a Weksa stand-in.",
+        "Airawa roots (gor, dak, zeg, sar, tez, -ur) have no grammar or sound system behind them; they only carry meaning.",
+        "The word order 'X of Y' is inferred from one example, ilawerum."
+      ],
+      "stance": "Weksa thinks the names are worth reading as a starting vocabulary, not as answers. Confidence is moderate on the Sa'ueia forms (they obey the rules we have) and low on the Airawa forms (the rules barely exist). Nothing should be adopted before Deru rules.",
+      "forks": [
+        "Sa'ueia compounds: is the main word first, as in ilawerum 'walk of knowledge', or can it go either way?",
+        "Would the Sa'ueia want 'memory' as a word-piece at all, or do they put reputation in the partner rather than in the act of remembering?",
+        "Airawa naming scope: one word for all Airawa, one per tribe, or a word for the people-with-their-trees?",
+        "Does the Sa'ueia consonant list allow the letters used here (l m n r s w, and k for q)?",
+        "Do the Sa'ueia call the Airawa by one word, and is classing them as 'those whose memory stays in place' too unkind or just wrong?",
+        "How are individual names earned, inherited or changed? No personal names can be proposed until this is set."
+      ]
+    },
+    {
+      "id": "weksa-6",
+      "title": "Rust to Dust: the 'imperial frame' is the empire's reading, not something the player sends",
+      "repo": "Weksa",
+      "pr": 6,
+      "url": "https://eureka.gamecult.org/forge/GameCult/Weksa/pulls/6",
+      "status": "open, not merged",
+      "owner": "Rust to Dust setting owner",
+      "what": "One example in the Rust to Dust language notes still showed the client sending 'authentic local defiance' as a fact about an ambush. The notes elsewhere already say that reading belongs to the empire. This change replaces the example with plain facts plus the speaker's stance (contempt, restraint) and marks the old value as something the empire's reading produces.",
+      "evidence": [
+        "A standing ruling (rtd-imperial-aesthetic-reading-to-ontology) already puts aesthetic readings on the ontology side.",
+        "The real packet fields live in crates/weksa/src/packet.rs; the example is now labelled a sketch that does not define them."
+      ],
+      "invention": [
+        "The numbers in the stance example (contempt 600, restraint 800) are made up to show the shape.",
+        "'Authentic local defiance' is kept as a class the empire could output; whether it survives is undecided."
+      ],
+      "stance": "Weksa is fairly confident the example was inconsistent with the ruling and the fix is right. Weksa is unsure about the example values and about keeping that class.",
+      "forks": [
+        "Should 'authentic local defiance' stay as one of the empire's reading classes, or be dropped or renamed?",
+        "Do the example stance values (contempt 600, restraint 800 on a 0 to 1000 scale) look sensible for a father ambushing a guard with an improvised tool?"
+      ]
+    },
+    {
+      "id": "rtd-notes",
+      "title": "Rust to Dust: open design questions in the language notes",
+      "repo": "Weksa",
+      "pr": null,
+      "url": "https://eureka.gamecult.org/forge/GameCult/Weksa/src/branch/main/settings/rust-to-dust/imperial/language-design.md",
+      "status": "draft on main (r0), not ruled",
+      "owner": "Rust to Dust setting owner",
+      "what": "A first draft of how the empire's language might work: its sound shape, how it splits ideas like victory, mastery, spectacle and vulgar overmatch, and how decoration works as its central metaphor (address, insult, praise, grief). It is written so a program could choose words from facts about a scene, not from English glosses.",
+      "evidence": [
+        "Tight, composed sound and 'constraint is mastery' come from the setting source.",
+        "The list of distinctions (unpainted as shame, danger, contempt, purity; resistance as threat, folk art, breakout talent) comes from the source and the battle-royale commentary."
+      ],
+      "invention": [
+        "The sound inventory (voiceless stops, held fricatives) is a draft, and the reptilian vocal tract is the weakest-supported choice.",
+        "Decoration-as-metaphor in grammar is the draft's strongest invention and the easiest to overrule.",
+        "The breakdown of victory, mastery, spectacle and overmatch is a hypothesis."
+      ],
+      "stance": "Weksa thinks the decoration metaphor is the most promising idea here and also the least backed by the source. Treat the whole draft as overrulable.",
+      "forks": [
+        "Does the empire's language really talk about grief and obligation as things worn, like decoration?",
+        "Is 'mastery = victory plus chosen constraint' what the setting means, or is something missing?",
+        "Which human distinctions should this language collapse, and which should it force speakers to make?",
+        "Do you want the empire to misread distributed cooperation as noise, or as one performer's act?"
+      ]
+    },
+    {
+      "id": "weksa-5",
+      "title": "Sa'ueia workshop: word table, checker, sound proposal",
+      "repo": "Weksa",
+      "pr": 5,
+      "url": "https://eureka.gamecult.org/forge/GameCult/Weksa/pulls/5",
+      "status": "merged 2026-11-04 (questions below remain open)",
+      "owner": "Deru (setting owner)",
+      "what": "A table of Sa'ueia word-pieces, a checker that joins them and flags rule breaks, and a written sound proposal. This is merged work; its open questions are still unanswered and the names proposal above depends on them.",
+      "evidence": [
+        "Every table entry says whether it is Deru's word or a Weksa placeholder.",
+        "The checker has 15 tests."
+      ],
+      "invention": [
+        "The sound section is a proposal for Deru to cut.",
+        "The consonant list is marked open on purpose; the checker refuses to accept a guess."
+      ],
+      "stance": "Weksa is confident the tooling works and not at all confident about the sound rules. Only the species name Sa'ueia is canon.",
+      "forks": [
+        "Is the root 'know' weru or wer-?",
+        "What does the apostrophe do in Sa'ueia?",
+        "What does 'short' mean in numbers for a word (the draft limit is 10 letters)?"
+      ]
+    },
+    {
+      "id": "zyphos-1",
+      "title": "Respell Sa'auei'a as Sa'ueia",
+      "repo": "Zyphos",
+      "pr": 1,
+      "url": "https://eureka.gamecult.org/forge/GameCult/Zyphos/pulls/1",
+      "status": "merged 2026-11-04 (done)",
+      "owner": "Deru (setting owner)",
+      "what": "A spelling-only sweep with Deru's permission: 53 occurrences in 26 files and one file name now use Sa'ueia. Shown for completeness; nothing further is asked.",
+      "evidence": ["Deru's permission, 2026-11-04 in the Zyphos room."],
+      "invention": ["None. One identifier, saaueia-nomadic-advanced in state/branches.json, was left alone as a slug."],
+      "stance": "Done. The only loose end is whether that slug should be renamed too.",
+      "forks": ["Should the slug saaueia-nomadic-advanced in state/branches.json be respelled as well?"]
+    }
+  ]
+}
