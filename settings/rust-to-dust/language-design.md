@@ -56,7 +56,9 @@ Structured intent carries neutral facts plus stance. The imperial ontology
 derives form, discipline, spectacle and honor status from them downstream
 (see `imperial/language-design.md`, Section 6).
 
-Example:
+Illustrative sketch (field names are not the packet schema; the executable
+schema is `crates/weksa/src/packet.rs`). The client submits neutral facts and
+stance only:
 
 ```json
 {
@@ -64,9 +66,17 @@ Example:
   "act": "ambush",
   "actor": "father",
   "target": "imperial_guard",
-  "imperial_frame": "authentic_local_defiance"
+  "instrument": "improvised_tool",
+  "stance": { "affect": { "contempt": 600 }, "restraint": 800 }
 }
 ```
+
+An earlier draft of this example carried `"imperial_frame":
+"authentic_local_defiance"`. That value is the imperial ontology's reading of
+the facts above (performer-centered, local, sincere refusal), not a fact the
+client can know, so it does not belong in the packet
+(`rtd-imperial-aesthetic-reading-to-ontology`). Classes such as "authentic
+local defiance" are outputs of the ontology projection.
 
 ## Open Questions
 
