@@ -189,6 +189,9 @@ pub enum Slot {
     Predication,
     Relation,
     Stance,
+    /// The relation of the speaker to the addressee in the scene; see
+    /// `LoweringInput::with_scene`.
+    Scene,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -502,6 +505,52 @@ pub fn proof_revision() -> (InventoryRevision, Vec<InventoryEntry>) {
         InventoryRevision {
             n: 2,
             parent: Some(1),
+            changes,
+            frozen: false,
+        },
+        entries,
+    )
+}
+
+/// Revision 3: the speaker's relation to the addressee, features of slot
+/// `Scene`. Hand-seeded like [`proof_revision`] until the loop's minting round
+/// and cut `speaker-scene` own the Scene vocabulary. `relative_status` is the
+/// speaker's standing against the addressee's, not a register word:
+/// what it selects is each language's ontology's business.
+pub fn scene_revision() -> (InventoryRevision, Vec<InventoryEntry>) {
+    let taken = seed()
+        .1
+        .iter()
+        .filter(|e| e.family() == Family::Feature)
+        .count() as u32;
+    let labels = ["below", "level", "above"]
+        .map(|l| OptionLabel::parse(l).expect("seed labels are well formed"));
+    let relative_status = ValueKind::Options(
+        OptionSet::new(labels.to_vec()).expect("seed option sets are well formed"),
+    );
+    let mut entries = Vec::new();
+    for (i, (gloss, kind)) in [
+        ("relative_status", relative_status),
+        ("intimacy", ValueKind::Grade),
+        ("in_group", ValueKind::Flag),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        entries.push(InventoryEntry {
+            id: Family::Feature.id(NonZeroU32::MIN.saturating_add(taken + i as u32)),
+            gloss: gloss.to_string(),
+            value_kind: Some(kind),
+            applies_to: vec![Slot::Scene],
+            introduced_rev: 3,
+            retired_rev: None,
+        });
+    }
+    let changes = entries.iter().map(|e| Change::Add(e.id)).collect();
+    (
+        InventoryRevision {
+            n: 3,
+            parent: Some(2),
             changes,
             frozen: false,
         },

@@ -5,7 +5,8 @@
 //! the crate-private `admissible`. The stance is checked like every feature
 //! list, in slot `Stance`. The rules are V1..V8 and V10..V12: the shape of an id
 //! or a grade is its type's parse, not a rule, so V9 is retired and not
-//! renumbered.
+//! renumbered. V13 guards the one other way features reach a lowering view:
+//! [`LoweringInput::with_scene`].
 //!
 //! `validate` owns form and capacity and makes no leak decision. A packet's one
 //! free text is its trace (`notes` and `rejected_readings`): `validate` does not
@@ -66,6 +67,10 @@ pub enum Refusal {
     V11DuplicateRole { role: InvId, predication: NodeId },
     /// V12: more referents, predications and relations than `Packet::MAX_NODES`.
     V12TooManyNodes { count: usize, max: usize },
+    /// V13: scene features were given for a packet with no addressee. They
+    /// state the speaker's relation to the addressee, so with none they
+    /// describe nobody.
+    V13SceneWithoutAddressee,
 }
 
 impl Refusal {
@@ -84,6 +89,7 @@ impl Refusal {
             | Refusal::V11DuplicateNodeRef { .. }
             | Refusal::V11DuplicateRole { .. } => "V11",
             Refusal::V12TooManyNodes { .. } => "V12",
+            Refusal::V13SceneWithoutAddressee => "V13",
         }
     }
 }
@@ -437,6 +443,11 @@ fn fits(kind: Option<&ValueKind>, value: &FeatValue) -> bool {
 /// fn read(l: weksa::LoweringInput) { let _ = l.stance; }
 /// ```
 ///
+///
+/// ```compile_fail
+/// fn read(l: weksa::LoweringInput) { let _ = l.scene; }
+/// ```
+///
 /// The constructor is private: a call from outside the crate compiles only if
 /// `LoweringInput::of` is `pub`. The first block is the same code without the
 /// call, so the second fails for that call and nothing else.
@@ -474,6 +485,7 @@ pub struct LoweringInput {
     constraints: Constraints,
     extensions: Vec<Extension>,
     stance: Stance,
+    scene: Vec<FeatureValue>,
 }
 
 impl LoweringInput {
@@ -489,7 +501,42 @@ impl LoweringInput {
             constraints: p.constraints.clone(),
             extensions: p.extensions.clone(),
             stance: p.stance.clone(),
+            scene: Vec::new(),
         }
+    }
+
+    /// Adds the speaker's relation to the addressee: feature values of slot
+    /// `Scene`, checked like every feature list (V5 to V8, V11) at this view's
+    /// inventory revision. They state a relation, so the packet must name an
+    /// addressee (V13). Typed ids and grades only, never wording, so a scene
+    /// carries no text to the lowerer. The scene is not part of the packet: a
+    /// scene document supplies it, and replacing it replaces the earlier one.
+    pub fn with_scene(
+        mut self,
+        inventory: &Inventory,
+        scene: Vec<FeatureValue>,
+    ) -> Result<Self, Vec<Refusal>> {
+        let mut out = Vec::new();
+        if !inventory.has_revision(self.inventory_rev) {
+            out.push(Refusal::V10UnknownRevision {
+                rev: self.inventory_rev,
+            });
+        } else {
+            Inventoried {
+                inv: inventory,
+                rev: self.inventory_rev,
+                out: &mut out,
+            }
+            .features(&scene, Slot::Scene);
+        }
+        if !scene.is_empty() && self.discourse.addressee.is_none() {
+            out.push(Refusal::V13SceneWithoutAddressee);
+        }
+        if !out.is_empty() {
+            return Err(out);
+        }
+        self.scene = scene;
+        Ok(self)
     }
 
     pub fn inventory_rev(&self) -> u32 {
@@ -521,5 +568,9 @@ impl LoweringInput {
     }
     pub fn stance(&self) -> &Stance {
         &self.stance
+    }
+    /// The speaker's relation to the addressee; empty until `with_scene`.
+    pub fn scene(&self) -> &[FeatureValue] {
+        &self.scene
     }
 }
