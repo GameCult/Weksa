@@ -10,24 +10,23 @@
       "url": "https://eureka.gamecult.org/forge/GameCult/Zyphos/pulls/2",
       "status": "open, not merged",
       "owner": "Deru (setting owner)",
-      "what": "A note proposing names for the Sa'ueia and Airawa: the family unit, routes, the continent, memory partners, the mother tree, the Airawa empire and its word for unincorporated natives. Each name shows how it is built from smaller word-pieces and what it is meant to carry. The vault itself is not edited; the note is one new file.",
+      "what": "A note proposing names for the Sa'ueia and Airawa: the family unit, routes, the continent, memory partners, the mother tree, the Airawa empire and its word for unincorporated natives. Each name shows how it is built from smaller word-pieces and what it is meant to carry. The vault itself is not edited; the note is one new file. It was revised after Deru's phonotactic answers of 2026-11-06 (below).",
       "evidence": [
-        "Sa'ueia names are built only from Deru's roots (ila walk, weru know, olune breeding ground, -um) plus new stand-in roots, and pass the project's checker (0 errors, 0 warnings).",
-        "No name collides with Deru's words; the near-misses are listed in the note.",
-        "Airawa material uses the slice's word qerath (obligation, sworn bond) and the sound tendencies already written down."
+        "Deru's answers, 2026-11-06 (settled by Deru): the main word comes first in a Sa'ueia compound; sharing memory and knowledge is valued and no reputation attaches to the act, the partner or the memory; each Airawa tribe has its own name, linked to a matriarch tree; individual names are given by those trees, not inherited.",
+        "Deru's phonotactics, for both Airawa and Sa'ueia: no two consonants adjacent, no two identical vowels adjacent, k and never q. The checker in Weksa PR 9 enforces them; all names in the note now pass it (0 errors, 0 warnings).",
+        "Sa'ueia names are built only from Deru's roots (ila walk, weru know, olune breeding ground, -um) plus new stand-in roots.",
+        "No name collides with Deru's words; the near-misses are listed in the note."
       ],
       "invention": [
         "Every Sa'ueia root not from Deru (muna memory, sela gift, rena return, kasu partner, mano kin, sulo stay) is a Weksa stand-in.",
-        "Airawa roots (gor, dak, zeg, sar, tez, -ur) have no grammar or sound system behind them; they only carry meaning.",
-        "The word order 'X of Y' is inferred from one example, ilawerum."
+        "The earlier Airawa names built from closed-syllable roots (gor, dak, zeg, sar, tez, -ur) all broke Deru's rules and were replaced by open-syllable roots (gora, daka, zege, sara, teza) and the word kerath (the slice's qerath with q replaced). All are Weksa placeholders; open roots make Airawa smoother than the setting wants.",
+        "Whether sh, zh and kh count as one consonant, like th, is not known; the checker treats them as two, so names using them are flagged provisionally."
       ],
-      "stance": "Weksa thinks the names are worth reading as a starting vocabulary, not as answers. Confidence is moderate on the Sa'ueia forms (they obey the rules we have) and low on the Airawa forms (the rules barely exist). Nothing should be adopted before Deru rules.",
+      "stance": "Weksa thinks the names are worth reading as a starting vocabulary, not as answers. Confidence is moderate on the Sa'ueia forms and low on the Airawa forms. Nothing should be adopted before Deru rules.",
       "forks": [
-        "Sa'ueia compounds: is the main word first, as in ilawerum 'walk of knowledge', or can it go either way?",
-        "Would the Sa'ueia want 'memory' as a word-piece at all, or do they put reputation in the partner rather than in the act of remembering?",
-        "Airawa naming scope: one word for all Airawa, one per tribe, or a word for the people-with-their-trees?",
-        "Do the Sa'ueia call the Airawa by one word, and is classing them as 'those whose memory stays in place' too unkind or just wrong?",
-        "How are individual names earned, inherited or changed? No personal names can be proposed until this is set."
+        "Are sh, zh and kh single consonants like th, or two consonants?",
+        "What is the Airawa sound inventory? Open-syllable roots make Airawa softer than the setting asks.",
+        "Do the Sa'ueia call the Airawa by one word, and what is it? (Deru: one word, not unkind.)"
       ]
     },
     {
@@ -36,13 +35,13 @@
       "repo": "Weksa",
       "pr": 6,
       "url": "https://eureka.gamecult.org/forge/GameCult/Weksa/pulls/6",
-      "status": "open, not merged",
+      "status": "merged 2026-11-06 as a proposal; nothing in it is canon",
       "owner": "Rust to Dust setting owner",
-      "what": "One example in the Rust to Dust language notes still showed the client sending 'authentic local defiance' as a fact about an ambush. The notes elsewhere already say that reading belongs to the empire. This change replaces the example with plain facts plus the speaker's stance (contempt, restraint) and marks the old value as something the empire's reading produces. It also adds a companion note that builds the empire's ontology around a placeholder concept called Dao (living well, self-actualization), where painting is a duty and going unpainted is heresy unless it expresses the speaker's own path.",
+      "what": "Two parts. An example in the Rust to Dust language notes still showed the client sending 'authentic local defiance' as a fact about an ambush; it now shows plain facts plus the speaker's stance and marks the old value as something the empire's reading produces. Separately, a companion draft (imperial/dao-ontology.md) builds the empire's ontology around a placeholder concept called Dao (living well, self-actualization), where painting is a duty and going unpainted is heresy unless it expresses the speaker's own path. The edited lines in the existing imperial language notes are marked as proposal.",
       "evidence": [
-        "A standing ruling (rtd-imperial-aesthetic-reading-to-ontology) already puts aesthetic readings on the ontology side.",
+        "A standing ruling (weksa-body:ruling:rtd-imperial-aesthetic-reading-to-ontology) already puts aesthetic readings on the ontology side.",
         "The real packet fields live in crates/weksa/src/packet.rs; the example is now labelled a sketch that does not define them.",
-        "Dao as living well, painting as duty, unpainted as heresy unless it expresses the speaker's own path (a warrior yes, a celebrity making a statement is gauche): Meta in #weksa, 2026-11-06."
+        "Dao as living well, painting as duty, unpainted as heresy unless it expresses the speaker's own path (a warrior yes, a celebrity making a statement is gauche): Meta, 2026-11-06."
       ],
       "invention": [
         "The numbers in the stance example (contempt 600, restraint 800) are made up to show the shape.",
@@ -57,6 +56,30 @@
         "Should 'authentic local defiance' stay as one of the empire's reading classes, or be dropped or renamed?",
         "Is 'path-true' versus 'gauche' the right split, or is fit a matter of degree?",
         "Does the same path-fit test cover obscenity and other norm-breaking, or only going unpainted?"
+      ]
+    },
+    {
+      "id": "weksa-9",
+      "title": "Name rules in the Sa'ueia/Airawa checker",
+      "repo": "Weksa",
+      "pr": 9,
+      "url": "https://eureka.gamecult.org/forge/GameCult/Weksa/pulls/9",
+      "status": "merged 2026-11-06 (open questions below)",
+      "owner": "Deru (setting owner)",
+      "what": "The word checker now enforces Deru's 2026-11-06 phonotactic rules for both languages, can check whole proposed names built from word-pieces, and the naming briefs record Deru's answers (settled) apart from Weksa's readings (invented).",
+      "evidence": [
+        "Deru's rules: no two consonants adjacent, no two identical vowels adjacent, k and never q, for Airawa and Sa'ueia.",
+        "31 tests pass; every name in the names file checks clean.",
+        "Of the earlier candidate names, only Sauwele passes, and it is too close to Sa'ueia."
+      ],
+      "invention": [
+        "Reading th as one consonant and sh, zh, kh as two is Weksa's, pending Deru.",
+        "The new open-syllable Airawa roots are placeholders."
+      ],
+      "stance": "Weksa is confident the checker implements the rules as relayed; the relay is the weak point, so Deru should confirm the edge cases.",
+      "forks": [
+        "Are sh, zh and kh single consonants like th?",
+        "What is the Airawa inventory?"
       ]
     },
     {
