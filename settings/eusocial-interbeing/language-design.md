@@ -52,14 +52,22 @@ Airawa phonology is not finalized, but the current design pressure distinguishes
 it from Sa'ueia softness. Airawa names should feel sharper, more dorsal and
 coronal, and more willing to close around hard edges.
 
+Deru ruled on 2026-11-06 that the following bind **both** Airawa and Sa'ueia:
+two consonants never meet, two identical vowels never meet, and `k` is used
+where `q` might have been (so `q` is not an Airawa letter). The tendencies below
+are read under that rule: "closed syllables" survives only as a word-final
+consonant, `q` is retired from the plosive list, and `sh` / `zh` count as two
+consonants until Deru says they are single sounds (`th` is not a cluster, as
+relayed). `sa-ueia/check.py` enforces it.
+
 Provisional tendencies:
 
-- dorsal and coronal plosives should be prominent: `k`, `g`, `q`, `t`, `d`;
+- dorsal and coronal plosives should be prominent: `k`, `g`, `t`, `d` (`q` retired);
 - sibilant and postalveolar fricatives should carry social texture: `s`, `z`,
   `sh` / `zh`;
 - `r` may be trilled in some Airawa registers;
-- syllables can tolerate clipped or closed shapes where Sa'ueia forms would
-  flow longer and wetter;
+- syllables can tolerate clipped shapes (a word-final consonant) where Sa'ueia
+  forms would flow longer and wetter;
 - avoid making native Airawa names read like smooth Sa'ueia route names unless
   the form is explicitly a loan, exonym, or cross-continental register.
 
@@ -102,7 +110,10 @@ species name Sa'ueia is canon. Everything below is a working draft in
 Taken from Deru's words:
 
 - five vowels: `a e i o u`;
-- no `h`, `q`, `y`; `k` where a `q` might have been;
+- no `h`, `q`, `y`; `k` where a `q` might have been (2026-11-06: `q` is out of
+  Airawa too);
+- two consonants never meet; two identical vowels never meet (2026-11-06, both
+  languages);
 - short words, soft and open;
 - suffixing morphology; the one suffix so far is `-um`, a verb suffix;
 - identical letters merge at a morpheme join: `weru` + `um` gives `werum`,
@@ -116,8 +127,8 @@ Proposed, for Deru to accept or cut:
 
 - the apostrophe in Sa'ueia is orthographic, and is not counted as a letter;
 - "short" means at most 10 letters in a joined word, as a warning only;
-- no doubled letter inside a morpheme, so a double can only arise at a join
-  and the merge rule removes it.
+- (withdrawn 2026-11-06: replaced by Deru's rules that no two consonants and
+  no two identical vowels meet, in Sa'ueia and Airawa.)
 
 Open, not guessed:
 

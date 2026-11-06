@@ -69,13 +69,22 @@
     },
     "Slot": {
       "description": "Where a feature may sit in a packet.",
-      "type": "string",
-      "enum": [
-        "Discourse",
-        "Referent",
-        "Predication",
-        "Relation",
-        "Stance"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "Discourse",
+            "Referent",
+            "Predication",
+            "Relation",
+            "Stance"
+          ]
+        },
+        {
+          "description": "The relation of the speaker to the addressee in the scene; see\n`LoweringInput::with_scene`.",
+          "type": "string",
+          "const": "Scene"
+        }
       ]
     },
     "ValueKind": {
