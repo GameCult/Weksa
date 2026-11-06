@@ -8,9 +8,8 @@ Nothing here is canon until the operator rules on it.
 Claims carry the same tags as `language-design.md`:
 
 - **[E]** evidence: the source says it. Sources are Meta's words in #weksa on
-  2026-11-06 (memories `weksa:memory:mind-20261106T114231978Z-t1-m0`, `-t4-m0`,
-  `-t7-m0`, and the 12:01Z note on norm-breaking) or a cited file under
-  `settings/rust-to-dust/`.
+  2026-11-06 (the Dao placeholder, the path-fit norm-breaking examples and
+  the Dao De Jing analogy) or a cited file under `settings/rust-to-dust/`.
 - **[I]** invention: this draft proposes it; the operator can overrule it.
 - **[E→I]** extension: a source seed this draft develops.
 

@@ -75,7 +75,7 @@ An earlier draft of this example carried `"imperial_frame":
 "authentic_local_defiance"`. That value is the imperial ontology's reading of
 the facts above (performer-centered, local, sincere refusal), not a fact the
 client can know, so it does not belong in the packet
-(`rtd-imperial-aesthetic-reading-to-ontology`). Classes such as "authentic
+(`weksa-body:ruling:rtd-imperial-aesthetic-reading-to-ontology`). Classes such as "authentic
 local defiance" are outputs of the ontology projection.
 
 ## Open Questions

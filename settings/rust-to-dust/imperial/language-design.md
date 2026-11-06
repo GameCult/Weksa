@@ -79,7 +79,8 @@ status is two axes, not one.
   1. **Unclaimed.** No decoration in a field. This is not neutral: by default
      it is a failure to present oneself, heresy against Dao, unless it is
      path-true (see [dao-ontology.md](dao-ontology.md)). [E→I: Meta,
-     2026-11-06; the source's "shamelessness" is re-framed]
+     2026-11-06; the source's "shamelessness" is re-framed. PROPOSAL, not canon:
+     see the draft in dao-ontology.md]
   2. **Claimant.** Decorated, undemonstrated. Tourists live here: the claim is
      bought and the constraint never chosen [E: tourists buy a safe spectacle].
   3. **Practitioner.** Decorated, with constraint demonstrated in the field.
@@ -89,6 +90,7 @@ status is two axes, not one.
   Going unpainted as an artistic claim that the performance alone is art is a
   provocation [E]. The grammar must be able to say it as *path-true*
   ([dao-ontology.md](dao-ontology.md), section 2), not as a lesser step.
+  [PROPOSAL, not canon]
 
 The language's address and agreement system tracks **claim versus
 demonstrated constraint**, because that is what the source treats as the
@@ -178,7 +180,7 @@ register words in the source text.
 ### Why this language is the hard case for restraint [E→I]
 
 For the empire, restraint is not suppression of a shameful interior (no
-human shame/honour here: see [dao-ontology.md](dao-ontology.md), section 1). It is
+human shame/honour here: see [dao-ontology.md](dao-ontology.md), section 1; PROPOSAL, not canon). It is
 **the visible form of chosen constraint**, which is the moral proof of
 mastery [E]. So the map from `restraint` to surface is *inverted* relative to
 most human defaults:
@@ -188,7 +190,7 @@ most human defaults:
 - Low restraint with strong affect is not honest. It is *vulgar* [E: "vulgar
   violence as failed form"; "collapse into mere function"]. "Vulgar" is a
   placeholder for a fit failure against the actor's path, not a human taste
-  judgement.
+  judgement [PROPOSAL, not canon].
 - Zero affect is not neutrality. It can read as an absence of devotion.
 
 The deliberate consequence is that stance cannot be flattened to a politeness
@@ -271,7 +273,7 @@ select a form from the packet's facts and not from a gloss.
 | **crude** vs **failed** | crude: sincere, unrefined, with form attempted. failed: form collapsed into mere function. | actor's means and discipline as facts; the stance of the performer is not available, so the ontology reads from conduct |
 | **resistance** admired and absorbable | resistance read as: threat, folk art, breakout talent (`battle-royale.md` commentary list). Choice depends on whether it centers a performer or a practice. | performer-centered vs distributed agency |
 | **public spectacle** vs **living practice** [E] | spectacle: meaning lives in a central performer. practice: meaning lives in relationships. The empire reads distributed cooperation as noise or misattributes it to a performer. | number and relation of agents; presence of a focal agent |
-| **unpainted**, split | devout-absent / heretical / path-true / gauche, by fit between the act and the actor's own path ([dao-ontology.md](dao-ontology.md), sections 1 and 2). The source's older senses (shame, danger, contempt, rawness, refusal, purity) are human-flavoured and kept only as placeholders. Different surface forms: the reading is selected by relation, path and stance, not by a gloss. | decoration state, actor's path, scene relation, speaker stance |
+| **unpainted**, split | devout-absent / heretical / path-true / gauche, by fit between the act and the actor's own path ([dao-ontology.md](dao-ontology.md), sections 1 and 2). The source's older senses (shame, danger, contempt, rawness, refusal, purity) are human-flavoured and kept only as placeholders [PROPOSAL, not canon]. Different surface forms: the reading is selected by relation, path and stance, not by a gloss. | decoration state, actor's path, scene relation, speaker stance |
 
 ### Scale decoration in grammar and metaphor [E→I]
 
