@@ -26,32 +26,37 @@
         "Sa'ueia compounds: is the main word first, as in ilawerum 'walk of knowledge', or can it go either way?",
         "Would the Sa'ueia want 'memory' as a word-piece at all, or do they put reputation in the partner rather than in the act of remembering?",
         "Airawa naming scope: one word for all Airawa, one per tribe, or a word for the people-with-their-trees?",
-        "Does the Sa'ueia consonant list allow the letters used here (l m n r s w, and k for q)?",
         "Do the Sa'ueia call the Airawa by one word, and is classing them as 'those whose memory stays in place' too unkind or just wrong?",
         "How are individual names earned, inherited or changed? No personal names can be proposed until this is set."
       ]
     },
     {
       "id": "weksa-6",
-      "title": "Rust to Dust: the 'imperial frame' is the empire's reading, not something the player sends",
+      "title": "Rust to Dust: imperial ontology built on Dao and path-fit, not shame and honour",
       "repo": "Weksa",
       "pr": 6,
       "url": "https://eureka.gamecult.org/forge/GameCult/Weksa/pulls/6",
       "status": "open, not merged",
       "owner": "Rust to Dust setting owner",
-      "what": "One example in the Rust to Dust language notes still showed the client sending 'authentic local defiance' as a fact about an ambush. The notes elsewhere already say that reading belongs to the empire. This change replaces the example with plain facts plus the speaker's stance (contempt, restraint) and marks the old value as something the empire's reading produces.",
+      "what": "One example in the Rust to Dust language notes still showed the client sending 'authentic local defiance' as a fact about an ambush. The notes elsewhere already say that reading belongs to the empire. This change replaces the example with plain facts plus the speaker's stance (contempt, restraint) and marks the old value as something the empire's reading produces. It also adds a companion note that builds the empire's ontology around a placeholder concept called Dao (living well, self-actualization), where painting is a duty and going unpainted is heresy unless it expresses the speaker's own path.",
       "evidence": [
         "A standing ruling (rtd-imperial-aesthetic-reading-to-ontology) already puts aesthetic readings on the ontology side.",
-        "The real packet fields live in crates/weksa/src/packet.rs; the example is now labelled a sketch that does not define them."
+        "The real packet fields live in crates/weksa/src/packet.rs; the example is now labelled a sketch that does not define them.",
+        "Dao as living well, painting as duty, unpainted as heresy unless it expresses the speaker's own path (a warrior yes, a celebrity making a statement is gauche): Meta in #weksa, 2026-11-06."
       ],
       "invention": [
         "The numbers in the stance example (contempt 600, restraint 800) are made up to show the shape.",
-        "'Authentic local defiance' is kept as a class the empire could output; whether it survives is undecided."
+        "'Contempt' is a human-flavoured placeholder grade, not an imperial reading; the empire's value system is Dao and path-fit, not shame or honour.",
+        "'Authentic local defiance' is kept as a class the empire could output; whether it survives is undecided.",
+        "The four readings of a norm-break (devout, heretical, path-true, gauche) and the path-fit test that picks among them are Weksa's generalisation of Meta's examples.",
+        "Native terms as several context-tagged readings with the chosen gloss recorded separately is Weksa's modelling of Meta's Dao De Jing analogy.",
+        "'Dao' is a placeholder label only; the term has no native name or sound yet."
       ],
-      "stance": "Weksa is fairly confident the example was inconsistent with the ruling and the fix is right. Weksa is unsure about the example values and about keeping that class.",
+      "stance": "Weksa is fairly confident the old example was inconsistent with the ruling and that shame/honour is the wrong frame. It is unsure whether four readings are the right set, and how a commentator tells path-true from gauche by conduct alone.",
       "forks": [
         "Should 'authentic local defiance' stay as one of the empire's reading classes, or be dropped or renamed?",
-        "Do the example stance values (contempt 600, restraint 800 on a 0 to 1000 scale) look sensible for a father ambushing a guard with an improvised tool?"
+        "Is 'path-true' versus 'gauche' the right split, or is fit a matter of degree?",
+        "Does the same path-fit test cover obscenity and other norm-breaking, or only going unpainted?"
       ]
     },
     {
@@ -70,7 +75,8 @@
       "invention": [
         "The sound inventory (voiceless stops, held fricatives) is a draft, and the reptilian vocal tract is the weakest-supported choice.",
         "Decoration-as-metaphor in grammar is the draft's strongest invention and the easiest to overrule.",
-        "The breakdown of victory, mastery, spectacle and overmatch is a hypothesis."
+        "The breakdown of victory, mastery, spectacle and overmatch is a hypothesis.",
+        "Grades and words named after human shame, honour, contempt or vulgarity in this draft are placeholders for imperial readings not yet defined."
       ],
       "stance": "Weksa thinks the decoration metaphor is the most promising idea here and also the least backed by the source. Treat the whole draft as overrulable.",
       "forks": [
@@ -98,11 +104,7 @@
         "The consonant list is marked open on purpose; the checker refuses to accept a guess."
       ],
       "stance": "Weksa is confident the tooling works and not at all confident about the sound rules. Only the species name Sa'ueia is canon.",
-      "forks": [
-        "Is the root 'know' weru or wer-?",
-        "What does the apostrophe do in Sa'ueia?",
-        "What does 'short' mean in numbers for a word (the draft limit is 10 letters)?"
-      ]
+      "forks": []
     },
     {
       "id": "zyphos-1",
@@ -113,10 +115,14 @@
       "status": "merged 2026-11-04 (done)",
       "owner": "Deru (setting owner)",
       "what": "A spelling-only sweep with Deru's permission: 53 occurrences in 26 files and one file name now use Sa'ueia. Shown for completeness; nothing further is asked.",
-      "evidence": ["Deru's permission, 2026-11-04 in the Zyphos room."],
-      "invention": ["None. One identifier, saaueia-nomadic-advanced in state/branches.json, was left alone as a slug."],
+      "evidence": [
+        "Deru's permission, 2026-11-04 in the Zyphos room."
+      ],
+      "invention": [
+        "None. One identifier, saaueia-nomadic-advanced in state/branches.json, was left alone as a slug."
+      ],
       "stance": "Done. The only loose end is whether that slug should be renamed too.",
-      "forks": ["Should the slug saaueia-nomadic-advanced in state/branches.json be respelled as well?"]
+      "forks": []
     }
   ]
 }

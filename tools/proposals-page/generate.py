@@ -28,6 +28,13 @@ def ul(items):
     return "<ul>" + "".join(f"<li>{e(i)}</li>" for i in items) + "</ul>"
 
 
+def forks(p):
+    if not p["forks"]:
+        return ""
+    items = "".join(f"<li>{e(f)}</li>" for f in p["forks"])
+    return f'<div class="forks"><h3>Questions for you (one sentence each, in the project room)</h3><ol>{items}</ol></div>'
+
+
 def card(p):
     ref = f"{p['repo']} #{p['pr']}" if p["pr"] else p["repo"]
     return f"""<article id="{e(p['id'])}">
@@ -37,7 +44,7 @@ def card(p):
 <div class="ev"><h3>Rests on existing material</h3>{ul(p['evidence'])}</div>
 <div class="inv"><h3>Weksa's invention</h3>{ul(p['invention'])}</div>
 <h3>Weksa's stance and uncertainty</h3><p class="stance">{e(p['stance'])}</p>
-<div class="forks"><h3>Questions for you (one sentence each, in the project room)</h3><ol>{"".join(f"<li>{e(f)}</li>" for f in p['forks'])}</ol></div>
+{forks(p)}
 </article>"""
 
 
