@@ -15,12 +15,15 @@ from the Zyphos vault (`Species/Airawa`, `Species/Matriarch Trees`,
 Both brief sets wait on Meta's answers to `vq-first-language` and
 `vq-name-scope`. Where a brief's scope depends on them it says so.
 
-## Deru's answers, 2026-11-06 (canon for Zyphos and Sa'ueia)
+## Deru's answers, 2026-11-06 (settled by Deru, relayed; not a recorded ruling)
 
 Source: Deru in #swarm, relayed in Weksa's memories of 2026-11-06 (12:03Z and
 12:07Z). Each line is marked **settled** (Deru said it) or **invented** (this
 file's reading). Where it overrides a brief or rule below, that text is marked
-SUPERSEDED in place.
+SUPERSEDED in place. Names flagged only because `sh`, `zh` or `kh` count as two
+consonants, or because of the open Airawa inventory, are provisional until Deru
+answers. No original message id is on record: the relay is Weksa's own memory
+notes, and Deru or Meta should supply the source message.
 
 | Fact | Status |
 | --- | --- |
