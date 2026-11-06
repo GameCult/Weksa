@@ -22,8 +22,7 @@ Sources read: everything under `settings/rust-to-dust/` (`README`, `setting`,
 `settings/eusocial-interbeing/language-design.md`, and Weksa's
 `docs/language-model.md`, `interlingua-standard.md`,
 `best-modern-approach.md`, `multilingual-utterance-lowering.md` and
-`schemas/interlingua-packet.md`. The stance design is read from the unmerged
-branch `weksa-lowering/speaker-state` (see Dependencies). The forge repos and
+`schemas/interlingua-packet.md`. The stance design is read from `main` (see Dependencies). The forge repos and
 Weksa `state/` and `docs/` hold no other Rust to Dust material: a forge search
 for the setting returned nothing outside Weksa. This draft therefore rests on
 about 440 lines of setting prose, and the invention share is large.
@@ -147,7 +146,7 @@ Three pressures from the source, turned into sound:
 ### Romanization and rendering [I]
 
 An ASCII romanization is owed before any lowering output is scored: the
-speaker-state lowering renders text, and the renderer for the audience needs
+lowering renders text, and the renderer for the audience needs
 a stable orthography. `ʃ ʒ x ʔ` need ASCII digraphs. The choice follows
 the Weksa pronunciation-lowering docs and belongs to a later cut.
 
@@ -162,7 +161,7 @@ the Weksa pronunciation-lowering docs and belongs to a later cut.
 
 ### Weksa's constraint [E]
 
-On the unmerged `speaker-state` branch, `docs/interlingua-standard.md` adds
+On `main`, `docs/interlingua-standard.md` carries
 a packet `stance`: **felt affect** (anger, fear, sadness, joy, disgust, surprise,
 contempt, affection, shame, as grades) and **`restraint`**, how much of the
 felt affect is held back (0 none, 1000 fully). It is felt, never displayed.
@@ -204,7 +203,7 @@ of `language-model.md` demands). Each names the packet field that feeds it.
 2. **Leak channel**: how much felt affect shows *through* a high-restraint
    frame. Leak is not mapped to emotion words. It is mapped to **form
    choices**: clipped versus full inflection, length spent on a fricative,
-   word choice within a field. This follows `speaker-state`'s own example
+   word choice within a field. This follows the standard's own example
    (anger leaking through clipped syntax is stance). Feeds from: felt affect
    grades against `restraint`.
 3. **Standing agreement** on referents: field and standing-in-field of a
@@ -229,7 +228,7 @@ of `language-model.md` demands). Each names the packet field that feeds it.
 Register is not a setting on the speaker. It is selected from the pair
 (speaker's standing and community, scene relation to addressee and subject)
 and the situation, with stance as the final modulator. This is what
-`persona-drives-ontology` implies on the speaker-state branch and what the
+`persona-drives-ontology` implies on `main` and what the
 `language-ontology` cut will implement as deterministic selection
 `select(profile, stance, speaker, scene)`. This spec supplies the **content
 of that selection table** for this language; it does not write the table.
@@ -311,7 +310,7 @@ separate target profile and not this spec's job.
   listed
 - broadcast commentary and flavor-first subtitles as the runtime use
 - the packet has `stance` with felt affect and restraint; the ontology maps
-  them (speaker-state branch)
+  them (on `main`)
 
 **Invention (I):**
 - the two-axis status ladder and the claim/demonstrated-constraint mismatch
@@ -344,9 +343,9 @@ real packets.
 
 | Need | Why | Status |
 |---|---|---|
-| `stance` with felt affect and `restraint` | the whole of Section 3 | seed (unmerged: `speaker-state`) |
-| **speaker** axes: field, standing in field, school or lineage, decoration state, community | status and register selection | seed slot `Speaker` (unmerged); the *values* are the gap |
-| **scene**: relative status of speaker, subject and audience; audience composition (imperial, tourist, human via subtitles) | register and address | seed slot `Scene` (unmerged) |
+| `stance` with felt affect and `restraint` | the whole of Section 3 | seed (on `main`) |
+| **speaker** axes: field, standing in field, school or lineage, decoration state, community | status and register selection | seed slot `Speaker` (still planned, cut `speaker-scene`); the *values* are the gap |
+| **scene**: relative status of speaker, subject and audience; audience composition (imperial, tourist, human via subtitles) | register and address | seed slot `Scene` (still planned, cut `speaker-scene`) |
 | `medium` and `setting` ids for broadcast commentary | situation selection | seed (`context`) |
 | `instrument` role on predications, **for each party** | overmatch is derived from both parties' means | seed role |
 | **volition of the constraint**: chosen / compelled / unknown, as a predication feature | the line between mastery and mere lacking | gap (`rtd.` extension first) |
@@ -366,8 +365,8 @@ client, or the client is deciding the language's concepts.
 
 ## 7. Dependencies, Risks and Next Cuts
 
-**Dependencies.** Stance and the `Speaker` and `Scene` slots exist only on
-the `weksa-lowering/speaker-state` branch. The `language-ontology` cut
+**Dependencies.** Stance is on `main` (Weksa PR #3). Only the `Speaker` and `Scene`
+slots are still planned, under cut `speaker-scene`. The `language-ontology` cut
 (community and ontology-entry documents) is not landed. This spec states
 the content those cuts will hold, and does not substitute for them.
 
@@ -378,11 +377,11 @@ the content those cuts will hold, and does not substitute for them.
 - The claim-versus-constraint ladder risks making the language a *status-code
   detector*. The source's hold is that honor is devotion, not rank. Test:
   can the grammar say a bare-by-claim performance without calling it low?
-- Draft collides with `language-design.md`'s packet-side `aesthetic_reading`.
-  Resolved by the recommendation in Section 6 if ruled.
+- Draft collided with `language-design.md`'s packet-side `aesthetic_reading`.
+  Resolved by ruling `rtd-imperial-aesthetic-reading-to-ontology` (below).
 
 **Next cuts, in order.**
-1. Operator rulings on the forks below.
+1. (done) Operator rulings on the four forks, recorded above.
 2. A first corpus slice: ten broadcast-commentary utterances, each decomposed
    to a packet (neutral facts plus stance), with the expected surface *category*
    (finish class, evaluation layer) and no words yet.
@@ -390,13 +389,15 @@ the content those cuts will hold, and does not substitute for them.
 4. A root set from the field concepts, and a naming brief for the language.
 5. An orthography and a pronunciation lowering.
 
-**Forks for the operator (recommendations given).**
-- Move `aesthetic_reading` out of the packet into the ontology. *Recommend:
-  yes.*
-- Is a two-axis status ladder right, or should honor be flat within a field?
-  *Recommend: two axes, because tourists need a place.*
-- Is inverted restraint (restraint as display of virtue) the intended reading?
-  *Recommend: yes, it follows from "chosen constraint is mastery".*
-- Is the vocal tract reptilian-literal or a human-stylized invention?
-  *Recommend: human-pronounceable stylization with length as ornament, so
-  the first corpus does not wait on phonetics.*
+**Rulings (2026-11-05, all in force).** The four forks are answered. Their
+ids are in the mind's `weksa-body` campaign.
+- `rtd-imperial-aesthetic-reading-to-ontology`: `aesthetic_reading` leaves the
+  packet and lives in the imperial ontology. The packet carries neutral facts
+  plus stance; form, discipline, spectacle and honor status are the ontology's
+  reading of them. Section 6 stands.
+- `rtd-imperial-two-axis-status`: status is two axes, field and standing, by
+  claim versus demonstrated constraint.
+- `rtd-imperial-inverted-restraint`: restraint is the display of virtue; low
+  restraint with strong affect is vulgar.
+- `rtd-imperial-human-stylized-tract`: the vocal tract is human-pronounceable
+  stylization, with length as ornament.
