@@ -3,7 +3,7 @@
 //! returns `Ok(())` or the refusals. [`LoweringInput`], the only thing a
 //! lowerer sees, comes from `PacketStore::admit` alone, which builds it through
 //! the crate-private `admissible`. The stance is checked like every feature
-//! list, in slot `Stance`. The rules are V1..V8 and V10..V12: the shape of an id
+//! list, in slot `Stance`. The rules are V1..V8 and V10..V13: the shape of an id
 //! or a grade is its type's parse, not a rule, so V9 is retired and not
 //! renumbered. V13 guards the one other way features reach a lowering view:
 //! [`LoweringInput::with_scene`].
@@ -442,7 +442,6 @@ fn fits(kind: Option<&ValueKind>, value: &FeatValue) -> bool {
 /// ```compile_fail
 /// fn read(l: weksa::LoweringInput) { let _ = l.stance; }
 /// ```
-///
 ///
 /// ```compile_fail
 /// fn read(l: weksa::LoweringInput) { let _ = l.scene; }

@@ -46,7 +46,6 @@ fn feat(id: &str, value: FeatValue) -> FeatureValue {
     }
 }
 
-/// `scene_revision` mints the three Scene features after the seed's features.
 fn status(inv: &Inventory) -> String {
     inv.entries()
         .find(|e| e.gloss == "relative_status")

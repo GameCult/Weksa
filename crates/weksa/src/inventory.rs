@@ -516,7 +516,8 @@ pub fn proof_revision() -> (InventoryRevision, Vec<InventoryEntry>) {
 /// `Scene`. Hand-seeded like [`proof_revision`] until the loop's minting round
 /// and cut `speaker-scene` own the Scene vocabulary. `relative_status` is the
 /// speaker's standing against the addressee's, not a register word:
-/// what it selects is each language's ontology's business.
+/// what it selects is each language's ontology's business. It mints the three
+/// Scene features after the seed's features.
 pub fn scene_revision() -> (InventoryRevision, Vec<InventoryEntry>) {
     let taken = seed()
         .1
