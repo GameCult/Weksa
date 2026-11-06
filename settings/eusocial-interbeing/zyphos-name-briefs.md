@@ -17,13 +17,13 @@ Both brief sets wait on Meta's answers to `vq-first-language` and
 
 ## Deru's answers, 2026-11-06 (settled by Deru, relayed; not a recorded ruling)
 
-Source: Deru in #swarm, relayed in Weksa's memories of 2026-11-06 (12:03Z and
-12:07Z). Each line is marked **settled** (Deru said it) or **invented** (this
-file's reading). Where it overrides a brief or rule below, that text is marked
-SUPERSEDED in place. Names flagged only because `sh`, `zh` or `kh` count as two
-consonants, or because of the open Airawa inventory, are provisional until Deru
-answers. No original message id is on record: the relay is Weksa's own memory
-notes, and Deru or Meta should supply the source message.
+Source: Deru in #swarm, 2026-11-06. Matrix events `$k421aeSzzvytNRLnRkcWBeMmogm56uq_KpAi5goORGg`
+(~12:03Z, the answers) and `$_sjQgfGusoCclYppGt9hgJbhOEl2Vb2pNFRG4gUoavI`
+(~12:07Z, the phonotactic rules apply to both Airawa and Sa'ueia). Each line is
+marked **settled** (Deru said it) or **invented** (this file's reading). Where
+it overrides a brief or rule below, that text is marked SUPERSEDED in place.
+Names flagged only because `sh`, `zh` or `kh` count as two consonants, or
+because of the open Airawa inventory, are provisional until Deru answers.
 
 | Fact | Status |
 | --- | --- |
