@@ -107,7 +107,7 @@ phoneme-level trick.
 The source gives no phonetic profile. It poses the question
 (`language-design.md`, Open Questions) and says naming should follow from
 phonetics. House method (Zyphos) assigns Airawa hard dorsal and coronal
-edges and Sa'auei'a soft flow. This language must not collapse onto either
+edges and Sa'ueia soft flow. This language must not collapse onto either
 [I].
 
 ### Design stance [I]

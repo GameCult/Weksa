@@ -39,9 +39,27 @@ rules:
     value: [a, e, i, o, u]
     provenance: deru
   forbidden_letters:
-    value: [h, q, y]
+    value: [h, q, y]   # Sa'ueia
+    airawa: [q]        # Deru, 2026-11-06: q is not used in Airawa either; no word on h or y
     provenance: deru
-    note: k is used where q might have been.
+    note: k is used where q might have been, in both languages.
+  no_adjacent_consonants:
+    value: true
+    applies_to: [saueia, airawa]
+    provenance: deru
+    digraphs: [th]
+    note: >
+      Deru, 2026-11-06: two consonants never meet, in both languages. Deru also
+      said "th" is not a cluster; read here as: "th" is one consonant, so it
+      does not count as a meeting. Whether "sh" and "zh" are digraphs too is
+      open; until Deru says, they are two consonants and are flagged. An
+      apostrophe does not separate letters. A join that leaves two different
+      consonants adjacent is an error in the joined word.
+  no_identical_adjacent_vowels:
+    value: true
+    applies_to: [saueia, airawa]
+    provenance: deru
+    note: "Deru, 2026-11-06: two identical vowels never meet, in both languages."
   join_merge_identical:
     value: true
     provenance: deru
@@ -59,10 +77,6 @@ rules:
     provenance: weksa-placeholder
     severity: warning
     note: Stand-in for "short words"; apostrophes not counted. Deru sets the real bound.
-  no_doubled_letters_inside_morpheme:
-    value: true
-    provenance: weksa-placeholder
-    note: Follows from the merge rule only if doubles never occur inside a morpheme either.
   vowel_only_where_needed:
     provenance: deru
     checked: false   # not mechanically decidable without the consonant inventory
