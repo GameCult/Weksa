@@ -300,10 +300,6 @@ predications:
     roles:
       agent: actor
       patient: target
-extensions:
-  rtd.aesthetic_reading:
-    form: raw
-    spectacle_value: high
 ```
 
 ## Promotion Rule

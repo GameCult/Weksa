@@ -52,7 +52,9 @@ Likely language-project registers:
 
 ## Runtime Data Needs
 
-Structured intent should carry neutral facts plus cultural annotations.
+Structured intent carries neutral facts plus stance. The imperial ontology
+derives form, discipline, spectacle and honor status from them downstream
+(see `imperial/language-design.md`, Section 6).
 
 Example:
 
@@ -62,13 +64,6 @@ Example:
   "act": "ambush",
   "actor": "father",
   "target": "imperial_guard",
-  "aesthetic_reading": {
-    "form": "raw",
-    "discipline": "improvised",
-    "spectacle_value": "high",
-    "honor_status": "ambiguous",
-    "aesthetic_promise": "rising"
-  },
   "imperial_frame": "authentic_local_defiance"
 }
 ```
