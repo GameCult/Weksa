@@ -1,0 +1,198 @@
+{
+  "profile_id": "weksa.target_cultural_ontology.rtd-imperial.v0",
+  "status": "DRAFT placeholder: every class below is a proposal of settings/rust-to-dust/imperial/ (language-design.md, dao-ontology.md); Meta's culture model outranks it and nothing here is canon. Provenance tags: E evidence, I invention, placeholder = a name that stands in for a reading not yet defined.",
+  "finish_classes": [
+    {
+      "id": "raw",
+      "restraint_min": 0,
+      "restraint_max": 333,
+      "provenance": "I"
+    },
+    {
+      "id": "held",
+      "restraint_min": 334,
+      "restraint_max": 666,
+      "provenance": "I"
+    },
+    {
+      "id": "finished",
+      "restraint_min": 667,
+      "restraint_max": 1000,
+      "provenance": "I"
+    }
+  ],
+  "commentator_display": {
+    "provenance": "I",
+    "strong_affect_min": 600,
+    "classes": [
+      "form",
+      "vulgar",
+      "absent_devotion"
+    ],
+    "rules": "vulgar: finish class raw and strongest felt affect at or above strong_affect_min (low restraint with strong affect, ruling rtd-imperial-inverted-restraint). absent_devotion: every felt affect zero. form: otherwise. strong_affect_min is a placeholder threshold."
+  },
+  "evaluation_slots": [
+    {
+      "id": "elegant",
+      "provenance": "E"
+    },
+    {
+      "id": "disciplined",
+      "provenance": "E"
+    },
+    {
+      "id": "sincere",
+      "provenance": "E"
+    },
+    {
+      "id": "vulgar",
+      "provenance": "E"
+    },
+    {
+      "id": "memorable",
+      "provenance": "E"
+    },
+    {
+      "id": "promising",
+      "provenance": "E"
+    },
+    {
+      "id": "mastery",
+      "provenance": "E"
+    },
+    {
+      "id": "collapse",
+      "provenance": "E"
+    }
+  ],
+  "evidential_classes": [
+    "witnessed",
+    "inferred"
+  ],
+  "inference_required_for_readings": [
+    "path_true",
+    "gauche",
+    "heretical"
+  ],
+  "standing": [
+    {
+      "id": "unclaimed",
+      "provenance": "I"
+    },
+    {
+      "id": "claimant",
+      "provenance": "I"
+    },
+    {
+      "id": "practitioner",
+      "provenance": "I"
+    },
+    {
+      "id": "master",
+      "provenance": "I"
+    },
+    {
+      "id": "exemplar",
+      "provenance": "I"
+    }
+  ],
+  "fields": [
+    "combat",
+    "speech",
+    "hosting",
+    "trade",
+    "politics",
+    "art"
+  ],
+  "audiences": [
+    "imperial",
+    "tourist",
+    "human_via_subtitles"
+  ],
+  "means_order": [
+    "bare_hands",
+    "knife",
+    "heavy_weapon"
+  ],
+  "locus_classes": [
+    "spectacle",
+    "practice"
+  ],
+  "path_fit_readings": [
+    {
+      "id": "devout",
+      "provenance": "I"
+    },
+    {
+      "id": "heretical",
+      "provenance": "I"
+    },
+    {
+      "id": "path_true",
+      "provenance": "I"
+    },
+    {
+      "id": "gauche",
+      "provenance": "I"
+    },
+    {
+      "id": "not_applicable",
+      "provenance": "I"
+    }
+  ],
+  "path_fit_rules": [
+    {
+      "decoration": "decorated",
+      "serves_path": null,
+      "staged": null,
+      "reading": "devout"
+    },
+    {
+      "decoration": "not_applicable",
+      "serves_path": null,
+      "staged": null,
+      "reading": "not_applicable"
+    },
+    {
+      "decoration": "unpainted",
+      "serves_path": true,
+      "staged": null,
+      "reading": "path_true"
+    },
+    {
+      "decoration": "bare_by_claim",
+      "serves_path": true,
+      "staged": null,
+      "reading": "path_true"
+    },
+    {
+      "decoration": "unpainted",
+      "serves_path": false,
+      "staged": true,
+      "reading": "gauche"
+    },
+    {
+      "decoration": "bare_by_claim",
+      "serves_path": false,
+      "staged": true,
+      "reading": "gauche"
+    },
+    {
+      "decoration": "unpainted",
+      "serves_path": false,
+      "staged": false,
+      "reading": "heretical"
+    },
+    {
+      "decoration": "bare_by_claim",
+      "serves_path": false,
+      "staged": false,
+      "reading": "heretical"
+    }
+  ],
+  "path_fit_note": "A rule key of null matches any value. serves_path and staged are ontology-side inputs read from the act and the actor's path, never packet fields (ruling rtd-imperial-aesthetic-reading-to-ontology); the slice records them beside the packet.",
+  "practice_frames": [
+    "joint_action"
+  ],
+  "locus_note": "locus is practice when a predication's frame is in practice_frames, else spectacle (language-design.md section 4: meaning in relationships versus in a central performer)."
+}

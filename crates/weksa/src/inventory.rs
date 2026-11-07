@@ -558,3 +558,103 @@ pub fn scene_revision() -> (InventoryRevision, Vec<InventoryEntry>) {
         entries,
     )
 }
+
+/// The concepts for the first `rtd-imperial` broadcast-commentary slice
+/// (`data/corpus/rtd-imperial/slice-1.json`), in id order after revision 2.
+pub const RTD_CONCEPTS: &[&str] = &[
+    "performer",
+    "rival",
+    "crowd",
+    "bare_hands",
+    "knife",
+    "heavy_weapon",
+    "win",
+    "wield",
+    "present_self",
+    "refrain",
+    "cooperate",
+    "broadcast",
+];
+
+/// Frames for the same slice, in id order after revision 2.
+pub const RTD_FRAMES: &[&str] = &[
+    "contest_outcome",
+    "use_means",
+    "self_presentation",
+    "joint_action",
+];
+
+/// Revision 4, **placeholder vocabulary** for the `rtd-imperial` slice: the
+/// concepts and frames above, and the two gaps `language-design.md` section 6
+/// names, a referent's decoration state and the volition of a predication's
+/// constraint. Hand-seeded like [`proof_revision`] and [`scene_revision`] until
+/// the minting round owns concepts; nothing here is canon.
+pub fn rtd_revision() -> (InventoryRevision, Vec<InventoryEntry>) {
+    let taken = |family: Family| {
+        [seed().1, proof_revision().1, scene_revision().1]
+            .iter()
+            .flatten()
+            .filter(|e| e.family() == family)
+            .count() as u32
+    };
+    let options = |labels: &[&str]| {
+        ValueKind::Options(
+            OptionSet::new(
+                labels
+                    .iter()
+                    .map(|l| OptionLabel::parse(l).expect("seed labels are well formed"))
+                    .collect(),
+            )
+            .expect("seed option sets are well formed"),
+        )
+    };
+    let mut entries = Vec::new();
+    let mut add = |family: Family, gloss: &str, kind: Option<ValueKind>, slot: Option<Slot>| {
+        let n = taken(family)
+            + entries
+                .iter()
+                .filter(|e: &&InventoryEntry| e.family() == family)
+                .count() as u32;
+        entries.push(InventoryEntry {
+            id: family.id(NonZeroU32::MIN.saturating_add(n)),
+            gloss: gloss.to_string(),
+            value_kind: kind,
+            applies_to: slot.into_iter().collect(),
+            introduced_rev: 4,
+            retired_rev: None,
+        });
+    };
+    for g in RTD_CONCEPTS {
+        add(Family::Concept, g, None, None);
+    }
+    for g in RTD_FRAMES {
+        add(Family::Frame, g, None, None);
+    }
+    add(
+        Family::Feature,
+        "decoration_state",
+        Some(options(&[
+            "decorated",
+            "unpainted",
+            "bare_by_claim",
+            "not_applicable",
+        ])),
+        Some(Slot::Referent),
+    );
+    add(
+        Family::Feature,
+        "constraint_volition",
+        Some(options(&["chosen", "compelled", "unknown"])),
+        Some(Slot::Predication),
+    );
+    let changes = entries.iter().map(|e| Change::Add(e.id)).collect();
+    (
+        InventoryRevision {
+            n: 4,
+            parent: Some(3),
+            changes,
+            frozen: false,
+        },
+        entries,
+    )
+}

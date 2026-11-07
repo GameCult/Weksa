@@ -1,0 +1,898 @@
+{
+ "slice": "rtd-imperial-slice-1",
+ "status": "DRAFT placeholder. Meta's culture model outranks everything here; every class is checked against data/target-language-ontology/rtd-imperial.json. Utterances are packets plus an expected surface category (finish class, evaluation slot, evidential, standing agreement); no target-language text exists and none is substituted from English.",
+ "entries": [
+  {
+   "key": "rtd-bc-01",
+   "situation": "broadcast_commentary",
+   "meaning": "A master of combat, painted, beats a rival who holds the heavier weapon, with a knife she chose to keep; the commentator approves, restrained.",
+   "referents": [
+    {
+     "id": "n1",
+     "kind": "referent_kind:1",
+     "concept": "performer",
+     "decoration": "decorated"
+    },
+    {
+     "id": "n2",
+     "kind": "referent_kind:1",
+     "concept": "rival",
+     "decoration": "decorated"
+    },
+    {
+     "id": "n3",
+     "kind": "referent_kind:5",
+     "concept": "knife"
+    },
+    {
+     "id": "n4",
+     "kind": "referent_kind:5",
+     "concept": "heavy_weapon"
+    }
+   ],
+   "predications": [
+    {
+     "id": "n11",
+     "concept": "wield",
+     "frame": "use_means",
+     "roles": {
+      "agent": "n1",
+      "instrument": "n3"
+     },
+     "constraint_volition": "chosen",
+     "evidentiality": "direct"
+    },
+    {
+     "id": "n22",
+     "concept": "wield",
+     "frame": "use_means",
+     "roles": {
+      "agent": "n2",
+      "instrument": "n4"
+     },
+     "constraint_volition": "unknown",
+     "evidentiality": "direct"
+    },
+    {
+     "id": "n33",
+     "concept": "win",
+     "frame": "contest_outcome",
+     "roles": {
+      "agent": "n1",
+      "patient": "n2"
+     },
+     "evidentiality": "direct"
+    }
+   ],
+   "stance": {
+    "anger": 0,
+    "fear": 0,
+    "sadness": 0,
+    "joy": 700,
+    "disgust": 0,
+    "surprise": 0,
+    "contempt": 0,
+    "affection": 0,
+    "shame": 0,
+    "restraint": 850
+   },
+   "scene": {
+    "audience": "imperial",
+    "performer_field": "combat",
+    "performer_standing": "master",
+    "serves_path": null,
+    "staged": false
+   },
+   "expected": {
+    "finish_class": "finished",
+    "evaluation": [
+     "elegant",
+     "mastery",
+     "disciplined"
+    ],
+    "evidential": "witnessed",
+    "path_fit": "devout",
+    "overmatch": false,
+    "locus": "spectacle",
+    "commentator_display": "form"
+   },
+   "placeholders": [
+    "finish classes, evaluation slots and the commentator_display rule are inventions of language-design.md section 3 (provenance I)"
+   ],
+   "packet_context": {
+    "medium": "broadcast"
+   }
+  },
+  {
+   "key": "rtd-bc-02",
+   "situation": "broadcast_commentary",
+   "meaning": "The same bout, but the commentator spends their delight without restraint, to an audience of tourists.",
+   "referents": [
+    {
+     "id": "n1",
+     "kind": "referent_kind:1",
+     "concept": "performer",
+     "decoration": "decorated"
+    },
+    {
+     "id": "n2",
+     "kind": "referent_kind:1",
+     "concept": "rival",
+     "decoration": "decorated"
+    },
+    {
+     "id": "n3",
+     "kind": "referent_kind:5",
+     "concept": "knife"
+    },
+    {
+     "id": "n4",
+     "kind": "referent_kind:5",
+     "concept": "heavy_weapon"
+    }
+   ],
+   "predications": [
+    {
+     "id": "n11",
+     "concept": "wield",
+     "frame": "use_means",
+     "roles": {
+      "agent": "n1",
+      "instrument": "n3"
+     },
+     "constraint_volition": "chosen",
+     "evidentiality": "direct"
+    },
+    {
+     "id": "n22",
+     "concept": "wield",
+     "frame": "use_means",
+     "roles": {
+      "agent": "n2",
+      "instrument": "n4"
+     },
+     "constraint_volition": "unknown",
+     "evidentiality": "direct"
+    },
+    {
+     "id": "n33",
+     "concept": "win",
+     "frame": "contest_outcome",
+     "roles": {
+      "agent": "n1",
+      "patient": "n2"
+     },
+     "evidentiality": "direct"
+    }
+   ],
+   "stance": {
+    "anger": 0,
+    "fear": 0,
+    "sadness": 0,
+    "joy": 900,
+    "disgust": 0,
+    "surprise": 0,
+    "contempt": 0,
+    "affection": 0,
+    "shame": 0,
+    "restraint": 100
+   },
+   "scene": {
+    "audience": "tourist",
+    "performer_field": "combat",
+    "performer_standing": "master",
+    "serves_path": null,
+    "staged": false
+   },
+   "expected": {
+    "finish_class": "raw",
+    "evaluation": [
+     "memorable"
+    ],
+    "evidential": "witnessed",
+    "path_fit": "devout",
+    "overmatch": false,
+    "locus": "spectacle",
+    "commentator_display": "vulgar"
+   },
+   "placeholders": [
+    "finish classes, evaluation slots and the commentator_display rule are inventions of language-design.md section 3 (provenance I)",
+    "raw marking is only permitted in tourist-adjacent registers (language-design.md section 3): an inference, owner to confirm"
+   ],
+   "packet_context": {
+    "medium": "broadcast"
+   }
+  },
+  {
+   "key": "rtd-bc-03",
+   "situation": "broadcast_commentary",
+   "meaning": "A painted claimant wins with the heavy weapon against a rival's knife, having chosen no constraint.",
+   "referents": [
+    {
+     "id": "n1",
+     "kind": "referent_kind:1",
+     "concept": "performer",
+     "decoration": "decorated"
+    },
+    {
+     "id": "n2",
+     "kind": "referent_kind:1",
+     "concept": "rival",
+     "decoration": "decorated"
+    },
+    {
+     "id": "n3",
+     "kind": "referent_kind:5",
+     "concept": "heavy_weapon"
+    },
+    {
+     "id": "n4",
+     "kind": "referent_kind:5",
+     "concept": "knife"
+    }
+   ],
+   "predications": [
+    {
+     "id": "n11",
+     "concept": "wield",
+     "frame": "use_means",
+     "roles": {
+      "agent": "n1",
+      "instrument": "n3"
+     },
+     "constraint_volition": "unknown",
+     "evidentiality": "direct"
+    },
+    {
+     "id": "n22",
+     "concept": "wield",
+     "frame": "use_means",
+     "roles": {
+      "agent": "n2",
+      "instrument": "n4"
+     },
+     "constraint_volition": "chosen",
+     "evidentiality": "direct"
+    },
+    {
+     "id": "n33",
+     "concept": "win",
+     "frame": "contest_outcome",
+     "roles": {
+      "agent": "n1",
+      "patient": "n2"
+     },
+     "evidentiality": "direct"
+    }
+   ],
+   "stance": {
+    "anger": 0,
+    "fear": 0,
+    "sadness": 0,
+    "joy": 0,
+    "disgust": 500,
+    "surprise": 0,
+    "contempt": 400,
+    "affection": 0,
+    "shame": 0,
+    "restraint": 800
+   },
+   "scene": {
+    "audience": "imperial",
+    "performer_field": "combat",
+    "performer_standing": "claimant",
+    "serves_path": null,
+    "staged": false
+   },
+   "expected": {
+    "finish_class": "finished",
+    "evaluation": [
+     "vulgar"
+    ],
+    "evidential": "witnessed",
+    "path_fit": "devout",
+    "overmatch": true,
+    "locus": "spectacle",
+    "commentator_display": "form"
+   },
+   "placeholders": [
+    "finish classes, evaluation slots and the commentator_display rule are inventions of language-design.md section 3 (provenance I)",
+    "'vulgar overmatch' is a placeholder name for a fit failure against the actor's path, not a human taste judgement (dao-ontology.md section 5)"
+   ],
+   "packet_context": {
+    "medium": "broadcast"
+   }
+  },
+  {
+   "key": "rtd-bc-04",
+   "situation": "broadcast_commentary",
+   "meaning": "A master goes into the bout unpainted, bare-handed against a knife, to show martial purity; the commentator reads the choice as the warrior's own path.",
+   "referents": [
+    {
+     "id": "n1",
+     "kind": "referent_kind:1",
+     "concept": "performer",
+     "decoration": "unpainted"
+    },
+    {
+     "id": "n2",
+     "kind": "referent_kind:1",
+     "concept": "rival",
+     "decoration": "decorated"
+    },
+    {
+     "id": "n3",
+     "kind": "referent_kind:5",
+     "concept": "bare_hands"
+    },
+    {
+     "id": "n4",
+     "kind": "referent_kind:5",
+     "concept": "knife"
+    }
+   ],
+   "predications": [
+    {
+     "id": "n11",
+     "concept": "wield",
+     "frame": "use_means",
+     "roles": {
+      "agent": "n1",
+      "instrument": "n3"
+     },
+     "constraint_volition": "chosen",
+     "evidentiality": "direct"
+    },
+    {
+     "id": "n22",
+     "concept": "wield",
+     "frame": "use_means",
+     "roles": {
+      "agent": "n2",
+      "instrument": "n4"
+     },
+     "constraint_volition": "unknown",
+     "evidentiality": "direct"
+    },
+    {
+     "id": "n33",
+     "concept": "win",
+     "frame": "contest_outcome",
+     "roles": {
+      "agent": "n1",
+      "patient": "n2"
+     },
+     "evidentiality": "direct"
+    }
+   ],
+   "stance": {
+    "anger": 0,
+    "fear": 0,
+    "sadness": 0,
+    "joy": 500,
+    "disgust": 0,
+    "surprise": 300,
+    "contempt": 0,
+    "affection": 0,
+    "shame": 0,
+    "restraint": 700
+   },
+   "scene": {
+    "audience": "imperial",
+    "performer_field": "combat",
+    "performer_standing": "master",
+    "serves_path": true,
+    "staged": false
+   },
+   "expected": {
+    "finish_class": "finished",
+    "evaluation": [
+     "sincere",
+     "mastery",
+     "memorable"
+    ],
+    "evidential": "inferred",
+    "path_fit": "path_true",
+    "overmatch": false,
+    "locus": "spectacle",
+    "commentator_display": "form"
+   },
+   "placeholders": [
+    "finish classes, evaluation slots and the commentator_display rule are inventions of language-design.md section 3 (provenance I)",
+    "bare_hands as a means ranks below knife in means_order: placeholder ordering"
+   ],
+   "packet_context": {
+    "medium": "broadcast"
+   }
+  },
+  {
+   "key": "rtd-bc-05",
+   "situation": "broadcast_commentary",
+   "meaning": "A celebrity appears unpainted before the crowd as a statement; nothing in their practice calls for it.",
+   "referents": [
+    {
+     "id": "n1",
+     "kind": "referent_kind:1",
+     "concept": "performer",
+     "decoration": "unpainted"
+    },
+    {
+     "id": "n2",
+     "kind": "referent_kind:2",
+     "concept": "crowd",
+     "decoration": "not_applicable"
+    }
+   ],
+   "predications": [
+    {
+     "id": "n11",
+     "concept": "present_self",
+     "frame": "self_presentation",
+     "roles": {
+      "agent": "n1",
+      "patient": "n2"
+     },
+     "evidentiality": "direct"
+    }
+   ],
+   "stance": {
+    "anger": 0,
+    "fear": 0,
+    "sadness": 0,
+    "joy": 0,
+    "disgust": 0,
+    "surprise": 0,
+    "contempt": 300,
+    "affection": 100,
+    "shame": 0,
+    "restraint": 750
+   },
+   "scene": {
+    "audience": "imperial",
+    "performer_field": "art",
+    "performer_standing": "claimant",
+    "serves_path": false,
+    "staged": true
+   },
+   "expected": {
+    "finish_class": "finished",
+    "evaluation": [
+     "vulgar"
+    ],
+    "evidential": "inferred",
+    "path_fit": "gauche",
+    "overmatch": false,
+    "locus": "spectacle",
+    "commentator_display": "form"
+   },
+   "placeholders": [
+    "finish classes, evaluation slots and the commentator_display rule are inventions of language-design.md section 3 (provenance I)",
+    "a statement the path does not carry reads gauche, not brave (Meta, via dao-ontology.md section 2); the evaluation slot chosen for gauche is a placeholder"
+   ],
+   "packet_context": {
+    "medium": "broadcast"
+   }
+  },
+  {
+   "key": "rtd-bc-06",
+   "situation": "broadcast_commentary",
+   "meaning": "A performer with no claimed standing enters unpainted, for no reason in their practice, unseen by any audience.",
+   "referents": [
+    {
+     "id": "n1",
+     "kind": "referent_kind:1",
+     "concept": "performer",
+     "decoration": "unpainted"
+    }
+   ],
+   "predications": [
+    {
+     "id": "n11",
+     "concept": "present_self",
+     "frame": "self_presentation",
+     "roles": {
+      "agent": "n1"
+     },
+     "evidentiality": "direct"
+    }
+   ],
+   "stance": {
+    "anger": 0,
+    "fear": 0,
+    "sadness": 200,
+    "joy": 0,
+    "disgust": 600,
+    "surprise": 0,
+    "contempt": 0,
+    "affection": 0,
+    "shame": 0,
+    "restraint": 900
+   },
+   "scene": {
+    "audience": "imperial",
+    "performer_field": "combat",
+    "performer_standing": "unclaimed",
+    "serves_path": false,
+    "staged": false
+   },
+   "expected": {
+    "finish_class": "finished",
+    "evaluation": [
+     "collapse"
+    ],
+    "evidential": "inferred",
+    "path_fit": "heretical",
+    "overmatch": false,
+    "locus": "spectacle",
+    "commentator_display": "form"
+   },
+   "placeholders": [
+    "finish classes, evaluation slots and the commentator_display rule are inventions of language-design.md section 3 (provenance I)",
+    "unpainted and unserved is heretical by default (Meta); the evaluation slot chosen is a placeholder"
+   ],
+   "packet_context": {
+    "medium": "broadcast"
+   }
+  },
+  {
+   "key": "rtd-bc-07",
+   "situation": "broadcast_commentary",
+   "meaning": "A tourist, richly painted, takes the arena; no constraint of theirs has been demonstrated.",
+   "referents": [
+    {
+     "id": "n1",
+     "kind": "referent_kind:1",
+     "concept": "performer",
+     "decoration": "decorated"
+    },
+    {
+     "id": "n2",
+     "kind": "referent_kind:2",
+     "concept": "crowd",
+     "decoration": "not_applicable"
+    }
+   ],
+   "predications": [
+    {
+     "id": "n11",
+     "concept": "present_self",
+     "frame": "self_presentation",
+     "roles": {
+      "agent": "n1",
+      "patient": "n2"
+     },
+     "constraint_volition": "unknown",
+     "evidentiality": "direct"
+    }
+   ],
+   "stance": {
+    "anger": 0,
+    "fear": 0,
+    "sadness": 0,
+    "joy": 0,
+    "disgust": 0,
+    "surprise": 0,
+    "contempt": 400,
+    "affection": 300,
+    "shame": 0,
+    "restraint": 500
+   },
+   "scene": {
+    "audience": "tourist",
+    "performer_field": "hosting",
+    "performer_standing": "claimant",
+    "serves_path": null,
+    "staged": false
+   },
+   "expected": {
+    "finish_class": "held",
+    "evaluation": [
+     "promising"
+    ],
+    "evidential": "witnessed",
+    "path_fit": "devout",
+    "overmatch": false,
+    "locus": "spectacle",
+    "commentator_display": "form"
+   },
+   "placeholders": [
+    "finish classes, evaluation slots and the commentator_display rule are inventions of language-design.md section 3 (provenance I)",
+    "the claim/demonstrated-constraint mismatch has no slot in the packet and none here: asked of the owner below",
+    "evaluation slot for a claimant is a placeholder"
+   ],
+   "packet_context": {
+    "medium": "broadcast"
+   }
+  },
+  {
+   "key": "rtd-bc-08",
+   "situation": "broadcast_commentary",
+   "meaning": "A painted practitioner wins narrowly with a knife against a knife, form attempted, rough.",
+   "referents": [
+    {
+     "id": "n1",
+     "kind": "referent_kind:1",
+     "concept": "performer",
+     "decoration": "decorated"
+    },
+    {
+     "id": "n2",
+     "kind": "referent_kind:1",
+     "concept": "rival",
+     "decoration": "decorated"
+    },
+    {
+     "id": "n3",
+     "kind": "referent_kind:5",
+     "concept": "knife"
+    },
+    {
+     "id": "n4",
+     "kind": "referent_kind:5",
+     "concept": "knife"
+    }
+   ],
+   "predications": [
+    {
+     "id": "n11",
+     "concept": "wield",
+     "frame": "use_means",
+     "roles": {
+      "agent": "n1",
+      "instrument": "n3"
+     },
+     "constraint_volition": "chosen",
+     "evidentiality": "direct"
+    },
+    {
+     "id": "n22",
+     "concept": "wield",
+     "frame": "use_means",
+     "roles": {
+      "agent": "n2",
+      "instrument": "n4"
+     },
+     "constraint_volition": "chosen",
+     "evidentiality": "direct"
+    },
+    {
+     "id": "n33",
+     "concept": "win",
+     "frame": "contest_outcome",
+     "roles": {
+      "agent": "n1",
+      "patient": "n2"
+     },
+     "evidentiality": "direct"
+    }
+   ],
+   "stance": {
+    "anger": 0,
+    "fear": 0,
+    "sadness": 0,
+    "joy": 600,
+    "disgust": 0,
+    "surprise": 0,
+    "contempt": 0,
+    "affection": 0,
+    "shame": 0,
+    "restraint": 550
+   },
+   "scene": {
+    "audience": "imperial",
+    "performer_field": "combat",
+    "performer_standing": "practitioner",
+    "serves_path": null,
+    "staged": false
+   },
+   "expected": {
+    "finish_class": "held",
+    "evaluation": [
+     "promising",
+     "sincere"
+    ],
+    "evidential": "witnessed",
+    "path_fit": "devout",
+    "overmatch": false,
+    "locus": "spectacle",
+    "commentator_display": "form"
+   },
+   "placeholders": [
+    "finish classes, evaluation slots and the commentator_display rule are inventions of language-design.md section 3 (provenance I)",
+    "crude-but-sincere versus failed (language-design.md section 4): decided from conduct; the slice has only the crude case"
+   ],
+   "packet_context": {
+    "medium": "broadcast"
+   }
+  },
+  {
+   "key": "rtd-bc-09",
+   "situation": "broadcast_commentary",
+   "meaning": "Three painted practitioners clear the arena together, each covering the others; the commentator names it a memorable spectacle.",
+   "referents": [
+    {
+     "id": "n1",
+     "kind": "referent_kind:1",
+     "concept": "performer",
+     "decoration": "decorated"
+    },
+    {
+     "id": "n2",
+     "kind": "referent_kind:1",
+     "concept": "performer",
+     "decoration": "decorated"
+    },
+    {
+     "id": "n3",
+     "kind": "referent_kind:1",
+     "concept": "performer",
+     "decoration": "decorated"
+    }
+   ],
+   "predications": [
+    {
+     "id": "n11",
+     "concept": "cooperate",
+     "frame": "joint_action",
+     "roles": {
+      "agent": "n1",
+      "patient": "n3"
+     },
+     "constraint_volition": "chosen",
+     "evidentiality": "direct"
+    },
+    {
+     "id": "n22",
+     "concept": "cooperate",
+     "frame": "joint_action",
+     "roles": {
+      "agent": "n2",
+      "patient": "n3"
+     },
+     "constraint_volition": "chosen",
+     "evidentiality": "direct"
+    }
+   ],
+   "stance": {
+    "anger": 0,
+    "fear": 0,
+    "sadness": 0,
+    "joy": 0,
+    "disgust": 0,
+    "surprise": 300,
+    "contempt": 0,
+    "affection": 0,
+    "shame": 0,
+    "restraint": 600
+   },
+   "scene": {
+    "audience": "imperial",
+    "performer_field": "combat",
+    "performer_standing": "practitioner",
+    "serves_path": null,
+    "staged": false
+   },
+   "expected": {
+    "finish_class": "held",
+    "evaluation": [
+     "memorable"
+    ],
+    "evidential": "witnessed",
+    "path_fit": "devout",
+    "overmatch": false,
+    "locus": "practice",
+    "commentator_display": "form"
+   },
+   "placeholders": [
+    "finish classes, evaluation slots and the commentator_display rule are inventions of language-design.md section 3 (provenance I)",
+    "spectacle versus living practice: the empire may misattribute distributed cooperation to a performer (language-design.md section 4); this entry records the practice reading only"
+   ],
+   "packet_context": {
+    "medium": "broadcast"
+   }
+  },
+  {
+   "key": "rtd-bc-10",
+   "situation": "broadcast_commentary",
+   "meaning": "A human fighter, undecorated by culture and not by choice, beats an imperial rival bare-handed against a heavy weapon; the host calls it a breakout talent.",
+   "referents": [
+    {
+     "id": "n1",
+     "kind": "referent_kind:1",
+     "concept": "performer",
+     "decoration": "not_applicable"
+    },
+    {
+     "id": "n2",
+     "kind": "referent_kind:1",
+     "concept": "rival",
+     "decoration": "decorated"
+    },
+    {
+     "id": "n3",
+     "kind": "referent_kind:5",
+     "concept": "bare_hands"
+    },
+    {
+     "id": "n4",
+     "kind": "referent_kind:5",
+     "concept": "heavy_weapon"
+    }
+   ],
+   "predications": [
+    {
+     "id": "n11",
+     "concept": "wield",
+     "frame": "use_means",
+     "roles": {
+      "agent": "n1",
+      "instrument": "n3"
+     },
+     "constraint_volition": "unknown",
+     "evidentiality": "direct"
+    },
+    {
+     "id": "n22",
+     "concept": "wield",
+     "frame": "use_means",
+     "roles": {
+      "agent": "n2",
+      "instrument": "n4"
+     },
+     "constraint_volition": "unknown",
+     "evidentiality": "direct"
+    },
+    {
+     "id": "n33",
+     "concept": "win",
+     "frame": "contest_outcome",
+     "roles": {
+      "agent": "n1",
+      "patient": "n2"
+     },
+     "evidentiality": "direct"
+    }
+   ],
+   "stance": {
+    "anger": 0,
+    "fear": 0,
+    "sadness": 0,
+    "joy": 0,
+    "disgust": 0,
+    "surprise": 0,
+    "contempt": 400,
+    "affection": 400,
+    "shame": 0,
+    "restraint": 850
+   },
+   "scene": {
+    "audience": "imperial",
+    "performer_field": "combat",
+    "performer_standing": "unclaimed",
+    "serves_path": null,
+    "staged": false
+   },
+   "expected": {
+    "finish_class": "finished",
+    "evaluation": [
+     "promising",
+     "sincere",
+     "memorable"
+    ],
+    "evidential": "witnessed",
+    "path_fit": "not_applicable",
+    "overmatch": false,
+    "locus": "spectacle",
+    "commentator_display": "form"
+   },
+   "placeholders": [
+    "finish classes, evaluation slots and the commentator_display rule are inventions of language-design.md section 3 (provenance I)",
+    "affection plus contempt at high restraint is the normal panel pairing (language-design.md section 3), here used for broadcast: a stretch",
+    "a human's standing is entered as unclaimed because the ladder has no human row: asked of the owner below"
+   ],
+   "packet_context": {
+    "medium": "broadcast"
+   }
+  }
+ ]
+}

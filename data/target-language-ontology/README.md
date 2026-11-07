@@ -32,6 +32,7 @@ They do not own:
 - [Brazilian Portuguese overlay catalog](./pt-BR-overlays.yaml)
 - [Brazilian Portuguese, Umbanda overlay](./pt-BR-umbanda.yaml)
 - [Japanese](./ja-JP.yaml)
+- [Rust to Dust imperial (DRAFT placeholder, JSON so tests can read it)](./rtd-imperial.json), checked by `crates/weksa/tests/rtd_slice.rs`
 
 Each multilingual lowering fixture should cite the profile or profile stack it
 used so reviewers can tell which social and cultural distinctions were
