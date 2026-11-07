@@ -3,7 +3,7 @@
 //! returns `Ok(())` or the refusals. [`LoweringInput`], the only thing a
 //! lowerer sees, comes from `PacketStore::admit` alone, which builds it through
 //! the crate-private `admissible`. The stance is checked like every feature
-//! list, in slot `Stance`. The rules are V1..V8 and V10..V13: the shape of an id
+//! list, in slot `Stance`. The rules are V1..V8 and V10..V15: the shape of an id
 //! or a grade is its type's parse, not a rule, so V9 is retired and not
 //! renumbered. V13 guards the one other way features reach a lowering view:
 //! [`LoweringInput::with_scene`].
@@ -29,7 +29,7 @@ use std::fmt;
 use crate::inventory::{Family, InvId, Inventory, InventoryEntry, Slot, ValueKind};
 use crate::packet::{
     Constraints, Context, Discourse, Extension, FeatValue, FeatureValue, NodeId, Packet,
-    PacketKind, Predication, Referent, Relation, SCHEMA_VERSION, Stance,
+    PacketKind, Predication, ProvenanceSource, Referent, Relation, SCHEMA_VERSION, Stance,
 };
 
 /// A broken rule, named.
@@ -71,6 +71,15 @@ pub enum Refusal {
     /// state the speaker's relation to the addressee, so with none they
     /// describe nobody.
     V13SceneWithoutAddressee,
+    /// V14: an addressee consent that no addressee can have given, or that
+    /// names a node that is not a predication. It is what the addressee asked
+    /// for or agreed to, an act, so a referent cannot be its object.
+    V14ConsentWithoutAddressee,
+    V14ConsentNotAPredication { id: NodeId },
+    /// V15: an addressee consent set by a source that only read wording.
+    /// A decomposition of text, or imported corpus text, sees "you asked her
+    /// to" as words; only authoring or game telemetry saw the request.
+    V15ConsentSource { source: ProvenanceSource },
 }
 
 impl Refusal {
@@ -90,6 +99,10 @@ impl Refusal {
             | Refusal::V11DuplicateRole { .. } => "V11",
             Refusal::V12TooManyNodes { .. } => "V12",
             Refusal::V13SceneWithoutAddressee => "V13",
+            Refusal::V14ConsentWithoutAddressee | Refusal::V14ConsentNotAPredication { .. } => {
+                "V14"
+            }
+            Refusal::V15ConsentSource { .. } => "V15",
         }
     }
 }
@@ -156,6 +169,7 @@ pub(crate) fn admissible(
     let nodes = check_nodes(packet, &mut out);
     check_refs(packet, &nodes, &mut out);
     check_repeats(packet, &mut out);
+    check_consent(packet, &nodes, &mut out);
     if inventory.has_revision(packet.inventory_rev) {
         Inventoried {
             inv: inventory,
@@ -208,10 +222,33 @@ fn check_refs(packet: &Packet, nodes: &BTreeSet<NodeId>, out: &mut Vec<Refusal>)
     if let Some(a) = &packet.discourse.addressee {
         need(a, "addressee");
     }
+    if let Some(c) = &packet.discourse.addressee_consent {
+        need(c, "addressee consent");
+    }
     for (list, at) in node_lists(packet) {
         for id in list {
             need(id, at);
         }
+    }
+}
+
+/// V14 and V15: the addressee's consent is a typed fact with one origin. A
+/// dangling id is V4's, so V14 judges only a node that exists.
+fn check_consent(packet: &Packet, nodes: &BTreeSet<NodeId>, out: &mut Vec<Refusal>) {
+    let Some(consent) = &packet.discourse.addressee_consent else {
+        return;
+    };
+    if packet.discourse.addressee.is_none() {
+        out.push(Refusal::V14ConsentWithoutAddressee);
+    }
+    if nodes.contains(consent) && !packet.predications.iter().any(|p| &p.id == consent) {
+        out.push(Refusal::V14ConsentNotAPredication {
+            id: consent.clone(),
+        });
+    }
+    match packet.provenance.source {
+        ProvenanceSource::Authored | ProvenanceSource::GameTelemetry => {}
+        source => out.push(Refusal::V15ConsentSource { source }),
     }
 }
 

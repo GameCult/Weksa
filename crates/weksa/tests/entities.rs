@@ -397,7 +397,7 @@ fn packet_entities_resolve() {
 
 #[test]
 fn packet_schema_v2() {
-    assert_eq!(SCHEMA_VERSION, 4);
+    assert_eq!(SCHEMA_VERSION, 5);
     let mut p = good();
     p.schema_version = 2;
     let Err(refused) = validate(&p, &inventory()) else {

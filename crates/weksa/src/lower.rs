@@ -139,6 +139,9 @@ pub fn lower(
     {
         return unrendered("features");
     }
+    if input.discourse().addressee_consent.is_some() {
+        return unrendered("addressee consent");
+    }
     if !input.relations().is_empty() {
         return unrendered("relations");
     }

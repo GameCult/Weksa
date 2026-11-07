@@ -142,6 +142,7 @@ fn a_packet_carrying_what_the_lowerer_does_not_render_is_refused() {
             filler,
         })
     };
+    let consent = |p: &mut Packet| p.discourse.addressee_consent = Some(nd("n5"));
     let lone_referent = |p: &mut Packet| {
         let mut r = p.referents[0].clone();
         r.id = nd("n99");
@@ -150,6 +151,7 @@ fn a_packet_carrying_what_the_lowerer_does_not_render_is_refused() {
     for (what, edit) in [
         ("features", &discourse as &dyn Fn(&mut Packet)),
         ("features", &predication),
+        ("addressee consent", &consent),
         ("relations", &relation),
         ("extensions", &extension),
         ("no predication", &no_predication),

@@ -16,7 +16,7 @@ pub use crate::inventory::InvId;
 use crate::inventory::OptionLabel;
 
 /// Bumped by a commit that changes these types; the published schema moves with it.
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// Id of a referent or predication within one packet: `n<k>`, `k` a canonical
 /// decimal 1..=9999.
@@ -261,6 +261,13 @@ pub struct Discourse {
     /// Speech-act id.
     pub speech_act: Option<InvId>,
     pub addressee: Option<NodeId>,
+    /// The predication the addressee asked for or agreed to. A fact about what
+    /// the addressee did, never about how the line sounds, so it is no feature:
+    /// only a source that saw the request may set it (V15), it needs an
+    /// addressee (V14) and names a predication (V14), and a lowering that
+    /// speaks for the addressee's request ("you asked her to") reads it here
+    /// and refuses without it.
+    pub addressee_consent: Option<NodeId>,
     pub features: Vec<FeatureValue>,
 }
 
@@ -385,6 +392,7 @@ pub fn proof_packet() -> Packet {
         discourse: Discourse {
             speech_act: Some(id("speech_act:5")),
             addressee: Some(node("n1")),
+            addressee_consent: None,
             features: vec![],
         },
         referents: vec![
