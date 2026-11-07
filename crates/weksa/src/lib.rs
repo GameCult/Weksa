@@ -22,7 +22,7 @@ pub use inventory::{
     Change, Family, InvId, Inventory, InventoryEntry, InventoryRevision, OptionLabel, OptionSet,
     Slot, ValueKind,
 };
-pub use lower::{LowerError, lower};
+pub use lower::{EntityForms, LowerError, TARGET_LANGUAGE, lower};
 pub use packet::{
     EncoderId, EntityId, Grade, NodeId, Packet, PacketId, PacketKind, SCHEMA_VERSION, Stance,
 };
