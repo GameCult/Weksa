@@ -78,7 +78,12 @@ fn a_scene_relation_reaches_the_lowering_view_and_changes_no_english() {
     ];
     let with = plain.clone().with_scene(&inv, scene.clone()).unwrap();
     assert_eq!(with.scene(), scene.as_slice());
-    assert_eq!(lower(&with, &inv).unwrap(), lower(&plain, &inv).unwrap());
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let entities = EntityStore::open(&root.join("data/entity/entity.cc")).unwrap();
+    assert_eq!(
+        lower(&with, &inv, &entities).unwrap(),
+        lower(&plain, &inv, &entities).unwrap()
+    );
 }
 
 #[test]

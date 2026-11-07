@@ -502,7 +502,10 @@ fn main() -> Result<()> {
                     &EntityStore::open(&cli.entities)?,
                 )
                 .map_err(refused)?;
-            println!("{}", lower(&view, &inventory)?);
+            println!(
+                "{}",
+                lower(&view, &inventory, &EntityStore::open(&cli.entities)?)?
+            );
         }
         Command::Score(args) => {
             let output = match &args.output {
