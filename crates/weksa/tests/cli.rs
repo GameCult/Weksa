@@ -807,7 +807,7 @@ fn proof_packet_lowers_and_the_lowering_scores_against_items() {
             "--slug",
             "nibu",
             "--text",
-            "Warning: you may endanger yourself by touching the control. NIBU will prevent that to protect you.",
+            "Warning: you may endanger yourself by touching the control. NIBU will stop that.",
             "--speaker",
             "entity:nibu",
             "--group",
@@ -833,7 +833,7 @@ fn proof_packet_lowers_and_the_lowering_scores_against_items() {
         "{text}"
     );
     // The referent cites entity:nibu: its stored en-US form (NIBU here) reaches the text as stored.
-    assert!(text.contains("NIBU will prevent"), "{text}");
+    assert!(text.contains("NIBU will stop"), "{text}");
 
     let missing = weksa(d.path(), &["lower", "./p.cc", "packet:0000000000000000"]);
     assert!(!missing.status.success() && out(&missing).contains("no packet"));

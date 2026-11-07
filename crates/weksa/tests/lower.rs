@@ -15,7 +15,7 @@ use weksa::{
 };
 
 const PROOF: &str = "Warning: you may endanger yourself by touching the control. \
-                     Nibu will prevent that to protect you.";
+                     Nibu will stop that.";
 
 fn committed() -> (Inventory, tempfile::TempDir) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -75,7 +75,7 @@ fn only_the_addressee_is_you_and_is_reflexive() {
     assert_eq!(
         lowered(&p, &inv).unwrap(),
         "Warning: the player may endanger the player by touching the control. \
-         Nibu will prevent that to protect the player."
+         Nibu will stop that."
     );
 }
 
@@ -270,7 +270,7 @@ fn a_name_survives_lowering_verbatim_where_the_concept_word_was() {
     assert_eq!(
         through(&e).unwrap(),
         "Warning: you may endanger yourself by touching the control. \
-         nibu-of-the-deep will prevent that to protect you."
+         nibu-of-the-deep will stop that."
     );
 }
 
@@ -335,6 +335,24 @@ fn an_addressee_entity_still_lowers_to_you_and_is_never_looked_up() {
     assert_eq!(
         lower(&view(&p, &inv), &inv, &faulting).unwrap(),
         "Warning: you may endanger yourself by touching the control. \
-         The ship mind will prevent that to protect you."
+         The ship mind will stop that."
+    );
+}
+
+#[test]
+fn a_purpose_the_frame_does_not_say_is_refused_not_dropped() {
+    // The intervention row says "will stop"; a packet that also fills the
+    // beneficiary role would assert a purpose the text does not carry.
+    let (inv, _dir) = committed();
+    let mut p = proof_packet();
+    p.predications[1].roles.push(weksa::packet::RoleFill {
+        role: iv("role:8"),
+        filler: nd("n1"),
+    });
+    assert_eq!(
+        lowered(&p, &inv),
+        Err(LowerError::Unrendered {
+            what: "a role the frame does not name"
+        })
     );
 }

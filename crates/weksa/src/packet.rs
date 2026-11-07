@@ -349,7 +349,7 @@ pub struct Trace {
 }
 
 /// The `nibu-proof-001` packet: the meaning of `examples/english-lowering/nibu-proof-001/interlingua.yaml`
-/// (warn the player off the damaged control; Nibu prevents it for them) as typed
+/// (warn the player off the damaged control; Nibu will stop it) as typed
 /// ids of inventory revision 2, for the corpus item `item:nibu:1`. No features:
 /// nothing here is style.
 pub fn proof_packet() -> Packet {
@@ -408,11 +408,7 @@ pub fn proof_packet() -> Packet {
                 id: node("n5"),
                 concept: id("concept:2"),
                 frame: id("frame:2"),
-                roles: vec![
-                    fill("role:1", "n3"),
-                    fill("role:2", "n4"),
-                    fill("role:8", "n1"),
-                ],
+                roles: vec![fill("role:1", "n3"), fill("role:2", "n4")],
                 features: vec![],
             },
         ],

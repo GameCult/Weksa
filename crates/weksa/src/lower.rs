@@ -64,11 +64,7 @@ const FRAMES: &[Row] = &[
         "hazard_warning",
         "{agent} may endanger {patient} by touching {instrument}",
     ),
-    (
-        "frame:2",
-        "intervention",
-        "{agent} will prevent {patient} to protect {beneficiary}",
-    ),
+    ("frame:2", "intervention", "{agent} will stop {patient}"),
 ];
 
 /// Speech acts: the opener of the first sentence.
