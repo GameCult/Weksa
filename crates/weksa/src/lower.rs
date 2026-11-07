@@ -26,6 +26,33 @@ const CONCEPTS: &[Row] = &[
     ("concept:3", "player", "player"),
     ("concept:4", "control", "control"),
     ("concept:5", "ship_mind", "ship mind"),
+    // The Dao De Jing test bed (`daodejing.rs`). Nouns, then the verbs a
+    // `{verb}` frame speaks.
+    ("concept:6", "sage", "sage"),
+    ("concept:7", "mind", "minds"),
+    ("concept:8", "belly", "bellies"),
+    ("concept:9", "will", "wills"),
+    ("concept:10", "bone", "bones"),
+    ("concept:11", "empty", "empties"),
+    ("concept:12", "fill", "fills"),
+    ("concept:13", "weaken", "weakens"),
+    ("concept:14", "strengthen", "strengthens"),
+    ("concept:15", "heaven", "heaven"),
+    ("concept:16", "earth", "earth"),
+    ("concept:17", "is_long_enduring", "is long-enduring"),
+    ("concept:18", "continues_long", "continues long"),
+    ("concept:19", "highest_excellence", "highest excellence"),
+    ("concept:20", "water", "water"),
+    ("concept:21", "true_words", "words that are strictly true"),
+    ("concept:22", "seem_paradoxical", "seem paradoxical"),
+    (
+        "concept:23",
+        "space_between_heaven_and_earth",
+        "space between heaven and earth",
+    ),
+    ("concept:24", "bellows", "bellows"),
+    ("concept:25", "compare", "compare"),
+    ("concept:26", "resemble", "resemble"),
 ];
 
 /// Frames: the clause a predication of that frame says. `{gloss}` is the filler
@@ -41,11 +68,27 @@ const FRAMES: &[Row] = &[
         "intervention",
         "{agent} will prevent {patient} to protect {beneficiary}",
     ),
+    // The Dao De Jing test bed. Frame 3 was written from a Train chapter, 4 and
+    // 5 from Validation chapters, 6 and 7 from Test chapters.
+    ("frame:3", "act", "{agent} {verb} {patient}"),
+    ("frame:4", "intransitive", "{experiencer} {verb}"),
+    ("frame:5", "likeness", "{experiencer} is like {goal}"),
+    (
+        "frame:6",
+        "seems_paradoxical",
+        "{experiencer} seem paradoxical",
+    ),
+    (
+        "frame:7",
+        "may_be_compared",
+        "{experiencer} may be compared to {goal}",
+    ),
 ];
 
 /// Speech acts: the opener of the first sentence.
 const SPEECH_ACTS: &[Row] = &[
     ("speech_act:1", "assert", ""),
+    ("speech_act:2", "ask", ""),
     ("speech_act:5", "warn", "Warning: "),
 ];
 
@@ -156,6 +199,10 @@ fn clause(input: &LoweringInput, inv: &Inventory, p: &Predication) -> Result<Str
         let close = rest[open..].find('}').map_or(rest.len(), |c| open + c);
         let name = &rest[open + 1..close];
         rest = &rest[(close + 1).min(rest.len())..];
+        if name == "verb" {
+            out.push_str(row(CONCEPTS, p.concept, inv, rev)?);
+            continue;
+        }
         let role = inv
             .entries()
             .find(|e| e.family() == Family::Role && e.gloss == name && e.live_at(rev))

@@ -4,6 +4,7 @@
 //! (chrF, meaning cosine, leak diagnostics).
 
 pub mod corpus;
+pub mod daodejing;
 pub mod entity;
 pub mod form;
 pub mod inventory;
