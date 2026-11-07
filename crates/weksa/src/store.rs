@@ -12,7 +12,7 @@ use unicode_normalization::{UnicodeNormalization, char::is_combining_mark, is_nf
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::corpus::{CorpusItem, CorpusItemId, Source, item_key, key_slug};
-use crate::entity::{Entity, EntityOrigin};
+use crate::entity::{Entity, EntityOrigin, Pronunciation};
 use crate::form::{is_attestation, is_joining_only, is_language_tag, is_refused_format};
 use crate::inventory::{Change, InvId, Inventory, InventoryEntry, InventoryRevision, revision_key};
 use crate::packet::{EntityId, Packet};
@@ -453,6 +453,7 @@ impl EntityStore {
                     o.language == n.language
                         && o.forms.len() <= n.forms.len()
                         && n.forms.starts_with(&o.forms)
+                        && (o.pronunciation.is_none() || o.pronunciation == n.pronunciation)
                 });
             if !grows {
                 return Err(StoreRefusal::EntityNotAppendOnly { id: entity.id }.into());
@@ -506,6 +507,9 @@ fn check_entity_shape(entity: &Entity) -> Result<(), StoreError> {
         if lf.forms.len() > EntityBound::MAX_FORMS {
             return Err(bound(EntityBound::Forms));
         }
+        if let Some(p) = &lf.pronunciation {
+            check_pronunciation(entity, p)?;
+        }
         let mut seen = BTreeSet::new();
         for f in &lf.forms {
             if f.len() > EntityBound::MAX_FORM_BYTES {
@@ -532,6 +536,59 @@ fn check_entity_shape(entity: &Entity) -> Result<(), StoreError> {
                 return Err(bad("a form is not repeated within its language"));
             }
         }
+    }
+    Ok(())
+}
+
+/// A pronunciation is bare IPA, NFC, with no brackets, control character or
+/// edge whitespace; every rejected variant is the same, differs from the ruled
+/// one and is named once; the ruling names its author, a `YYYY-MM-DD` date and
+/// its source.
+fn check_pronunciation(entity: &Entity, p: &Pronunciation) -> Result<(), StoreError> {
+    let bad = |why| malformed(entity.id.as_str(), why);
+    let ipa_ok = |s: &str| {
+        !s.is_empty()
+            && s.len() <= EntityBound::MAX_FORM_BYTES
+            && is_nfc(s)
+            && s.trim() == s
+            && !s
+                .chars()
+                .any(|c| c.is_control() || is_refused_format(c) || "/[]".contains(c))
+    };
+    if !ipa_ok(&p.ipa) {
+        return Err(bad(
+            "a pronunciation is bare NFC IPA with no brackets or slashes",
+        ));
+    }
+    if !is_attestation(&p.ruled_by) || !is_attestation(&p.source) {
+        return Err(bad("a pronunciation names who ruled it and where"));
+    }
+    let b = p.date.as_bytes();
+    let date_ok = b.len() == 10
+        && b.iter().enumerate().all(|(i, c)| {
+            if i == 4 || i == 7 {
+                *c == b'-'
+            } else {
+                c.is_ascii_digit()
+            }
+        })
+        && (1..=12).contains(&p.date[5..7].parse::<u32>().unwrap_or(0))
+        && (1..=31).contains(&p.date[8..].parse::<u32>().unwrap_or(0));
+    if !date_ok {
+        return Err(bad("a pronunciation is dated YYYY-MM-DD"));
+    }
+    if p.rejected.len() > EntityBound::MAX_FORMS {
+        return Err(StoreRefusal::EntityBounds {
+            id: entity.id.clone(),
+            bound: EntityBound::Forms,
+        }
+        .into());
+    }
+    let mut seen = BTreeSet::from([&p.ipa]);
+    if !p.rejected.iter().all(|r| ipa_ok(r) && seen.insert(r)) {
+        return Err(bad(
+            "a rejected pronunciation is well-formed, named once and not the ruled one",
+        ));
     }
     Ok(())
 }

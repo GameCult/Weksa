@@ -11,7 +11,7 @@ use weksa::inventory::proof_revision;
 use weksa::packet::{EntityId, FeatValue, FeatureValue, Packet, proof_packet};
 use weksa::{
     CorpusStore, EntityForms, EntityStore, Inventory, InventoryStore, LowerError, LoweringInput,
-    PacketStore, lower, validate,
+    PacketStore, Pronunciation, lower, pronounce, validate,
 };
 
 const PROOF: &str = "Warning: you may endanger yourself by touching the control. \
@@ -245,6 +245,7 @@ fn nibu(forms: &[(&str, &[&str])]) -> Entity {
             .map(|(language, forms)| LanguageForms {
                 language: (*language).into(),
                 forms: forms.iter().map(|f| (*f).into()).collect(),
+                pronunciation: None,
             })
             .collect(),
         origin: EntityOrigin::Cast {
@@ -354,5 +355,82 @@ fn a_purpose_the_frame_does_not_say_is_refused_not_dropped() {
         Err(LowerError::Unrendered {
             what: "a role the frame does not name"
         })
+    );
+}
+
+fn ruled(ipa: &str, rejected: &[&str]) -> Pronunciation {
+    Pronunciation {
+        ipa: ipa.into(),
+        ruled_by: "Nibu".into(),
+        date: "2026-11-07".into(),
+        source: "test".into(),
+        rejected: rejected.iter().map(|r| (*r).into()).collect(),
+    }
+}
+
+fn say(entities: &dyn EntityForms) -> Result<Vec<String>, LowerError> {
+    let (inv, _dir) = committed();
+    pronounce(&view(&proof_packet(), &inv), entities)
+}
+
+#[test]
+fn nibu_round_trips_from_the_committed_seed_to_its_ruled_ipa() {
+    let seed = committed_entities();
+    let nibu = seed
+        .get(&EntityId::parse("entity:nibu").unwrap())
+        .unwrap()
+        .unwrap();
+    let p = nibu.pronunciation_in("en-US").unwrap();
+    assert_eq!(
+        (p.ipa.as_str(), p.ruled_by.as_str(), p.date.as_str()),
+        ("ˈnibu", "Nibu", "2026-11-07")
+    );
+    assert_eq!(say(&seed).unwrap(), ["ˈnibu"]);
+}
+
+#[test]
+fn a_rejected_pronunciation_is_never_emitted() {
+    let mut e = Entities::default();
+    let mut n = nibu(&[("en-US", &["Nibu"])]);
+    n.forms[0].pronunciation = Some(ruled("ˈnibu", &["ˈnɪbu", "ˈnaɪbu"]));
+    e.held.push(n);
+    assert_eq!(say(&e).unwrap(), ["ˈnibu"]);
+    // The committed seed carries the same rejection and still says only the ruling.
+    let seed = say(&committed_entities()).unwrap().concat();
+    assert!(!seed.contains('ɪ'), "{seed}");
+}
+
+#[test]
+fn an_entity_with_no_ruled_pronunciation_is_refused_not_spelled_out() {
+    let id = EntityId::parse("entity:nibu").unwrap();
+    // No pronunciation at all.
+    let mut e = Entities::default();
+    e.held.push(nibu(&[("en-US", &["Nibu"])]));
+    assert_eq!(
+        say(&e),
+        Err(LowerError::NoPronunciation { entity: id.clone() })
+    );
+    // A pronunciation under another language is not the target language's.
+    let mut n = nibu(&[("sa-Latn", &["Nibuwa"]), ("en-US", &["Nibu"])]);
+    n.forms[0].pronunciation = Some(ruled("ˈnibuwa", &[]));
+    let mut e = Entities::default();
+    e.held.push(n);
+    assert_eq!(say(&e), Err(LowerError::NoPronunciation { entity: id }));
+}
+
+#[test]
+fn ipa_needs_an_entity_the_port_holds_and_a_packet_that_cites_one() {
+    assert_eq!(
+        say(&Entities::default()),
+        Err(LowerError::UnknownEntity {
+            entity: EntityId::parse("entity:nibu").unwrap()
+        })
+    );
+    let (inv, _dir) = committed();
+    let mut p = proof_packet();
+    p.referents[2].entity = None;
+    assert_eq!(
+        pronounce(&view(&p, &inv), &committed_entities()),
+        Err(LowerError::NoEntityReferent)
     );
 }

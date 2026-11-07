@@ -158,6 +158,7 @@ fn entity_capacity_is_bounded() {
     let lf = |language: &str, forms: Vec<String>| LanguageForms {
         language: language.into(),
         forms,
+        pronunciation: None,
     };
     let one = |f: &str| vec![f.to_string()];
     let make = |forms: Vec<LanguageForms>| Entity {
@@ -331,6 +332,7 @@ fn entities_are_append_only_and_replay_needs_them() {
         LanguageForms {
             language: "fr".into(),
             forms: vec!["Z\u{e8}de".into()],
+            pronunciation: None,
         },
     );
     assert_eq!(refusal(w.entities.put(prepend)), not_append);
@@ -344,6 +346,7 @@ fn entities_are_append_only_and_replay_needs_them() {
     duplicate.forms.push(LanguageForms {
         language: "en-US".into(),
         forms: vec!["Zeddy".into()],
+        pronunciation: None,
     });
     assert!(matches!(
         refusal(w.entities.put(duplicate)),
@@ -371,6 +374,7 @@ fn with_form(slug: &str, form: &str) -> Entity {
         forms: vec![LanguageForms {
             language: "en-US".into(),
             forms: vec![form.into()],
+            pronunciation: None,
         }],
         origin: EntityOrigin::Live {
             persona: "p".into(),

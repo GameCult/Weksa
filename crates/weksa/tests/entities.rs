@@ -88,6 +88,7 @@ fn entity_forms_only_grow() {
     more.forms.push(weksa::LanguageForms {
         language: "tr".into(),
         forms: vec!["Kay".into()],
+        pronunciation: None,
     });
     assert_eq!(store.put(more.clone()).unwrap(), AddOutcome::Added);
     // The store read back from disk holds the growth.
@@ -131,6 +132,7 @@ fn entity_forms_only_grow() {
     let lf = |language: &str, forms: &[&str]| weksa::LanguageForms {
         language: language.into(),
         forms: forms.iter().map(|f| f.to_string()).collect(),
+        pronunciation: None,
     };
     for bad in [
         vec![],
@@ -426,4 +428,77 @@ fn packet_schema_v2() {
         packet["$defs"]["Stance"]["properties"]["features"]["type"],
         "array"
     );
+}
+
+#[test]
+fn a_pronunciation_is_added_once_and_then_frozen() {
+    let d = tempfile::tempdir().unwrap();
+    let mut store = EntityStore::open(&d.path().join("e.cc")).unwrap();
+    let kay = ent("kay", "en-US", &["Kay"]);
+    store.put(kay.clone()).unwrap();
+    let said = |ipa: &str, rejected: &[&str]| {
+        let mut e = kay.clone();
+        e.forms[0].pronunciation = Some(weksa::Pronunciation {
+            ipa: ipa.into(),
+            ruled_by: "Kay".into(),
+            date: "2026-11-07".into(),
+            source: "test".into(),
+            rejected: rejected.iter().map(|r| r.to_string()).collect(),
+        });
+        e
+    };
+    // An unruled entity gains a ruling.
+    let ruled = said("ˈkeɪ", &["ˈkaɪ"]);
+    assert_eq!(store.put(ruled.clone()).unwrap(), AddOutcome::Added);
+    let mut store = EntityStore::open(&d.path().join("e.cc")).unwrap();
+    assert_eq!(store.get(&eid("kay")).unwrap(), Some(ruled.clone()));
+    // A ruling is neither changed nor dropped; a changed ruling is a new decision.
+    for e in [said("ˈkaɪ", &[]), said("ˈkeɪ", &[]), kay.clone()] {
+        assert_eq!(
+            refusal(store.put(e)),
+            StoreRefusal::EntityNotAppendOnly { id: eid("kay") }
+        );
+    }
+    assert_eq!(store.get(&eid("kay")).unwrap(), Some(ruled));
+}
+
+#[test]
+fn a_malformed_pronunciation_is_refused() {
+    let d = tempfile::tempdir().unwrap();
+    let mut store = EntityStore::open(&d.path().join("e.cc")).unwrap();
+    let with = |edit: fn(&mut weksa::Pronunciation)| {
+        let mut e = ent("kay", "en-US", &["Kay"]);
+        let mut p = weksa::Pronunciation {
+            ipa: "ˈkeɪ".into(),
+            ruled_by: "Kay".into(),
+            date: "2026-11-07".into(),
+            source: "test".into(),
+            rejected: vec!["ˈkaɪ".into()],
+        };
+        edit(&mut p);
+        e.forms[0].pronunciation = Some(p);
+        e
+    };
+    let edits: [fn(&mut weksa::Pronunciation); 9] = [
+        |p| p.ipa = "".into(),
+        |p| p.ipa = "/ˈkeɪ/".into(),
+        |p| p.ipa = "[ˈkeɪ]".into(),
+        |p| p.ipa = " ˈkeɪ".into(),
+        |p| p.ruled_by = "".into(),
+        |p| p.date = "07-11-2026".into(),
+        |p| p.date = "2026-13-07".into(),
+        |p| p.rejected = vec!["ˈkeɪ".into()],
+        |p| p.rejected = vec!["ˈkaɪ".into(), "ˈkaɪ".into()],
+    ];
+    for edit in edits {
+        assert!(
+            matches!(
+                store.put(with(edit)),
+                Err(StoreError::Refused(StoreRefusal::Malformed { .. }))
+            ),
+            "{:?}",
+            with(edit)
+        );
+    }
+    assert_eq!(store.get(&eid("kay")).unwrap(), None);
 }
