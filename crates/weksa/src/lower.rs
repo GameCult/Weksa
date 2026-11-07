@@ -90,6 +90,11 @@ pub enum LowerError {
     UnknownEntity { entity: EntityId },
     /// The entity has no form in [`TARGET_LANGUAGE`].
     NoForm { entity: EntityId },
+    /// IPA was requested for an entity whose [`TARGET_LANGUAGE`] citation form
+    /// has no ruled pronunciation. Spelling is not a pronunciation.
+    NoPronunciation { entity: EntityId },
+    /// IPA was requested for a packet that cites no entity.
+    NoEntityReferent,
     /// The entity port failed to read.
     EntityRead { entity: EntityId, why: String },
 }
@@ -180,6 +185,29 @@ pub fn lower(
     Ok(out)
 }
 
+/// The ruled IPA of every entity a packet cites, one per entity referent in
+/// the packet's referent order, as stored: bare, stress-marked, nothing
+/// derived. A rejected pronunciation is never read. An entity the port does not
+/// hold, or one with no ruled pronunciation in [`TARGET_LANGUAGE`], is refused:
+/// the lowerer has no grapheme-to-phoneme guess to offer in its place.
+pub fn pronounce(
+    input: &LoweringInput,
+    entities: &dyn EntityForms,
+) -> Result<Vec<String>, LowerError> {
+    let mut out = Vec::new();
+    for id in input.referents().iter().filter_map(|r| r.entity.as_ref()) {
+        let entity = entity(entities, id)?;
+        let p = entity
+            .pronunciation_in(TARGET_LANGUAGE)
+            .ok_or_else(|| LowerError::NoPronunciation { entity: id.clone() })?;
+        out.push(p.ipa.clone());
+    }
+    if out.is_empty() {
+        return Err(LowerError::NoEntityReferent);
+    }
+    Ok(out)
+}
+
 fn clause(
     input: &LoweringInput,
     inv: &Inventory,
@@ -254,16 +282,19 @@ fn filler(
 
 /// The entity's citation form in [`TARGET_LANGUAGE`].
 fn name(entities: &dyn EntityForms, id: &EntityId) -> Result<String, LowerError> {
-    let entity = entities
+    entity(entities, id)?
+        .forms_in(TARGET_LANGUAGE)
+        .and_then(<[String]>::first)
+        .cloned()
+        .ok_or_else(|| LowerError::NoForm { entity: id.clone() })
+}
+
+fn entity(entities: &dyn EntityForms, id: &EntityId) -> Result<Entity, LowerError> {
+    entities
         .entity(id)
         .map_err(|e| LowerError::EntityRead {
             entity: id.clone(),
             why: e.to_string(),
         })?
-        .ok_or_else(|| LowerError::UnknownEntity { entity: id.clone() })?;
-    entity
-        .forms_in(TARGET_LANGUAGE)
-        .and_then(<[String]>::first)
-        .cloned()
-        .ok_or_else(|| LowerError::NoForm { entity: id.clone() })
+        .ok_or_else(|| LowerError::UnknownEntity { entity: id.clone() })
 }

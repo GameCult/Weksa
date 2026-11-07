@@ -16,6 +16,29 @@ pub struct LanguageForms {
     /// 1 to 64 bytes each, no control or invisible format character, no edge
     /// whitespace, none repeated.
     pub forms: Vec<String>,
+    /// How the citation form (`forms[0]`) is said, when someone with the
+    /// authority to rule on it has. Absent means unruled, never "spelled as
+    /// read".
+    #[serde(default)]
+    pub pronunciation: Option<Pronunciation>,
+}
+
+/// A ruled pronunciation of an entity's citation form in one language.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Pronunciation {
+    /// Broad IPA with stress marks, bare: no enclosing `/` or `[ ]`. 1 to 64
+    /// bytes, NFC.
+    pub ipa: String,
+    /// Who ruled: the entity itself, a writer, an operator.
+    pub ruled_by: String,
+    /// `YYYY-MM-DD`.
+    pub date: String,
+    /// Where the ruling was made: a room, a document, a run.
+    pub source: String,
+    /// Pronunciations that were considered and refused, same shape as `ipa`.
+    /// Kept so nobody re-proposes one; never emitted.
+    #[serde(default)]
+    pub rejected: Vec<String>,
 }
 
 /// Where an entity was minted.
@@ -49,5 +72,13 @@ impl Entity {
             .iter()
             .find(|f| f.language == language)
             .map(|f| f.forms.as_slice())
+    }
+
+    /// The ruled pronunciation of the citation form in `language`, if any.
+    pub fn pronunciation_in(&self, language: &str) -> Option<&Pronunciation> {
+        self.forms
+            .iter()
+            .find(|f| f.language == language)
+            .and_then(|f| f.pronunciation.as_ref())
     }
 }
