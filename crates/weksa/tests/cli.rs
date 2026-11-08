@@ -876,6 +876,18 @@ fn proof_packet_lowers_and_the_lowering_scores_against_items() {
     let ipa = weksa(d.path(), &args);
     assert!(ipa.status.success(), "{}", out(&ipa));
     assert_eq!(String::from_utf8(ipa.stdout).unwrap(), "ˈnibu\n");
+    // The phones line is the committed fixture, byte for byte, and is a different
+    // output from --ipa, so the two flags cannot be combined.
+    let phones = weksa(d.path(), &["lower", "./p.cc", "packet:6e6962752d303031", "--phones"]);
+    assert!(phones.status.success(), "{}", out(&phones));
+    let fixture = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/phonology/fixtures/nibu-en-US.phones.json"),
+    )
+    .unwrap();
+    assert_eq!(String::from_utf8(phones.stdout).unwrap(), fixture);
+    let both = weksa(d.path(), &["lower", "./p.cc", "packet:6e6962752d303031", "--phones", "--ipa"]);
+    assert!(!both.status.success(), "{}", out(&both));
     let again = weksa(d.path(), &["lower", "./p.cc", "packet:6e6962752d303031"]);
     assert_eq!(String::from_utf8(again.stdout).unwrap(), text);
 

@@ -1,0 +1,46 @@
+# Weksa phone inventory, en-US (General American, broad). One phone per line, tab separated:
+#   ipa <TAB> class <TAB> tenseness <TAB> gloss
+# class: consonant | vowel. tenseness: tense | lax | reduced for a vowel, `-` for a consonant. A multi-character
+# phone (affricate, diphthong) is one entry and one phone. The segmenter reads only this file: an IPA symbol with no
+# line here is refused, never guessed. Tense/lax is the textbook classification; it is what separates /i/ (nee) from
+# /ɪ/ (nih). Stress is not a phone: ˈ and ˌ are read by the segmenter and put on the vowel that follows.
+p	consonant	-	voiceless bilabial stop
+b	consonant	-	voiced bilabial stop
+t	consonant	-	voiceless alveolar stop
+d	consonant	-	voiced alveolar stop
+k	consonant	-	voiceless velar stop
+g	consonant	-	voiced velar stop
+f	consonant	-	voiceless labiodental fricative
+v	consonant	-	voiced labiodental fricative
+θ	consonant	-	voiceless dental fricative
+ð	consonant	-	voiced dental fricative
+s	consonant	-	voiceless alveolar fricative
+z	consonant	-	voiced alveolar fricative
+ʃ	consonant	-	voiceless postalveolar fricative
+ʒ	consonant	-	voiced postalveolar fricative
+h	consonant	-	voiceless glottal fricative
+tʃ	consonant	-	voiceless postalveolar affricate
+dʒ	consonant	-	voiced postalveolar affricate
+m	consonant	-	bilabial nasal
+n	consonant	-	alveolar nasal
+ŋ	consonant	-	velar nasal
+l	consonant	-	alveolar lateral approximant
+ɹ	consonant	-	alveolar approximant
+j	consonant	-	palatal approximant
+w	consonant	-	labial-velar approximant
+i	vowel	tense	close front unrounded (fleece, nee)
+ɪ	vowel	lax	near-close front unrounded (kit, nih)
+ɛ	vowel	lax	open-mid front unrounded (dress)
+æ	vowel	lax	near-open front unrounded (trap)
+ɑ	vowel	tense	open back unrounded (palm)
+ɔ	vowel	tense	open-mid back rounded (thought)
+ʊ	vowel	lax	near-close back rounded (foot)
+u	vowel	tense	close back rounded (goose, boo)
+ʌ	vowel	lax	open-mid back unrounded (strut)
+ə	vowel	reduced	schwa
+ɚ	vowel	reduced	r-coloured schwa
+eɪ	vowel	tense	face diphthong
+oʊ	vowel	tense	goat diphthong
+aɪ	vowel	tense	price diphthong
+aʊ	vowel	tense	mouth diphthong
+ɔɪ	vowel	tense	choice diphthong

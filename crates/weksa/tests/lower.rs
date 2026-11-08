@@ -11,7 +11,7 @@ use weksa::inventory::proof_revision;
 use weksa::packet::{EntityId, FeatValue, FeatureValue, Packet, proof_packet};
 use weksa::{
     CorpusStore, EntityForms, EntityStore, Inventory, InventoryStore, LowerError, LoweringInput,
-    PacketStore, Pronunciation, lower, pronounce, validate,
+    PacketStore, PhoneInventory, PhoneLine, Pronunciation, Stress, lower, pronounce, validate,
 };
 
 const PROOF: &str = "Warning: you may endanger yourself by touching the control. \
@@ -433,4 +433,141 @@ fn ipa_needs_an_entity_the_port_holds_and_a_packet_that_cites_one() {
         pronounce(&view(&p, &inv), &committed_entities()),
         Err(LowerError::NoEntityReferent)
     );
+}
+
+// ---- the phones line: the phone inventory and the segmenter ----
+
+fn phones_of(ipa: &str) -> Result<Vec<PhoneLine>, LowerError> {
+    let mut n = nibu(&[("en-US", &["Nibu"])]);
+    n.forms[0].pronunciation = Some(ruled(ipa, &[]));
+    let mut e = Entities::default();
+    e.held.push(n);
+    let (inv, _dir) = committed();
+    weksa::phones(&view(&proof_packet(), &inv), &e)
+}
+
+fn seg(ipa: &str) -> Vec<(String, Stress)> {
+    let inv = PhoneInventory::for_language("en-US").unwrap();
+    inv.segment(ipa)
+        .unwrap()
+        .into_iter()
+        .map(|p| (p.ipa, p.stress))
+        .collect()
+}
+
+fn pairs(v: &[(&str, Stress)]) -> Vec<(String, Stress)> {
+    v.iter().map(|(i, s)| ((*i).to_string(), *s)).collect()
+}
+
+#[test]
+fn nibus_committed_ruling_lowers_to_the_committed_phones_fixture() {
+    let (inv, _dir) = committed();
+    let lines = weksa::phones(&view(&proof_packet(), &inv), &committed_entities()).unwrap();
+    let fixture = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/phonology/fixtures/nibu-en-US.phones.json"),
+    )
+    .unwrap();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(serde_json::to_string(&lines[0]).unwrap(), fixture.trim_end());
+}
+
+#[test]
+fn tense_i_is_a_phone_and_the_rejected_lax_form_is_a_different_one() {
+    use weksa::phones::{Class, Tenseness};
+    let inv = PhoneInventory::for_language("en-US").unwrap();
+    assert_eq!(inv.class("i"), Some(&Class::Vowel(Tenseness::Tense)));
+    assert_eq!(inv.class("ɪ"), Some(&Class::Vowel(Tenseness::Lax)));
+    assert_eq!(inv.class("u"), Some(&Class::Vowel(Tenseness::Tense)));
+    let ruled_form = seg("ˈnibu");
+    let lax = seg("ˈnɪbu");
+    assert_ne!(ruled_form, lax);
+    assert_eq!(lax[1], ("ɪ".to_string(), Stress::Primary));
+    // The committed seed rejects the lax form, and it is not what the seed emits.
+    let seed = committed_entities();
+    let nibu = seed.get(&EntityId::parse("entity:nibu").unwrap()).unwrap().unwrap();
+    let p = nibu.pronunciation_in("en-US").unwrap();
+    assert_eq!(p.rejected, ["ˈnɪbu"]);
+    assert_eq!(seg(&p.ipa), ruled_form);
+    assert!(p.rejected.iter().all(|r| seg(r) != seg(&p.ipa)));
+}
+
+#[test]
+fn stress_lands_on_the_vowel_after_the_mark_and_nowhere_else() {
+    use Stress::{None as N, Primary as P, Secondary as S};
+    assert_eq!(seg("ˈnibu"), pairs(&[("n", N), ("i", P), ("b", N), ("u", N)]));
+    assert_eq!(seg("nˈibu"), seg("ˈnibu"));
+    assert_eq!(seg("bˈunˌi"), pairs(&[("b", N), ("u", P), ("n", N), ("i", S)]));
+    assert_eq!(seg("nibu"), pairs(&[("n", N), ("i", N), ("b", N), ("u", N)]));
+}
+
+#[test]
+fn multi_character_phones_are_one_phone_by_longest_match() {
+    use Stress::{None as N, Primary as P};
+    assert_eq!(seg("ˈtʃeɪ"), pairs(&[("tʃ", N), ("eɪ", P)]));
+    assert_eq!(seg("dʒaʊ"), pairs(&[("dʒ", N), ("aʊ", N)]));
+    // /t/ then /ʃ/ is not what a lone "t" and "ʃ" mean when the affricate is listed,
+    // but a symbol sequence the inventory cannot join still splits.
+    assert_eq!(seg("ɔɪt"), pairs(&[("ɔɪ", N), ("t", N)]));
+}
+
+#[test]
+fn a_phone_the_inventory_lacks_is_refused_with_where_and_never_guessed() {
+    let id = EntityId::parse("entity:nibu").unwrap();
+    for (ipa, at, text) in [
+        ("ˈnixu", "ˈni".len(), "xu"),
+        ("ˈniːbu", "ˈni".len(), "ːbu"),
+        ("ˈnibu.", "ˈnibu".len(), "."),
+        ("ˈni bu", "ˈni".len(), " bu"),
+    ] {
+        assert_eq!(
+            phones_of(ipa),
+            Err(LowerError::UnknownPhone { entity: id.clone(), at, text: text.into() }),
+            "{ipa}"
+        );
+    }
+}
+
+#[test]
+fn a_stress_mark_with_no_vowel_to_land_on_is_refused() {
+    let id = EntityId::parse("entity:nibu").unwrap();
+    for (ipa, at) in [("nibuˈ", "nibu".len()), ("ˈˈnibu", 0), ("ˈnˈibu", 0), ("ˈnb", 0)] {
+        assert_eq!(
+            phones_of(ipa),
+            Err(LowerError::DanglingStress { entity: id.clone(), at }),
+            "{ipa}"
+        );
+    }
+}
+
+#[test]
+fn phones_need_a_ruling_and_an_entity_exactly_as_ipa_does() {
+    assert_eq!(
+        weksa::phones(&view(&proof_packet(), &committed().0), &Entities::default()),
+        Err(LowerError::UnknownEntity { entity: EntityId::parse("entity:nibu").unwrap() })
+    );
+    let mut e = Entities::default();
+    e.held.push(nibu(&[("en-US", &["Nibu"])]));
+    assert_eq!(
+        weksa::phones(&view(&proof_packet(), &committed().0), &e),
+        Err(LowerError::NoPronunciation { entity: EntityId::parse("entity:nibu").unwrap() })
+    );
+}
+
+#[test]
+fn the_inventory_parser_refuses_what_it_cannot_read() {
+    for bad in [
+        "i\tvowel\ttense",
+        "i\tvowel\t-\tx",
+        "n\tconsonant\ttense\tx",
+        "i\tvowel\tmid\tx",
+        "ˈi\tvowel\ttense\tx",
+        "\tvowel\ttense\tx",
+        "i\tvowel\ttense\t",
+        "i\tvowel\ttense\ta\ni\tvowel\tlax\tb",
+    ] {
+        assert!(PhoneInventory::parse(bad).is_err(), "{bad:?}");
+    }
+    assert!(PhoneInventory::parse("# c\n\ni\tvowel\ttense\ta\n").is_ok());
+    assert!(PhoneInventory::for_language("sa-Latn").is_none());
 }

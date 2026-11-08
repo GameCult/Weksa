@@ -23,9 +23,12 @@
 
 use std::fmt;
 
+use serde::Serialize;
+
 use crate::entity::Entity;
 use crate::inventory::{Family, InvId, Inventory};
 use crate::packet::{EntityId, NodeId, Predication};
+use crate::phones::{Phone, PhoneInventory, SegmentError};
 use crate::store::EntityStore;
 use crate::validate::LoweringInput;
 
@@ -95,6 +98,13 @@ pub enum LowerError {
     NoPronunciation { entity: EntityId },
     /// IPA was requested for a packet that cites no entity.
     NoEntityReferent,
+    /// Phones were requested for an entity whose ruled IPA holds a symbol the
+    /// language's phone inventory does not list (or the language has no
+    /// inventory). The lowerer does not guess a phone.
+    UnknownPhone { entity: EntityId, at: usize, text: String },
+    /// Phones were requested for an entity whose ruled IPA has a stress mark
+    /// with no vowel after it.
+    DanglingStress { entity: EntityId, at: usize },
     /// The entity port failed to read.
     EntityRead { entity: EntityId, why: String },
 }
@@ -194,13 +204,54 @@ pub fn pronounce(
     input: &LoweringInput,
     entities: &dyn EntityForms,
 ) -> Result<Vec<String>, LowerError> {
+    Ok(ruled(input, entities)?.into_iter().map(|(_, ipa)| ipa).collect())
+}
+
+/// One entity's ruled pronunciation as the phones line a sound consumer reads:
+/// the language tag, the stored IPA it came from, and the segmented phones.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PhoneLine {
+    pub language: &'static str,
+    pub source: String,
+    pub phones: Vec<Phone>,
+}
+
+/// The phones line of every entity a packet cites, in [`pronounce`] order, each
+/// segmented by [`TARGET_LANGUAGE`]'s phone inventory. A symbol the inventory
+/// does not list refuses the whole call.
+pub fn phones(
+    input: &LoweringInput,
+    entities: &dyn EntityForms,
+) -> Result<Vec<PhoneLine>, LowerError> {
+    let inventory = PhoneInventory::for_language(TARGET_LANGUAGE);
+    ruled(input, entities)?
+        .into_iter()
+        .map(|(entity, source)| {
+            let unknown = |at, text| LowerError::UnknownPhone { entity: entity.clone(), at, text };
+            let inventory = inventory.ok_or_else(|| unknown(0, source.clone()))?;
+            let phones = inventory.segment(&source).map_err(|e| match e {
+                SegmentError::UnknownPhone { at, text } => unknown(at, text),
+                SegmentError::DanglingStress { at } => {
+                    LowerError::DanglingStress { entity: entity.clone(), at }
+                }
+            })?;
+            Ok(PhoneLine { language: TARGET_LANGUAGE, source, phones })
+        })
+        .collect()
+}
+
+/// `(entity, ruled IPA)` for each entity referent, in referent order.
+fn ruled(
+    input: &LoweringInput,
+    entities: &dyn EntityForms,
+) -> Result<Vec<(EntityId, String)>, LowerError> {
     let mut out = Vec::new();
     for id in input.referents().iter().filter_map(|r| r.entity.as_ref()) {
         let entity = entity(entities, id)?;
         let p = entity
             .pronunciation_in(TARGET_LANGUAGE)
             .ok_or_else(|| LowerError::NoPronunciation { entity: id.clone() })?;
-        out.push(p.ipa.clone());
+        out.push((id.clone(), p.ipa.clone()));
     }
     if out.is_empty() {
         return Err(LowerError::NoEntityReferent);
