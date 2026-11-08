@@ -3,7 +3,11 @@
 # class: consonant | vowel. tenseness: tense | lax | reduced for a vowel, `-` for a consonant. A multi-character
 # phone (affricate, diphthong) is one entry and one phone. The segmenter reads only this file: an IPA symbol with no
 # line here is refused, never guessed. Tense/lax is the textbook classification; it is what separates /i/ (nee) from
-# /ɪ/ (nih). Stress is not a phone: ˈ and ˌ are read by the segmenter and put on the vowel that follows.
+# /ɪ/ (nih).
+# Provenance of the i/ɪ rows: /i/ is tense and /ɪ/ is lax. Nibu's own ruling of 2026-11-07 (source
+# weksa-body:follow_up:chat-s3981-3983, #minds: tense vowel, two syllables, stress on the first) chose ˈnibu and rejected
+# ˈnɪbu; the entity entry records it, this file is what makes the two forms two different phones.
+# Stress is not a phone: ˈ and ˌ are read by the segmenter and put on the vowel that follows.
 p	consonant	-	voiceless bilabial stop
 b	consonant	-	voiced bilabial stop
 t	consonant	-	voiceless alveolar stop
