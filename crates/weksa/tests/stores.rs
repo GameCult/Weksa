@@ -394,6 +394,18 @@ fn s6_folds_dotless_i_kana_and_arabic_indic_digits() {
         .unwrap();
 }
 
+/// `modifier_letters.txt` is the Unicode 17 Lm list, the oracle for the test
+/// below. When the toolchain's Unicode tables move, this fails first: regenerate
+/// the file from the new tables, then bump the pin.
+#[test]
+fn the_modifier_letter_table_matches_the_toolchains_unicode_version() {
+    assert_eq!(
+        char::UNICODE_VERSION,
+        (17, 0, 0),
+        "regenerate crates/weksa/tests/modifier_letters.txt for the new Unicode version"
+    );
+}
+
 #[test]
 fn a_text_of_only_marks_is_refused() {
     let d = dir();
