@@ -337,6 +337,157 @@ fn s6_reads_text_under_compatibility_case_folding() {
 }
 
 #[test]
+fn s6_folds_dotless_i_kana_and_arabic_indic_digits() {
+    let d = dir();
+    let mut store = CorpusStore::open(&d.path().join("c.cc")).unwrap();
+    // Turkish dotless and dotted capital i read as i; hiragana and katakana
+    // (small, voiced, iteration marks, halfwidth through NFKC) read as one
+    // syllabary; Arabic-Indic and Extended Arabic-Indic digits read as 0-9.
+    let pairs = [
+        ("isi", "\u{131}s\u{131}"),
+        ("istanbul", "\u{130}stanbul"),
+        (
+            "\u{3072}\u{3089}\u{304c}\u{306a}",
+            "\u{30d2}\u{30e9}\u{30ac}\u{30ca}",
+        ),
+        ("\u{3041}\u{3083}", "\u{30a1}\u{30e3}"),
+        ("\u{3042}\u{309d}\u{309e}", "\u{3042}\u{30fd}\u{30fe}"),
+        ("\u{306d}\u{3053}", "\u{ff88}\u{ff7a}"),
+        (
+            "room 1234567890",
+            "room \u{661}\u{662}\u{663}\u{664}\u{665}\u{666}\u{667}\u{668}\u{669}\u{660}",
+        ),
+        ("gate 45", "gate \u{6f4}\u{6f5}"),
+    ];
+    for (n, (a, b)) in pairs.into_iter().enumerate() {
+        let (first, second) = (
+            format!("item:fold:{}", 2 * n + 1),
+            format!("item:fold:{}", 2 * n + 2),
+        );
+        store.add(item(&first, a), &ents(&d)).unwrap();
+        assert_eq!(
+            refusal(store.add(item(&second, b), &ents(&d))),
+            StoreRefusal::S6TextHeld {
+                key: second.clone(),
+                held_by: first.clone()
+            },
+            "{a:?} vs {b:?}"
+        );
+    }
+    // Nothing wider: the prolonged sound mark, Devanagari digits and the
+    // Cyrillic homoglyph of i stay apart from what they resemble.
+    store
+        .add(item("item:fold:90", "\u{30a2}\u{30fc}"), &ents(&d))
+        .unwrap();
+    store
+        .add(item("item:fold:91", "\u{30a2}"), &ents(&d))
+        .unwrap();
+    store
+        .add(item("item:fold:92", "room 12"), &ents(&d))
+        .unwrap();
+    store
+        .add(item("item:fold:93", "room \u{967}\u{968}"), &ents(&d))
+        .unwrap();
+    store.add(item("item:fold:94", "bit"), &ents(&d)).unwrap();
+    store
+        .add(item("item:fold:95", "b\u{456}t"), &ents(&d))
+        .unwrap();
+}
+
+#[test]
+fn a_text_of_only_marks_is_refused() {
+    let d = dir();
+    let mut store = CorpusStore::open(&d.path().join("c.cc")).unwrap();
+    // Prolonged sound mark, Thai maiyamok, fathatan, tatweel: alphabetic to
+    // Unicode, but none carries a word.
+    for (n, text) in [
+        "\u{30fc}",
+        "\u{e46}",
+        "\u{64b}",
+        "\u{640}",
+        "\u{30fc}\u{30fc}",
+        "\u{640}\u{64b}",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let key = format!("item:mo:{}", n + 1);
+        assert_eq!(
+            refusal(store.add(item(&key, text), &ents(&d))),
+            malformed(&key, "text has no base letter or digit"),
+            "{text:?}"
+        );
+    }
+    // Every modifier letter (Lm) alone is refused: for having no base letter,
+    // or, where Unicode does not call it alphabetic, no alphanumeric at all, or
+    // (U+0374, U+037A) for not being NFC.
+    for line in include_str!("modifier_letters.txt")
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+    {
+        let c = char::from_u32(u32::from_str_radix(line, 16).unwrap()).unwrap();
+        let key = "item:mo:90";
+        let got = refusal(store.add(item(key, &c.to_string()), &ents(&d)));
+        assert!(
+            got == StoreRefusal::NotNfc { key: key.into() }
+                || got == malformed(key, "text has no base letter or digit")
+                || got == malformed(key, "text has no alphanumeric character"),
+            "{c:?}: {got:?}"
+        );
+    }
+    // With a base letter or digit the same marks are text.
+    store
+        .add(item("item:mo:91", "\u{30a2}\u{30fc}"), &ents(&d))
+        .unwrap();
+    store
+        .add(item("item:mo:92", "\u{e01}\u{e46}"), &ents(&d))
+        .unwrap();
+    store
+        .add(item("item:mo:93", "\u{640}7"), &ents(&d))
+        .unwrap();
+}
+
+#[test]
+fn admitted_on_is_a_real_calendar_date() {
+    let d = dir();
+    let mut store = CorpusStore::open(&d.path().join("c.cc")).unwrap();
+    for (n, bad) in [
+        "",
+        "junk",
+        "2026-02-30",
+        "2026-02-29",
+        "2026-13-01",
+        "2026-00-10",
+        "2026-04-31",
+        "2026-1-1",
+        "2026-10-29 ",
+        "20261029",
+        "2026-10-29T00:00Z",
+        "\u{661}\u{662}\u{663}\u{664}-10-29",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let key = format!("item:dt:{}", n + 1);
+        let mut it = item(&key, "a date");
+        it.admitted_on = bad.into();
+        assert_eq!(
+            refusal(store.add(it, &ents(&d))),
+            malformed(&key, "admitted_on is not a YYYY-MM-DD date"),
+            "{bad:?}"
+        );
+    }
+    for (n, good) in ["2026-10-29", "2024-02-29", "2000-02-29"]
+        .into_iter()
+        .enumerate()
+    {
+        let mut it = item(&format!("item:dt:{}", 90 + n), &format!("a date {n}"));
+        it.admitted_on = good.into();
+        store.add(it, &ents(&d)).unwrap();
+    }
+}
+
+#[test]
 fn s6_keeps_tone_marks_and_viramas_apart() {
     let d = dir();
     let mut store = CorpusStore::open(&d.path().join("c.cc")).unwrap();

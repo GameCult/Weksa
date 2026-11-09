@@ -13,7 +13,9 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::corpus::{CorpusItem, CorpusItemId, Source, item_key, key_slug};
 use crate::entity::{Entity, EntityOrigin, Pronunciation};
-use crate::form::{is_attestation, is_joining_only, is_language_tag, is_refused_format};
+use crate::form::{
+    is_attestation, is_calendar_date, is_joining_only, is_language_tag, is_refused_format,
+};
 use crate::inventory::{Change, InvId, Inventory, InventoryEntry, InventoryRevision, revision_key};
 use crate::packet::{EntityId, Packet};
 use crate::validate::{LoweringInput, Refusal, admissible};
@@ -81,6 +83,44 @@ pub enum StoreRefusal {
     Malformed { key: String, why: &'static str },
 }
 
+/// What the CLI prints: the rule broken and the numbers and reasons that
+/// explain it. Item keys, entity ids and groups are the caller's identifiers
+/// and are left to the typed value, never to text.
+impl fmt::Display for StoreRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use StoreRefusal::*;
+        match self {
+            S1ItemImmutable { .. } => f.write_str("S1ItemImmutable"),
+            S2RevisionChain { expected, got } => {
+                write!(f, "S2RevisionChain expected {expected} got {got}")
+            }
+            S3Frozen { frozen } => write!(f, "S3Frozen at {frozen}"),
+            S4IntroducedRev {
+                introduced,
+                revision,
+                ..
+            } => write!(f, "S4IntroducedRev {introduced} in revision {revision}"),
+            S5SupersedeGroup { .. } => f.write_str("S5SupersedeGroup"),
+            S6TextHeld { .. } => f.write_str("S6TextHeld"),
+            UnknownCorpusItem { .. } => f.write_str("UnknownCorpusItem"),
+            PacketImmutable { .. } => f.write_str("PacketImmutable"),
+            UnknownEntity { .. } => f.write_str("UnknownEntity"),
+            NameSpanRange { start, end, .. } => write!(f, "NameSpanRange {start}..{end}"),
+            NameSpanSplitsCluster { start, end, .. } => {
+                write!(f, "NameSpanSplitsCluster {start}..{end}")
+            }
+            NotNfc { .. } => f.write_str("NotNfc"),
+            EntityBounds { bound, .. } => write!(f, "EntityBounds {bound:?}"),
+            NameSpanOverlap { .. } => f.write_str("NameSpanOverlap"),
+            NameSpanNotAForm { start, end, .. } => write!(f, "NameSpanNotAForm {start}..{end}"),
+            EntityNotAppendOnly { .. } => f.write_str("EntityNotAppendOnly"),
+            EntityNotOnItem { .. } => f.write_str("EntityNotOnItem"),
+            WithdrawnCorpusItem { .. } => f.write_str("WithdrawnCorpusItem"),
+            Malformed { why, .. } => write!(f, "Malformed: {why}"),
+        }
+    }
+}
+
 /// The capacity bound an entity broke.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EntityBound {
@@ -111,7 +151,7 @@ pub enum StoreError {
 impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            StoreError::Refused(r) => write!(f, "refused: {r:?}"),
+            StoreError::Refused(r) => write!(f, "refused: {r}"),
             StoreError::Invalid(rs) => {
                 write!(f, "invalid packet:")?;
                 rs.iter().try_for_each(|r| write!(f, " [{r}]"))
@@ -244,6 +284,13 @@ impl CorpusStore {
         if !text.chars().any(char::is_alphanumeric) {
             return Err(malformed(&item.id, "text has no alphanumeric character"));
         }
+        // Read from the text as given: NFKC maps modifier letters (ʰ) to base letters.
+        if !item.text.chars().any(is_base) {
+            return Err(malformed(&item.id, "text has no base letter or digit"));
+        }
+        if !is_calendar_date(&item.admitted_on) {
+            return Err(malformed(&item.id, "admitted_on is not a YYYY-MM-DD date"));
+        }
         if let Some(why) = empty_attestation(&item.source) {
             return Err(malformed(&item.id, why));
         }
@@ -364,14 +411,138 @@ fn check_entities(item: &CorpusItem, entities: &EntityStore) -> Result<(), Store
 /// default case fold, NFKC) keeping letters, digits and combining marks
 /// (General_Category L, N, M) so tone marks and viramas keep words apart. Composed and decomposed,
 /// fullwidth, ligature and case-fold variants (straße, STRASSE) and spacing and
-/// punctuation variants compare equal. Homoglyphs across scripts (Cyrillic a for
-/// Latin a) stay apart: no key here reads what a character looks like.
+/// punctuation variants compare equal. Three writings of one thing also fold:
+/// Turkish dotless i and dotted capital I read as i, katakana reads as the
+/// hiragana of the same syllable, and Arabic-Indic and Extended Arabic-Indic
+/// digits read as 0-9. Homoglyphs across scripts (Cyrillic a for Latin a) stay
+/// apart: no key here reads what a character looks like.
 fn normalized(text: &str) -> String {
-    let folded = default_case_fold_str(&text.nfkc().collect::<String>());
-    folded
+    let mapped: String = text.nfkc().map(fold_variant).collect();
+    default_case_fold_str(&mapped)
         .nfkc()
         .filter(|c| c.is_alphanumeric() || is_combining_mark(*c))
         .collect()
+}
+
+/// The one-to-one folds `normalized` adds to NFKC and case folding, applied
+/// before the case fold (U+0130 would otherwise fold to i plus a combining dot,
+/// which the key keeps as a mark).
+fn fold_variant(c: char) -> char {
+    match c {
+        '\u{131}' => 'i',
+        '\u{130}' => 'I',
+        // Katakana letters and small letters to hiragana; the iteration marks
+        // ヽヾ to ゝゞ. The prolonged sound mark U+30FC stays.
+        '\u{30a1}'..='\u{30f6}' | '\u{30fd}'..='\u{30fe}' => {
+            char::from_u32(c as u32 - 0x60).unwrap_or(c)
+        }
+        '\u{660}'..='\u{669}' => char::from(b'0' + (c as u32 - 0x660) as u8),
+        '\u{6f0}'..='\u{6f9}' => char::from(b'0' + (c as u32 - 0x6f0) as u8),
+        _ => c,
+    }
+}
+
+/// A character that can carry a word: alphanumeric and neither a combining
+/// mark (Mn, Mc, Me) nor a modifier letter (Lm). A text of none is marks and
+/// modifiers only, like a text of punctuation.
+fn is_base(c: char) -> bool {
+    c.is_alphanumeric() && !is_combining_mark(c) && !is_modifier_letter(c)
+}
+
+/// General_Category Lm, Unicode 17 (the Rust 1.99 tables), as inclusive ranges.
+fn is_modifier_letter(c: char) -> bool {
+    const LM: [(u32, u32); 79] = [
+        (0x2b0, 0x2c1),
+        (0x2c6, 0x2d1),
+        (0x2e0, 0x2e4),
+        (0x2ec, 0x2ec),
+        (0x2ee, 0x2ee),
+        (0x374, 0x374),
+        (0x37a, 0x37a),
+        (0x559, 0x559),
+        (0x640, 0x640),
+        (0x6e5, 0x6e6),
+        (0x7f4, 0x7f5),
+        (0x7fa, 0x7fa),
+        (0x81a, 0x81a),
+        (0x824, 0x824),
+        (0x828, 0x828),
+        (0x8c9, 0x8c9),
+        (0x971, 0x971),
+        (0xe46, 0xe46),
+        (0xec6, 0xec6),
+        (0x10fc, 0x10fc),
+        (0x17d7, 0x17d7),
+        (0x1843, 0x1843),
+        (0x1aa7, 0x1aa7),
+        (0x1c78, 0x1c7d),
+        (0x1d2c, 0x1d6a),
+        (0x1d78, 0x1d78),
+        (0x1d9b, 0x1dbf),
+        (0x2071, 0x2071),
+        (0x207f, 0x207f),
+        (0x2090, 0x209c),
+        (0x2c7c, 0x2c7d),
+        (0x2d6f, 0x2d6f),
+        (0x2e2f, 0x2e2f),
+        (0x3005, 0x3005),
+        (0x3031, 0x3035),
+        (0x303b, 0x303b),
+        (0x309d, 0x309e),
+        (0x30fc, 0x30fe),
+        (0xa015, 0xa015),
+        (0xa4f8, 0xa4fd),
+        (0xa60c, 0xa60c),
+        (0xa67f, 0xa67f),
+        (0xa69c, 0xa69d),
+        (0xa717, 0xa71f),
+        (0xa770, 0xa770),
+        (0xa788, 0xa788),
+        (0xa7f1, 0xa7f4),
+        (0xa7f8, 0xa7f9),
+        (0xa9cf, 0xa9cf),
+        (0xa9e6, 0xa9e6),
+        (0xaa70, 0xaa70),
+        (0xaadd, 0xaadd),
+        (0xaaf3, 0xaaf4),
+        (0xab5c, 0xab5f),
+        (0xab69, 0xab69),
+        (0xff70, 0xff70),
+        (0xff9e, 0xff9f),
+        (0x10780, 0x10785),
+        (0x10787, 0x107b0),
+        (0x107b2, 0x107ba),
+        (0x10d4e, 0x10d4e),
+        (0x10d6f, 0x10d6f),
+        (0x10ec5, 0x10ec5),
+        (0x11dd9, 0x11dd9),
+        (0x16b40, 0x16b43),
+        (0x16d40, 0x16d42),
+        (0x16d6b, 0x16d6c),
+        (0x16f93, 0x16f9f),
+        (0x16fe0, 0x16fe1),
+        (0x16fe3, 0x16fe3),
+        (0x16ff2, 0x16ff3),
+        (0x1aff0, 0x1aff3),
+        (0x1aff5, 0x1affb),
+        (0x1affd, 0x1affe),
+        (0x1e030, 0x1e06d),
+        (0x1e137, 0x1e13d),
+        (0x1e4eb, 0x1e4eb),
+        (0x1e6ff, 0x1e6ff),
+        (0x1e94b, 0x1e94b),
+    ];
+    let c = c as u32;
+    LM.binary_search_by(|&(lo, hi)| {
+        if hi < c {
+            std::cmp::Ordering::Less
+        } else if lo > c {
+            std::cmp::Ordering::Greater
+        } else {
+            std::cmp::Ordering::Equal
+        }
+    })
+    .is_ok()
 }
 
 /// The field that holds an unattested provenance string, if any: a string with
@@ -563,18 +734,7 @@ fn check_pronunciation(entity: &Entity, p: &Pronunciation) -> Result<(), StoreEr
     if !is_attestation(&p.ruled_by) || !is_attestation(&p.source) {
         return Err(bad("a pronunciation names who ruled it and where"));
     }
-    let b = p.date.as_bytes();
-    let date_ok = b.len() == 10
-        && b.iter().enumerate().all(|(i, c)| {
-            if i == 4 || i == 7 {
-                *c == b'-'
-            } else {
-                c.is_ascii_digit()
-            }
-        })
-        && (1..=12).contains(&p.date[5..7].parse::<u32>().unwrap_or(0))
-        && (1..=31).contains(&p.date[8..].parse::<u32>().unwrap_or(0));
-    if !date_ok {
+    if !is_calendar_date(&p.date) {
         return Err(bad("a pronunciation is dated YYYY-MM-DD"));
     }
     if p.rejected.len() > EntityBound::MAX_FORMS {

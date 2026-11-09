@@ -51,15 +51,12 @@ fn forms_refuse_surface_text() {
 }
 
 #[test]
-fn a_refusal_names_the_form_and_the_value_and_a_form_reads_back_as_written() {
+fn a_refusal_names_the_form_and_keeps_the_value_out_of_its_text() {
     let e = NodeId::parse("n0").unwrap_err();
     assert_eq!(e.form, "NodeId");
     assert_eq!(e.got, "n0");
-    assert_eq!(e.to_string(), "\"n0\" is not a NodeId");
-    assert_eq!(
-        Grade::new(1001).unwrap_err().to_string(),
-        "\"1001\" is not a Grade"
-    );
+    assert_eq!(e.to_string(), "not a NodeId");
+    assert_eq!(Grade::new(1001).unwrap_err().to_string(), "not a Grade");
     assert_eq!(EncoderId::parse(ENCODER_ID).unwrap().as_str(), ENCODER_ID);
     assert_eq!(PacketId::parse(PACKET_ID).unwrap().as_str(), PACKET_ID);
     assert_eq!(

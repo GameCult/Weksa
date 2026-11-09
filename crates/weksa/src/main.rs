@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
+use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use unicode_normalization::UnicodeNormalization;
 use weksa::corpus::{CorpusItem, ModelFamily, NameSpan, Source, Turn};
@@ -180,9 +181,7 @@ impl PutArgs {
             let lf = forms
                 .iter_mut()
                 .find(|lf| lf.language == language)
-                .with_context(|| {
-                    format!("--pronunciation names {language}, which has no --form")
-                })?;
+                .context("--pronunciation names a language that has no --form")?;
             lf.pronunciation = Some(Pronunciation {
                 ipa: ipa.nfc().collect(),
                 ruled_by: need(self.ruled_by.clone(), "ruled-by")?,
@@ -290,10 +289,45 @@ struct AddArgs {
     generator: Option<String>,
     #[arg(long)]
     prompt_digest: Option<String>,
-    #[arg(long)]
+    /// `YYYY-MM-DD`, a real calendar date.
+    #[arg(long, value_parser = parse_date)]
     admitted_on: String,
     #[arg(long)]
     supersedes: Option<String>,
+}
+
+fn parse_date(s: &str) -> std::result::Result<String, String> {
+    if weksa::form::is_calendar_date(s) {
+        Ok(s.to_string())
+    } else {
+        Err("not a YYYY-MM-DD calendar date".into())
+    }
+}
+
+/// Parses the command line. A rejected value is reported by the flag that took
+/// it and the reason, never by the value: values are the caller's identifiers.
+fn parse_cli() -> Cli {
+    use std::error::Error;
+    match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e)
+            if matches!(
+                e.kind(),
+                ErrorKind::InvalidValue | ErrorKind::ValueValidation
+            ) =>
+        {
+            let arg = match e.get(ContextKind::InvalidArg) {
+                Some(ContextValue::String(a)) => {
+                    a.split_whitespace().next().unwrap_or("").to_string()
+                }
+                _ => String::new(),
+            };
+            let reason = e.source().map(|s| format!(": {s}")).unwrap_or_default();
+            eprintln!("error: invalid value for {arg}{reason}");
+            std::process::exit(2);
+        }
+        Err(e) => e.exit(),
+    }
 }
 
 fn need(value: Option<String>, flag: &str) -> Result<String> {
@@ -413,17 +447,13 @@ fn refused(e: StoreError) -> anyhow::Error {
 }
 
 fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let cli = parse_cli();
     match cli.command {
         Command::Validate { store, key } => {
             let inventory = InventoryStore::open(&cli.inventory)?.inventory()?;
             let packets = PacketStore::open(&store)?;
             let packets = match key {
-                Some(key) => vec![
-                    packets
-                        .get(&key)?
-                        .with_context(|| format!("no packet {key}"))?,
-                ],
+                Some(key) => vec![packets.get(&key)?.context("no such packet")?],
                 None => packets.all()?,
             };
             let mut bad = 0;
@@ -531,9 +561,7 @@ fn main() -> Result<()> {
             let inventory_store = InventoryStore::open(&cli.inventory)?;
             let inventory = inventory_store.inventory()?;
             let mut packets = PacketStore::open(&store)?;
-            let packet = packets
-                .get(&key)?
-                .with_context(|| format!("no packet {key}"))?;
+            let packet = packets.get(&key)?.context("no such packet")?;
             // Admission is the only source of a LoweringInput; re-admitting the
             // stored packet is a no-op write that re-runs every door check.
             let view = packets
@@ -562,12 +590,7 @@ fn main() -> Result<()> {
             let references = args
                 .items
                 .iter()
-                .map(|key| {
-                    Ok(corpus
-                        .get(key)?
-                        .with_context(|| format!("no item {key}"))?
-                        .text)
-                })
+                .map(|key| Ok(corpus.get(key)?.context("no such item")?.text))
                 .collect::<Result<Vec<_>>>()?;
             let inputs: Vec<ScoreInput> = references
                 .iter()
@@ -587,7 +610,7 @@ fn main() -> Result<()> {
         Command::Split { item_key } => {
             let item = CorpusStore::open(&cli.corpus)?
                 .get(&item_key)?
-                .with_context(|| format!("no item {item_key}"))?;
+                .context("no such item")?;
             println!("{}", split_text(&item));
         }
         Command::Schema { out } => {

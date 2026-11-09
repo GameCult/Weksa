@@ -22,7 +22,9 @@ impl FormError {
 
 impl fmt::Display for FormError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?} is not a {}", self.got, self.form)
+        // `got` stays a field for callers; the text does not echo it, because
+        // the value is often an identifier the caller supplied.
+        write!(f, "not a {}", self.form)
     }
 }
 
@@ -60,6 +62,34 @@ macro_rules! string_form {
     };
 }
 pub(crate) use string_form;
+
+/// A real calendar date written `YYYY-MM-DD`: four ASCII digits, a month 1 to
+/// 12 and a day that month has in that year (leap years by the Gregorian rule).
+pub fn is_calendar_date(s: &str) -> bool {
+    let b = s.as_bytes();
+    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
+        return false;
+    }
+    let digits = |r: std::ops::Range<usize>| {
+        b[r.clone()]
+            .iter()
+            .all(u8::is_ascii_digit)
+            .then(|| s[r].parse::<u32>().ok())
+            .flatten()
+    };
+    let (Some(year), Some(month), Some(day)) = (digits(0..4), digits(5..7), digits(8..10)) else {
+        return false;
+    };
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=days).contains(&day)
+}
 
 /// A BCP 47-form language tag: 1 to 35 bytes of ASCII alphanumerics in
 /// hyphen-separated subtags of 1 to 8 bytes; the first is 2 to 8 letters, or the
