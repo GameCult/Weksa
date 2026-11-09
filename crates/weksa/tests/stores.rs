@@ -371,7 +371,7 @@ fn an_attestation_holds_something_readable() {
     let mut store = CorpusStore::open(&d.path().join("c.cc")).unwrap();
     let s = |x: &str| x.to_string();
     type Build = fn(String) -> Source;
-    let builders: [(Build, &'static str); 9] = [
+    let builders: [(Build, &'static str); 12] = [
         (
             |v| Source::CastAuthored {
                 persona: v,
@@ -405,6 +405,10 @@ fn an_attestation_holds_something_readable() {
                 work: v,
                 author: "a".into(),
                 edition_url: "u".into(),
+                licence: "l".into(),
+                jurisdiction: "j".into(),
+                translator: "t".into(),
+                edition_year: 1891,
             },
             "a public-domain source names its work",
         ),
@@ -413,6 +417,10 @@ fn an_attestation_holds_something_readable() {
                 work: "w".into(),
                 author: v,
                 edition_url: "u".into(),
+                licence: "l".into(),
+                jurisdiction: "j".into(),
+                translator: "t".into(),
+                edition_year: 1891,
             },
             "a public-domain source names its author",
         ),
@@ -421,8 +429,48 @@ fn an_attestation_holds_something_readable() {
                 work: "w".into(),
                 author: "a".into(),
                 edition_url: v,
+                licence: "l".into(),
+                jurisdiction: "j".into(),
+                translator: "t".into(),
+                edition_year: 1891,
             },
             "a public-domain source names its edition url",
+        ),
+        (
+            |v| Source::PublicDomain {
+                work: "w".into(),
+                author: "a".into(),
+                edition_url: "u".into(),
+                licence: v,
+                jurisdiction: "j".into(),
+                translator: "t".into(),
+                edition_year: 1891,
+            },
+            "a public-domain source names its licence",
+        ),
+        (
+            |v| Source::PublicDomain {
+                work: "w".into(),
+                author: "a".into(),
+                edition_url: "u".into(),
+                licence: "l".into(),
+                jurisdiction: v,
+                translator: "t".into(),
+                edition_year: 1891,
+            },
+            "a public-domain source names its jurisdiction",
+        ),
+        (
+            |v| Source::PublicDomain {
+                work: "w".into(),
+                author: "a".into(),
+                edition_url: "u".into(),
+                licence: "l".into(),
+                jurisdiction: "j".into(),
+                translator: v,
+                edition_year: 1891,
+            },
+            "a public-domain source names its translator",
         ),
         (
             |v| Source::ModelWritten {
@@ -528,6 +576,10 @@ fn an_item_source_attests_with_non_empty_strings() {
         work: s(work),
         author: s(author),
         edition_url: s(url),
+        licence: s("l"),
+        jurisdiction: s("j"),
+        translator: s("t"),
+        edition_year: 1891,
     };
     let cases: [(Source, &'static str); 9] = [
         (
@@ -1291,4 +1343,27 @@ fn seed_reseeded() {
         assert!(entities.get(&i.speaker).unwrap().is_some(), "{}", i.id);
         replay.add(i, &entities).unwrap();
     }
+}
+
+#[test]
+fn a_public_domain_source_without_an_edition_year_is_refused() {
+    let d = dir();
+    let mut store = CorpusStore::open(&d.path().join("c.cc")).unwrap();
+    let key = "item:pd:1";
+    let source = |edition_year| Source::PublicDomain {
+        work: "w".into(),
+        author: "a".into(),
+        edition_url: "u".into(),
+        licence: "l".into(),
+        jurisdiction: "j".into(),
+        translator: "t".into(),
+        edition_year,
+    };
+    assert_eq!(
+        refusal(store.add(item_in(key, "line", "scene-1", source(0)), &ents(&d))),
+        malformed(key, "a public-domain source names its edition year")
+    );
+    store
+        .add(item_in(key, "line", "scene-1", source(1891)), &ents(&d))
+        .unwrap();
 }

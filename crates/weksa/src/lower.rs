@@ -65,6 +65,33 @@ const CONCEPTS: &[Row] = &[
     ("concept:3", "player", "player"),
     ("concept:4", "control", "control"),
     ("concept:5", "ship_mind", "ship mind"),
+    // The Dao De Jing test bed (`daodejing.rs`). Nouns, then the verbs a
+    // `{verb}` frame speaks.
+    ("concept:7", "sage", "sage"),
+    ("concept:8", "mind", "minds"),
+    ("concept:9", "belly", "bellies"),
+    ("concept:10", "will", "wills"),
+    ("concept:11", "bone", "bones"),
+    ("concept:12", "empty", "empties"),
+    ("concept:13", "fill", "fills"),
+    ("concept:14", "weaken", "weakens"),
+    ("concept:15", "strengthen", "strengthens"),
+    ("concept:16", "heaven", "heaven"),
+    ("concept:17", "earth", "earth"),
+    ("concept:18", "is_long_enduring", "is long-enduring"),
+    ("concept:19", "continues_long", "continues long"),
+    ("concept:20", "highest_excellence", "highest excellence"),
+    ("concept:21", "water", "water"),
+    ("concept:22", "true_words", "words that are strictly true"),
+    ("concept:23", "seem_paradoxical", "seem paradoxical"),
+    (
+        "concept:24",
+        "space_between_heaven_and_earth",
+        "space between heaven and earth",
+    ),
+    ("concept:25", "bellows", "bellows"),
+    ("concept:26", "compare", "compare"),
+    ("concept:27", "resemble", "resemble"),
 ];
 
 /// Frames: the clause a predication of that frame says. `{gloss}` is the filler
@@ -81,6 +108,21 @@ const FRAMES: &[Row] = &[
         "request_intervention",
         "{agent} asked {patient} to stop",
     ),
+    // The Dao De Jing test bed. Frame 4 was written from a Train chapter, 5 and
+    // 6 from Validation chapters, 7 and 8 from Test chapters.
+    ("frame:4", "act", "{agent} {verb} {patient}"),
+    ("frame:5", "intransitive", "{experiencer} {verb}"),
+    ("frame:6", "likeness", "{experiencer} is like {goal}"),
+    (
+        "frame:7",
+        "seems_paradoxical",
+        "{experiencer} seem paradoxical",
+    ),
+    (
+        "frame:8",
+        "may_be_compared",
+        "{experiencer} may be compared to {goal}",
+    ),
 ];
 
 /// The frame of "{agent} asked {patient} to stop": the one frame that reads
@@ -90,6 +132,7 @@ const REQUEST_FRAME: &str = "frame:3";
 /// Speech acts: the opener of the first sentence.
 const SPEECH_ACTS: &[Row] = &[
     ("speech_act:1", "assert", ""),
+    ("speech_act:2", "ask", ""),
     ("speech_act:5", "warn", "Warning: "),
 ];
 
@@ -353,6 +396,10 @@ fn clause(
         let close = rest[open..].find('}').map_or(rest.len(), |c| open + c);
         let name = &rest[open + 1..close];
         rest = &rest[(close + 1).min(rest.len())..];
+        if name == "verb" {
+            out.push_str(row(CONCEPTS, p.concept, inv, rev)?);
+            continue;
+        }
         let role = inv
             .entries()
             .find(|e| e.family() == Family::Role && e.gloss == name && e.live_at(rev))
