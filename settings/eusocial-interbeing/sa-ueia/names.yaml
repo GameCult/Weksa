@@ -22,24 +22,30 @@ roots:
     - {form: zege, gloss: sever, provenance: weksa-placeholder}
     - {form: sara, gloss: web; network, provenance: weksa-placeholder}
     - {form: teza, gloss: order; ordinance, provenance: weksa-placeholder}
+    # Word-final clipped forms (invented device, 2026-11-09): a root's last vowel
+    # drops when it ends the word, so Airawa words end in a consonant and Sa'ueia
+    # words in a vowel. Satisfies Deru's rules (a word-final consonant is allowed)
+    # and gives R-A5 a sound-level discriminator instead of a hope.
+    - {form: dak, gloss: keep (word-final form of daka), provenance: weksa-placeholder}
+    - {form: sar, gloss: web (word-final form of sara), provenance: weksa-placeholder}
     - {form: ur, gloss: pending; awaiting (imperial register suffix), provenance: weksa-placeholder}
     - {form: kerath, gloss: obligation; sworn bond (the slice's qerath without q), provenance: weksa-placeholder}
 
 names:
   # Sa'ueia
   - {form: Manoila, language: saueia, morphemes: [mano, ila]}
-  - {form: Selamuna, language: saueia, morphemes: [sela, muna]}
+  - {form: Selawerum, language: saueia, morphemes: [sela, weru, um]}
+  - {form: Munasela, language: saueia, morphemes: [muna, sela]}
   - {form: Ilamuna, language: saueia, morphemes: [ila, muna]}
   - {form: Ilarena, language: saueia, morphemes: [ila, rena]}
   - {form: Munaila, language: saueia, morphemes: [muna, ila]}
   - {form: Kasu, language: saueia, morphemes: [kasu]}
-  - {form: Kasumuna, language: saueia, morphemes: [kasu, muna]}
   - {form: Olunerena, language: saueia, morphemes: [olune, rena]}
   - {form: Munasulo, language: saueia, morphemes: [muna, sulo]}
   # Airawa
-  - {form: Goradaka, language: airawa, morphemes: [gora, daka]}
+  - {form: Goradak, language: airawa, morphemes: [gora, dak]}
   - {form: Gorakerath, language: airawa, morphemes: [gora, kerath]}
-  - {form: Zegedaka, language: airawa, morphemes: [zege, daka]}
-  - {form: Gorasara, language: airawa, morphemes: [gora, sara]}
-  - {form: Tezasara, language: airawa, morphemes: [teza, sara]}
+  - {form: Zegedak, language: airawa, morphemes: [zege, dak]}
+  - {form: Gorasar, language: airawa, morphemes: [gora, sar]}
+  - {form: Tezasar, language: airawa, morphemes: [teza, sar]}
   - {form: Saratezaur, language: airawa, morphemes: [sara, teza, ur]}
