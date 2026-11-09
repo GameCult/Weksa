@@ -202,9 +202,12 @@ operator-attested annotations alone. Who annotates is question
   text against held-out items; novel coverage pooled per order, for n = 1, 2
   and 3 separately, the covered share of all novel n-grams (word n-grams of a
   held-out item that occur in no Train item) over a split's items, with the
-  worst item at n >= 2. Keys split on `_`, `.` and lower-to-upper case
-  transitions as well as UAX #29 boundaries, so a snake_case `OptionLabel`
-  reads as words. Honest glosses of single words saturate n = 1 (the 54 seed
+  worst item at n >= 2. A word is a run of letters, digits, marks and
+  joiners; any other character, and a lower-to-upper case transition, ends it,
+  so `kick:the:bucket` and a snake_case `OptionLabel` read as words. Han, kana,
+  Thai, Lao, Khmer and Burmese write no word boundaries and the scorer holds no
+  dictionary, so a run of them is one word (per-character words would give
+  every honest gloss shared bigrams); a leak there shows at n = 1 and in chrF. Honest glosses of single words saturate n = 1 (the 54 seed
   glosses read max 1.000, s2), so the leak signature is pooled n >= 2.
   Costs: a live persona mints before it names (one typed write, which also
   buys coreference and one rendering per language); public-domain intake
@@ -339,7 +342,7 @@ measurable baseline from a packet: `lower` gives text, `score` gives numbers.
 | Whether a packet exists | `validate` / `PacketStore::admit` (unchanged) | packet, inventory, corpus, entities | admitted packet or typed refusal | the lowerer |
 | Wording of a packet in English | `crates/weksa/src/lower.rs`: `lower(&LoweringInput, &Inventory) -> Result<String, LowerError>` | the validated lowering view and the inventory at its revision | text, or a typed refusal naming the missing template | the corpus item, the scorer, any model |
 | English template table (concept words, frame templates, speech-act openers) | the same module, as rows `(inventory id, gloss it speaks for, surface)` | none; it is data in code | rows the lowerer looks up | the inventory (it owns the ids and glosses, not the English) |
-| The inventory's concepts and frames | an inventory revision; here `inventory::proof_revision()` (rev 2), hand-seeded as `seed()` is | none | the 5 concepts and 2 frames `nibu-proof-001` names | the lowerer |
+| The inventory's concepts and frames | an inventory revision; here `inventory::proof_revision()` (rev 2), hand-seeded as `seed()` is | none | the 6 concepts and 3 frames `nibu-proof-001` and the consent-gated request packet name | the lowerer |
 | What a score counts | `Scorer::score` (unchanged) | output text, reference text | `ItemScore` | `weksa score`, which only reads text and calls it |
 | The proof packet | `packet::proof_packet()`, typed ids of rev 2, admitted by `weksa packet proof <store>` through `PacketStore::admit`. Not JSON: `Packet`'s serde is CultCache's positional tuple, and JSON in is the xenos boundary the cut 7 encoder owns | none | admitted packet | the CLI decides nothing about validity |
 

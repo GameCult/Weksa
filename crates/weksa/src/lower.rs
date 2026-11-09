@@ -17,6 +17,14 @@
 //! the target language, is refused: the concept word would say a different
 //! thing than the name the packet cites.
 //!
+//! A request clause ("You asked Nibu to stop.") says what the addressee did, so
+//! it is gated on the packet's own record of it: `Discourse.addressee_consent`
+//! (set only by authoring or game telemetry, V15) must name that predication,
+//! and its agent must be the addressee. Without it the lowerer refuses
+//! ([`LowerError::ConsentMissing`], [`LowerError::AskerNotAddressee`]); it does
+//! not read wording or guess who asked. A consent naming any other predication
+//! is an unrendered slot.
+//!
 //! The table is a temporary owner. Each row speaks for an inventory entry and
 //! names the gloss it speaks for, so a row cannot outlive a change of what its id
 //! means. `language-ontology` moves the rows into ontology documents.
@@ -68,7 +76,16 @@ const FRAMES: &[Row] = &[
         "{agent} may endanger {patient} by touching {instrument}",
     ),
     ("frame:2", "intervention", "{agent} will stop {patient}"),
+    (
+        "frame:3",
+        "request_intervention",
+        "{agent} asked {patient} to stop",
+    ),
 ];
+
+/// The frame of "{agent} asked {patient} to stop": the one frame that reads
+/// the discourse's addressee consent.
+const REQUEST_FRAME: &str = "frame:3";
 
 /// Speech acts: the opener of the first sentence.
 const SPEECH_ACTS: &[Row] = &[
@@ -105,6 +122,12 @@ pub enum LowerError {
     /// Phones were requested for an entity whose ruled IPA has a stress mark
     /// with no vowel after it.
     DanglingStress { entity: EntityId, at: usize },
+    /// A request predication the packet does not carry the addressee's consent
+    /// to: no consent, or a consent that names another predication. The
+    /// lowerer does not guess who asked.
+    ConsentMissing { predication: NodeId },
+    /// A request predication whose agent is not the discourse addressee.
+    AskerNotAddressee { predication: NodeId },
     /// The entity port failed to read.
     EntityRead { entity: EntityId, why: String },
 }
@@ -149,6 +172,7 @@ pub fn lower(
     {
         return unrendered("features");
     }
+    request_gate(input, inv)?;
     if !input.relations().is_empty() {
         return unrendered("relations");
     }
@@ -193,6 +217,59 @@ pub fn lower(
         out.push('.');
     }
     Ok(out)
+}
+
+/// The one place consent is read. A request clause ([`REQUEST_FRAME`]) says what
+/// the addressee did, so it needs the packet's own record of it: the discourse
+/// `addressee_consent`, which validation lets only authoring or game telemetry
+/// set (V15), must name that predication, and its agent must be the addressee.
+/// Nothing here reads wording. A consent naming any other predication is a slot
+/// the lowerer does not render.
+fn request_gate(input: &LoweringInput, inv: &Inventory) -> Result<(), LowerError> {
+    let consent = input.discourse().addressee_consent.as_ref();
+    let requests = input
+        .predications()
+        .iter()
+        .filter(|p| p.frame.to_string() == REQUEST_FRAME);
+    for p in requests {
+        if consent != Some(&p.id) {
+            return Err(LowerError::ConsentMissing {
+                predication: p.id.clone(),
+            });
+        }
+        let agent = inv
+            .entries()
+            .find(|e| {
+                e.family() == Family::Role && e.gloss == "agent" && e.live_at(input.inventory_rev())
+            })
+            .ok_or_else(|| LowerError::UnknownRole {
+                frame: p.frame,
+                role: "agent".to_string(),
+            })?;
+        let asker = p
+            .roles
+            .iter()
+            .find(|r| r.role == agent.id)
+            .map(|r| &r.filler);
+        if asker.is_none() || asker != input.discourse().addressee.as_ref() {
+            return Err(LowerError::AskerNotAddressee {
+                predication: p.id.clone(),
+            });
+        }
+    }
+    match consent {
+        Some(_)
+            if !input
+                .predications()
+                .iter()
+                .any(|p| p.frame.to_string() == REQUEST_FRAME) =>
+        {
+            Err(LowerError::Unrendered {
+                what: "addressee consent",
+            })
+        }
+        _ => Ok(()),
+    }
 }
 
 /// The ruled IPA of every entity a packet cites, one per entity referent in

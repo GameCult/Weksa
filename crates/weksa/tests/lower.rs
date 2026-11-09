@@ -142,6 +142,7 @@ fn a_packet_carrying_what_the_lowerer_does_not_render_is_refused() {
             filler,
         })
     };
+    let consent = |p: &mut Packet| p.discourse.addressee_consent = Some(nd("n5"));
     let lone_referent = |p: &mut Packet| {
         let mut r = p.referents[0].clone();
         r.id = nd("n99");
@@ -150,6 +151,7 @@ fn a_packet_carrying_what_the_lowerer_does_not_render_is_refused() {
     for (what, edit) in [
         ("features", &discourse as &dyn Fn(&mut Packet)),
         ("features", &predication),
+        ("addressee consent", &consent),
         ("relations", &relation),
         ("extensions", &extension),
         ("no predication", &no_predication),
@@ -570,4 +572,133 @@ fn the_inventory_parser_refuses_what_it_cannot_read() {
     }
     assert!(PhoneInventory::parse("# c\n\ni\tvowel\ttense\ta\n").is_ok());
     assert!(PhoneInventory::for_language("sa-Latn").is_none());
+}
+
+/// `nibu-proof-001` re-cut as the request: the addressee asked Nibu to stop,
+/// one frame:3 predication (n4), consent naming it, and no other claim.
+fn asked() -> Packet {
+    let mut p = proof_packet();
+    p.referents.remove(1);
+    let mut ask = p.predications[1].clone();
+    ask.id = nd("n4");
+    ask.concept = iv("concept:6");
+    ask.frame = iv("frame:3");
+    ask.roles = vec![
+        weksa::packet::RoleFill {
+            role: iv("role:1"),
+            filler: nd("n1"),
+        },
+        weksa::packet::RoleFill {
+            role: iv("role:2"),
+            filler: nd("n3"),
+        },
+    ];
+    p.predications = vec![ask];
+    p.discourse.speech_act = Some(iv("speech_act:1"));
+    p.discourse.addressee_consent = Some(nd("n4"));
+    p.constraints.preserve = vec![nd("n1")];
+    p
+}
+
+/// The request plus a frame:2 predication (n5) the consent could wrongly name.
+fn asked_and_stopped() -> Packet {
+    let mut p = asked();
+    let mut stop = proof_packet().predications.remove(1);
+    stop.roles[1].filler = nd("n4");
+    p.predications.push(stop);
+    p
+}
+
+#[test]
+fn a_consented_request_lowers_to_what_the_addressee_asked() {
+    let (inv, _dir) = committed();
+    assert_eq!(lowered(&asked(), &inv).unwrap(), "You asked Nibu to stop.");
+    let mut p = asked();
+    p.provenance.source = weksa::packet::ProvenanceSource::GameTelemetry;
+    assert_eq!(lowered(&p, &inv).unwrap(), "You asked Nibu to stop.");
+}
+
+#[test]
+fn a_request_without_its_consent_is_refused_not_invented() {
+    let (inv, _dir) = committed();
+    let mut p = asked();
+    p.discourse.addressee_consent = None;
+    assert_eq!(
+        lowered(&p, &inv),
+        Err(LowerError::ConsentMissing {
+            predication: nd("n4")
+        })
+    );
+    // Consent that names a different predication is no consent to the request.
+    let mut p = asked_and_stopped();
+    p.discourse.addressee_consent = Some(nd("n5"));
+    assert_eq!(
+        lowered(&p, &inv),
+        Err(LowerError::ConsentMissing {
+            predication: nd("n4")
+        })
+    );
+}
+
+#[test]
+fn consent_to_one_of_two_requests_leaves_the_other_unconsented() {
+    let (inv, _dir) = committed();
+    let mut p = asked();
+    let mut second = p.predications[0].clone();
+    second.id = nd("n5");
+    p.predications.push(second);
+    assert_eq!(
+        lowered(&p, &inv),
+        Err(LowerError::ConsentMissing {
+            predication: nd("n5")
+        })
+    );
+}
+
+#[test]
+fn a_request_by_someone_other_than_the_addressee_is_refused() {
+    let (inv, _dir) = committed();
+    let mut p = asked();
+    p.predications[0].roles[0].filler = nd("n3");
+    p.predications[0].roles[1].filler = nd("n1");
+    assert_eq!(
+        lowered(&p, &inv),
+        Err(LowerError::AskerNotAddressee {
+            predication: nd("n4")
+        })
+    );
+}
+
+#[test]
+fn consent_on_a_claim_that_is_no_request_stays_unrendered() {
+    let (inv, _dir) = committed();
+    let mut p = proof_packet();
+    p.discourse.addressee_consent = Some(nd("n5"));
+    assert_eq!(
+        lowered(&p, &inv),
+        Err(LowerError::Unrendered {
+            what: "addressee consent"
+        })
+    );
+}
+
+#[test]
+fn a_decomposition_or_import_cannot_reach_the_lowerer_with_consent() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let inventory = InventoryStore::open(&root.join("data/interlingua/inventory.cc")).unwrap();
+    let corpus = CorpusStore::open(&root.join("data/corpus/corpus.cc")).unwrap();
+    let entities = EntityStore::open(&root.join("data/entity/entity.cc")).unwrap();
+    for source in [
+        weksa::packet::ProvenanceSource::ModelDecomposition,
+        weksa::packet::ProvenanceSource::ImportedCorpus,
+    ] {
+        let mut p = asked();
+        p.provenance.source = source;
+        let dir = tempfile::tempdir().unwrap();
+        let refused = PacketStore::open(&dir.path().join("p.cc"))
+            .unwrap()
+            .admit(p, &inventory, &corpus, &entities)
+            .unwrap_err();
+        assert!(format!("{refused:?}").contains("V15"), "{source:?}");
+    }
 }

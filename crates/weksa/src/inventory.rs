@@ -485,9 +485,20 @@ pub fn proof_revision() -> (InventoryRevision, Vec<InventoryEntry>) {
     for (family, glosses) in [
         (
             Family::Concept,
-            ["endanger", "prevent", "player", "control", "ship_mind"].as_slice(),
+            [
+                "endanger",
+                "prevent",
+                "player",
+                "control",
+                "ship_mind",
+                "request",
+            ]
+            .as_slice(),
         ),
-        (Family::Frame, ["hazard_warning", "intervention"].as_slice()),
+        (
+            Family::Frame,
+            ["hazard_warning", "intervention", "request_intervention"].as_slice(),
+        ),
     ] {
         for (i, gloss) in glosses.iter().enumerate() {
             entries.push(InventoryEntry {
