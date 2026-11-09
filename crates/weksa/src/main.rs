@@ -53,8 +53,13 @@ enum Command {
         key: String,
         /// Print the ruled IPA of each entity the packet cites, one per line,
         /// instead of the text; refused for an entity with no ruled pronunciation.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "phones")]
         ipa: bool,
+        /// Print the phones line of each entity the packet cites, one JSON
+        /// object per line ({language, source, phones: [{ipa, stress}]}),
+        /// instead of the text; refused for a phone the inventory lacks.
+        #[arg(long)]
+        phones: bool,
     },
     /// Score output text (stdin, or --output) against corpus items, one embed call.
     Score(ScoreArgs),
@@ -580,7 +585,7 @@ fn main() -> Result<()> {
                 .map_err(refused)?;
             println!("admitted {key}");
         }
-        Command::Lower { store, key, ipa } => {
+        Command::Lower { store, key, ipa, phones } => {
             let inventory_store = InventoryStore::open(&cli.inventory)?;
             let inventory = inventory_store.inventory()?;
             let mut packets = PacketStore::open(&store)?;
@@ -601,6 +606,10 @@ fn main() -> Result<()> {
             if ipa {
                 for line in pronounce(&view, &entities)? {
                     println!("{line}");
+                }
+            } else if phones {
+                for line in weksa::phones(&view, &entities)? {
+                    println!("{}", serde_json::to_string(&line)?);
                 }
             } else {
                 println!("{}", lower(&view, &inventory, &entities)?);

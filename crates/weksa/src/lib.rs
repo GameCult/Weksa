@@ -10,6 +10,7 @@ pub mod form;
 pub mod inventory;
 pub mod lower;
 pub mod packet;
+pub mod phones;
 pub mod schema;
 pub mod score;
 pub mod split;
@@ -23,7 +24,8 @@ pub use inventory::{
     Change, Family, InvId, Inventory, InventoryEntry, InventoryRevision, OptionLabel, OptionSet,
     Slot, ValueKind,
 };
-pub use lower::{EntityForms, LowerError, TARGET_LANGUAGE, lower, pronounce};
+pub use lower::{EntityForms, LowerError, PhoneLine, TARGET_LANGUAGE, lower, phones, pronounce};
+pub use phones::{Phone, PhoneInventory, SegmentError, Stress};
 pub use packet::{
     EncoderId, EntityId, Grade, NodeId, Packet, PacketId, PacketKind, SCHEMA_VERSION, Stance,
 };
