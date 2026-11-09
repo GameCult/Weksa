@@ -54,8 +54,13 @@ enum Command {
         key: String,
         /// Print the ruled IPA of each entity the packet cites, one per line,
         /// instead of the text; refused for an entity with no ruled pronunciation.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "phones")]
         ipa: bool,
+        /// Print the phones line of each entity the packet cites, one JSON
+        /// object per line ({language, source, phones: [{ipa, stress}]}),
+        /// instead of the text; refused for a phone the inventory lacks.
+        #[arg(long)]
+        phones: bool,
     },
     /// Score output text (stdin, or --output) against corpus items, one embed call.
     Score(ScoreArgs),
@@ -72,6 +77,8 @@ enum Command {
 enum PacketCommand {
     /// Admit the nibu-proof-001 packet through `PacketStore::admit`.
     Proof { store: PathBuf },
+    /// Admit the Dao De Jing slice's packets through `PacketStore::admit`.
+    Dao { store: PathBuf },
 }
 
 #[derive(Args)]
@@ -106,6 +113,8 @@ enum InventoryCommand {
     Seed,
     /// Admit revision 2, the concepts and frames the nibu-proof-001 packet names.
     Proof,
+    /// Admit revision 3 of the Dao De Jing test bed stores (after seed and proof).
+    Dao,
 }
 
 #[derive(Subcommand)]
@@ -282,6 +291,16 @@ struct AddArgs {
     author: Option<String>,
     #[arg(long)]
     edition_url: Option<String>,
+    /// The edition's licence, for `public-domain`.
+    #[arg(long)]
+    licence: Option<String>,
+    /// Where the public-domain status is asserted, for `public-domain`.
+    #[arg(long)]
+    jurisdiction: Option<String>,
+    #[arg(long)]
+    translator: Option<String>,
+    #[arg(long)]
+    edition_year: Option<u16>,
     #[arg(long = "model-family", value_enum)]
     family: Option<ModelFamilyArg>,
     /// The generator string the fixture or run wrote, verbatim.
@@ -341,7 +360,15 @@ impl AddArgs {
             SourceKind::CastAuthored => &["persona", "fixture", "author"],
             SourceKind::OperatorWritten => &[],
             SourceKind::OperatorApproved => &["note"],
-            SourceKind::PublicDomain => &["work", "author", "edition-url"],
+            SourceKind::PublicDomain => &[
+                "work",
+                "author",
+                "edition-url",
+                "licence",
+                "jurisdiction",
+                "translator",
+                "edition-year",
+            ],
             SourceKind::ModelWritten => &["model-family", "generator", "prompt-digest"],
         };
         let given = [
@@ -351,6 +378,10 @@ impl AddArgs {
             ("note", self.note.is_some()),
             ("work", self.work.is_some()),
             ("edition-url", self.edition_url.is_some()),
+            ("licence", self.licence.is_some()),
+            ("jurisdiction", self.jurisdiction.is_some()),
+            ("translator", self.translator.is_some()),
+            ("edition-year", self.edition_year.is_some()),
             ("model-family", self.family.is_some()),
             ("generator", self.generator.is_some()),
             ("prompt-digest", self.prompt_digest.is_some()),
@@ -377,6 +408,12 @@ impl AddArgs {
                 work: get(&self.work, "work")?,
                 author: get(&self.author, "author")?,
                 edition_url: get(&self.edition_url, "edition-url")?,
+                licence: get(&self.licence, "licence")?,
+                jurisdiction: get(&self.jurisdiction, "jurisdiction")?,
+                translator: get(&self.translator, "translator")?,
+                edition_year: self
+                    .edition_year
+                    .context("this source needs --edition-year")?,
             },
             SourceKind::ModelWritten => Source::ModelWritten {
                 family: self
@@ -544,6 +581,27 @@ fn main() -> Result<()> {
                 .map_err(refused)?;
             println!("admitted rev:2 with {count} entries");
         }
+        Command::Inventory(InventoryCommand::Dao) => {
+            let (rev, entries) = weksa::daodejing::revision();
+            let count = entries.len();
+            InventoryStore::open(&cli.inventory)?
+                .admit_revision(rev, entries)
+                .map_err(refused)?;
+            println!("admitted rev:3 with {count} entries");
+        }
+        Command::Packet(PacketCommand::Dao { store }) => {
+            let mut packets = PacketStore::open(&store)?;
+            let inventory = InventoryStore::open(&cli.inventory)?;
+            let corpus = CorpusStore::open(&cli.corpus)?;
+            let entities = EntityStore::open(&cli.entities)?;
+            for packet in weksa::daodejing::packets() {
+                let key = packet.id.to_string();
+                packets
+                    .admit(packet, &inventory, &corpus, &entities)
+                    .map_err(refused)?;
+                println!("admitted {key}");
+            }
+        }
         Command::Packet(PacketCommand::Proof { store }) => {
             let packet = proof_packet();
             let key = packet.id.to_string();
@@ -557,7 +615,7 @@ fn main() -> Result<()> {
                 .map_err(refused)?;
             println!("admitted {key}");
         }
-        Command::Lower { store, key, ipa } => {
+        Command::Lower { store, key, ipa, phones } => {
             let inventory_store = InventoryStore::open(&cli.inventory)?;
             let inventory = inventory_store.inventory()?;
             let mut packets = PacketStore::open(&store)?;
@@ -576,6 +634,10 @@ fn main() -> Result<()> {
             if ipa {
                 for line in pronounce(&view, &entities)? {
                     println!("{line}");
+                }
+            } else if phones {
+                for line in weksa::phones(&view, &entities)? {
+                    println!("{}", serde_json::to_string(&line)?);
                 }
             } else {
                 println!("{}", lower(&view, &inventory, &entities)?);

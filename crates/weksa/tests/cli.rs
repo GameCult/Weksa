@@ -210,6 +210,14 @@ fn model_written_and_public_domain_sources_name_their_provenance() {
         "a",
         "--edition-url",
         "https://example.org/w",
+        "--licence",
+        "Public domain",
+        "--jurisdiction",
+        "US",
+        "--translator",
+        "T. Translator",
+        "--edition-year",
+        "1891",
     ]);
     assert!(pd.status.success(), "{}", out(&pd));
     let bad_turn = run(&[
@@ -566,6 +574,14 @@ fn source_flags_must_match_the_source() {
                 "a",
                 "--edition-url",
                 "u",
+                "--licence",
+                "l",
+                "--jurisdiction",
+                "j",
+                "--translator",
+                "t",
+                "--edition-year",
+                "1891",
                 "--note",
                 "n",
             ],
@@ -617,6 +633,78 @@ fn source_flags_must_match_the_source() {
             "public-domain",
             &["--work", "w", "--edition-url", "u"],
             "--author",
+        ),
+        (
+            "public-domain",
+            &[
+                "--work",
+                "w",
+                "--author",
+                "a",
+                "--edition-url",
+                "u",
+                "--jurisdiction",
+                "j",
+                "--translator",
+                "t",
+                "--edition-year",
+                "1891",
+            ],
+            "--licence",
+        ),
+        (
+            "public-domain",
+            &[
+                "--work",
+                "w",
+                "--author",
+                "a",
+                "--edition-url",
+                "u",
+                "--licence",
+                "l",
+                "--translator",
+                "t",
+                "--edition-year",
+                "1891",
+            ],
+            "--jurisdiction",
+        ),
+        (
+            "public-domain",
+            &[
+                "--work",
+                "w",
+                "--author",
+                "a",
+                "--edition-url",
+                "u",
+                "--licence",
+                "l",
+                "--jurisdiction",
+                "j",
+                "--edition-year",
+                "1891",
+            ],
+            "--translator",
+        ),
+        (
+            "public-domain",
+            &[
+                "--work",
+                "w",
+                "--author",
+                "a",
+                "--edition-url",
+                "u",
+                "--licence",
+                "l",
+                "--jurisdiction",
+                "j",
+                "--translator",
+                "t",
+            ],
+            "--edition-year",
         ),
         // Empty provenance strings.
         (
@@ -876,6 +964,18 @@ fn proof_packet_lowers_and_the_lowering_scores_against_items() {
     let ipa = weksa(d.path(), &args);
     assert!(ipa.status.success(), "{}", out(&ipa));
     assert_eq!(String::from_utf8(ipa.stdout).unwrap(), "ˈnibu\n");
+    // The phones line is the committed fixture, byte for byte, and is a different
+    // output from --ipa, so the two flags cannot be combined.
+    let phones = weksa(d.path(), &["lower", "./p.cc", "packet:6e6962752d303031", "--phones"]);
+    assert!(phones.status.success(), "{}", out(&phones));
+    let fixture = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/phonology/fixtures/nibu-en-US.phones.json"),
+    )
+    .unwrap();
+    assert_eq!(String::from_utf8(phones.stdout).unwrap(), fixture);
+    let both = weksa(d.path(), &["lower", "./p.cc", "packet:6e6962752d303031", "--phones", "--ipa"]);
+    assert!(!both.status.success(), "{}", out(&both));
     let again = weksa(d.path(), &["lower", "./p.cc", "packet:6e6962752d303031"]);
     assert_eq!(String::from_utf8(again.stdout).unwrap(), text);
 

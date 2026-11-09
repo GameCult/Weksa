@@ -29,10 +29,19 @@ pub enum Source {
     OperatorApproved {
         note: String,
     },
+    /// A public-domain work, with everything a reader needs to check the claim:
+    /// the edition's licence and the jurisdiction the public-domain status is
+    /// asserted in, who translated it (the translation is the text's copyright,
+    /// not the original's) and when the edition appeared. A work missing any
+    /// is refused at admission.
     PublicDomain {
         work: String,
         author: String,
         edition_url: String,
+        licence: String,
+        jurisdiction: String,
+        translator: String,
+        edition_year: u16,
     },
     /// Labelled model output; never in the test split, never judged by its own family.
     /// `family` is `Unrecorded` when nothing records one. `generator` is the

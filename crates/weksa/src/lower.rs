@@ -17,15 +17,26 @@
 //! the target language, is refused: the concept word would say a different
 //! thing than the name the packet cites.
 //!
+//! A request clause ("You asked Nibu to stop.") says what the addressee did, so
+//! it is gated on the packet's own record of it: `Discourse.addressee_consent`
+//! (set only by authoring or game telemetry, V15) must name that predication,
+//! and its agent must be the addressee. Without it the lowerer refuses
+//! ([`LowerError::ConsentMissing`], [`LowerError::AskerNotAddressee`]); it does
+//! not read wording or guess who asked. A consent naming any other predication
+//! is an unrendered slot.
+//!
 //! The table is a temporary owner. Each row speaks for an inventory entry and
 //! names the gloss it speaks for, so a row cannot outlive a change of what its id
 //! means. `language-ontology` moves the rows into ontology documents.
 
 use std::fmt;
 
+use serde::Serialize;
+
 use crate::entity::Entity;
 use crate::inventory::{Family, InvId, Inventory};
 use crate::packet::{EntityId, NodeId, Predication};
+use crate::phones::{Phone, PhoneInventory, SegmentError};
 use crate::store::EntityStore;
 use crate::validate::LoweringInput;
 
@@ -54,6 +65,33 @@ const CONCEPTS: &[Row] = &[
     ("concept:3", "player", "player"),
     ("concept:4", "control", "control"),
     ("concept:5", "ship_mind", "ship mind"),
+    // The Dao De Jing test bed (`daodejing.rs`). Nouns, then the verbs a
+    // `{verb}` frame speaks.
+    ("concept:7", "sage", "sage"),
+    ("concept:8", "mind", "minds"),
+    ("concept:9", "belly", "bellies"),
+    ("concept:10", "will", "wills"),
+    ("concept:11", "bone", "bones"),
+    ("concept:12", "empty", "empties"),
+    ("concept:13", "fill", "fills"),
+    ("concept:14", "weaken", "weakens"),
+    ("concept:15", "strengthen", "strengthens"),
+    ("concept:16", "heaven", "heaven"),
+    ("concept:17", "earth", "earth"),
+    ("concept:18", "is_long_enduring", "is long-enduring"),
+    ("concept:19", "continues_long", "continues long"),
+    ("concept:20", "highest_excellence", "highest excellence"),
+    ("concept:21", "water", "water"),
+    ("concept:22", "true_words", "words that are strictly true"),
+    ("concept:23", "seem_paradoxical", "seem paradoxical"),
+    (
+        "concept:24",
+        "space_between_heaven_and_earth",
+        "space between heaven and earth",
+    ),
+    ("concept:25", "bellows", "bellows"),
+    ("concept:26", "compare", "compare"),
+    ("concept:27", "resemble", "resemble"),
 ];
 
 /// Frames: the clause a predication of that frame says. `{gloss}` is the filler
@@ -65,11 +103,36 @@ const FRAMES: &[Row] = &[
         "{agent} may endanger {patient} by touching {instrument}",
     ),
     ("frame:2", "intervention", "{agent} will stop {patient}"),
+    (
+        "frame:3",
+        "request_intervention",
+        "{agent} asked {patient} to stop",
+    ),
+    // The Dao De Jing test bed. Frame 4 was written from a Train chapter, 5 and
+    // 6 from Validation chapters, 7 and 8 from Test chapters.
+    ("frame:4", "act", "{agent} {verb} {patient}"),
+    ("frame:5", "intransitive", "{experiencer} {verb}"),
+    ("frame:6", "likeness", "{experiencer} is like {goal}"),
+    (
+        "frame:7",
+        "seems_paradoxical",
+        "{experiencer} seem paradoxical",
+    ),
+    (
+        "frame:8",
+        "may_be_compared",
+        "{experiencer} may be compared to {goal}",
+    ),
 ];
+
+/// The frame of "{agent} asked {patient} to stop": the one frame that reads
+/// the discourse's addressee consent.
+const REQUEST_FRAME: &str = "frame:3";
 
 /// Speech acts: the opener of the first sentence.
 const SPEECH_ACTS: &[Row] = &[
     ("speech_act:1", "assert", ""),
+    ("speech_act:2", "ask", ""),
     ("speech_act:5", "warn", "Warning: "),
 ];
 
@@ -95,6 +158,19 @@ pub enum LowerError {
     NoPronunciation { entity: EntityId },
     /// IPA was requested for a packet that cites no entity.
     NoEntityReferent,
+    /// Phones were requested for an entity whose ruled IPA holds a symbol the
+    /// language's phone inventory does not list (or the language has no
+    /// inventory). The lowerer does not guess a phone.
+    UnknownPhone { entity: EntityId, at: usize, text: String },
+    /// Phones were requested for an entity whose ruled IPA has a stress mark
+    /// with no vowel after it.
+    DanglingStress { entity: EntityId, at: usize },
+    /// A request predication the packet does not carry the addressee's consent
+    /// to: no consent, or a consent that names another predication. The
+    /// lowerer does not guess who asked.
+    ConsentMissing { predication: NodeId },
+    /// A request predication whose agent is not the discourse addressee.
+    AskerNotAddressee { predication: NodeId },
     /// The entity port failed to read.
     EntityRead { entity: EntityId, why: String },
 }
@@ -139,9 +215,7 @@ pub fn lower(
     {
         return unrendered("features");
     }
-    if input.discourse().addressee_consent.is_some() {
-        return unrendered("addressee consent");
-    }
+    request_gate(input, inv)?;
     if !input.relations().is_empty() {
         return unrendered("relations");
     }
@@ -188,6 +262,59 @@ pub fn lower(
     Ok(out)
 }
 
+/// The one place consent is read. A request clause ([`REQUEST_FRAME`]) says what
+/// the addressee did, so it needs the packet's own record of it: the discourse
+/// `addressee_consent`, which validation lets only authoring or game telemetry
+/// set (V15), must name that predication, and its agent must be the addressee.
+/// Nothing here reads wording. A consent naming any other predication is a slot
+/// the lowerer does not render.
+fn request_gate(input: &LoweringInput, inv: &Inventory) -> Result<(), LowerError> {
+    let consent = input.discourse().addressee_consent.as_ref();
+    let requests = input
+        .predications()
+        .iter()
+        .filter(|p| p.frame.to_string() == REQUEST_FRAME);
+    for p in requests {
+        if consent != Some(&p.id) {
+            return Err(LowerError::ConsentMissing {
+                predication: p.id.clone(),
+            });
+        }
+        let agent = inv
+            .entries()
+            .find(|e| {
+                e.family() == Family::Role && e.gloss == "agent" && e.live_at(input.inventory_rev())
+            })
+            .ok_or_else(|| LowerError::UnknownRole {
+                frame: p.frame,
+                role: "agent".to_string(),
+            })?;
+        let asker = p
+            .roles
+            .iter()
+            .find(|r| r.role == agent.id)
+            .map(|r| &r.filler);
+        if asker.is_none() || asker != input.discourse().addressee.as_ref() {
+            return Err(LowerError::AskerNotAddressee {
+                predication: p.id.clone(),
+            });
+        }
+    }
+    match consent {
+        Some(_)
+            if !input
+                .predications()
+                .iter()
+                .any(|p| p.frame.to_string() == REQUEST_FRAME) =>
+        {
+            Err(LowerError::Unrendered {
+                what: "addressee consent",
+            })
+        }
+        _ => Ok(()),
+    }
+}
+
 /// The ruled IPA of every entity a packet cites, one per entity referent in
 /// the packet's referent order, as stored: bare, stress-marked, nothing
 /// derived. A rejected pronunciation is never read. An entity the port does not
@@ -197,13 +324,54 @@ pub fn pronounce(
     input: &LoweringInput,
     entities: &dyn EntityForms,
 ) -> Result<Vec<String>, LowerError> {
+    Ok(ruled(input, entities)?.into_iter().map(|(_, ipa)| ipa).collect())
+}
+
+/// One entity's ruled pronunciation as the phones line a sound consumer reads:
+/// the language tag, the stored IPA it came from, and the segmented phones.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PhoneLine {
+    pub language: &'static str,
+    pub source: String,
+    pub phones: Vec<Phone>,
+}
+
+/// The phones line of every entity a packet cites, in [`pronounce`] order, each
+/// segmented by [`TARGET_LANGUAGE`]'s phone inventory. A symbol the inventory
+/// does not list refuses the whole call.
+pub fn phones(
+    input: &LoweringInput,
+    entities: &dyn EntityForms,
+) -> Result<Vec<PhoneLine>, LowerError> {
+    let inventory = PhoneInventory::for_language(TARGET_LANGUAGE);
+    ruled(input, entities)?
+        .into_iter()
+        .map(|(entity, source)| {
+            let unknown = |at, text| LowerError::UnknownPhone { entity: entity.clone(), at, text };
+            let inventory = inventory.ok_or_else(|| unknown(0, source.clone()))?;
+            let phones = inventory.segment(&source).map_err(|e| match e {
+                SegmentError::UnknownPhone { at, text } => unknown(at, text),
+                SegmentError::DanglingStress { at } => {
+                    LowerError::DanglingStress { entity: entity.clone(), at }
+                }
+            })?;
+            Ok(PhoneLine { language: TARGET_LANGUAGE, source, phones })
+        })
+        .collect()
+}
+
+/// `(entity, ruled IPA)` for each entity referent, in referent order.
+fn ruled(
+    input: &LoweringInput,
+    entities: &dyn EntityForms,
+) -> Result<Vec<(EntityId, String)>, LowerError> {
     let mut out = Vec::new();
     for id in input.referents().iter().filter_map(|r| r.entity.as_ref()) {
         let entity = entity(entities, id)?;
         let p = entity
             .pronunciation_in(TARGET_LANGUAGE)
             .ok_or_else(|| LowerError::NoPronunciation { entity: id.clone() })?;
-        out.push(p.ipa.clone());
+        out.push((id.clone(), p.ipa.clone()));
     }
     if out.is_empty() {
         return Err(LowerError::NoEntityReferent);
@@ -228,6 +396,10 @@ fn clause(
         let close = rest[open..].find('}').map_or(rest.len(), |c| open + c);
         let name = &rest[open + 1..close];
         rest = &rest[(close + 1).min(rest.len())..];
+        if name == "verb" {
+            out.push_str(row(CONCEPTS, p.concept, inv, rev)?);
+            continue;
+        }
         let role = inv
             .entries()
             .find(|e| e.family() == Family::Role && e.gloss == name && e.live_at(rev))

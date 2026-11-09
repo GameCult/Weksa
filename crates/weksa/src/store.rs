@@ -573,6 +573,18 @@ fn empty_attestation(source: &Source) -> Option<&'static str> {
         Source::PublicDomain { edition_url, .. } if empty(edition_url) => {
             Some("a public-domain source names its edition url")
         }
+        Source::PublicDomain { licence, .. } if empty(licence) => {
+            Some("a public-domain source names its licence")
+        }
+        Source::PublicDomain { jurisdiction, .. } if empty(jurisdiction) => {
+            Some("a public-domain source names its jurisdiction")
+        }
+        Source::PublicDomain { translator, .. } if empty(translator) => {
+            Some("a public-domain source names its translator")
+        }
+        Source::PublicDomain {
+            edition_year: 0, ..
+        } => Some("a public-domain source names its edition year"),
         Source::ModelWritten { generator, .. } if empty_some(generator) => {
             Some("a model-written source names a non-empty generator")
         }

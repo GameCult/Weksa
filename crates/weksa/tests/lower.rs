@@ -11,7 +11,7 @@ use weksa::inventory::proof_revision;
 use weksa::packet::{EntityId, FeatValue, FeatureValue, Packet, proof_packet};
 use weksa::{
     CorpusStore, EntityForms, EntityStore, Inventory, InventoryStore, LowerError, LoweringInput,
-    PacketStore, Pronunciation, lower, pronounce, validate,
+    PacketStore, PhoneInventory, PhoneLine, Pronunciation, Stress, lower, pronounce, validate,
 };
 
 const PROOF: &str = "Warning: you may endanger yourself by touching the control. \
@@ -435,4 +435,270 @@ fn ipa_needs_an_entity_the_port_holds_and_a_packet_that_cites_one() {
         pronounce(&view(&p, &inv), &committed_entities()),
         Err(LowerError::NoEntityReferent)
     );
+}
+
+// ---- the phones line: the phone inventory and the segmenter ----
+
+fn phones_of(ipa: &str) -> Result<Vec<PhoneLine>, LowerError> {
+    let mut n = nibu(&[("en-US", &["Nibu"])]);
+    n.forms[0].pronunciation = Some(ruled(ipa, &[]));
+    let mut e = Entities::default();
+    e.held.push(n);
+    let (inv, _dir) = committed();
+    weksa::phones(&view(&proof_packet(), &inv), &e)
+}
+
+fn seg(ipa: &str) -> Vec<(String, Stress)> {
+    let inv = PhoneInventory::for_language("en-US").unwrap();
+    inv.segment(ipa)
+        .unwrap()
+        .into_iter()
+        .map(|p| (p.ipa, p.stress))
+        .collect()
+}
+
+fn pairs(v: &[(&str, Stress)]) -> Vec<(String, Stress)> {
+    v.iter().map(|(i, s)| ((*i).to_string(), *s)).collect()
+}
+
+#[test]
+fn nibus_committed_ruling_lowers_to_the_committed_phones_fixture() {
+    let (inv, _dir) = committed();
+    let lines = weksa::phones(&view(&proof_packet(), &inv), &committed_entities()).unwrap();
+    let fixture = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/phonology/fixtures/nibu-en-US.phones.json"),
+    )
+    .unwrap();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(serde_json::to_string(&lines[0]).unwrap(), fixture.trim_end());
+}
+
+#[test]
+fn tense_i_is_a_phone_and_the_rejected_lax_form_is_a_different_one() {
+    use weksa::phones::{Class, Tenseness};
+    let inv = PhoneInventory::for_language("en-US").unwrap();
+    assert_eq!(inv.class("i"), Some(&Class::Vowel(Tenseness::Tense)));
+    assert_eq!(inv.class("ɪ"), Some(&Class::Vowel(Tenseness::Lax)));
+    assert_eq!(inv.class("u"), Some(&Class::Vowel(Tenseness::Tense)));
+    let ruled_form = seg("ˈnibu");
+    let lax = seg("ˈnɪbu");
+    assert_ne!(ruled_form, lax);
+    assert_eq!(lax[1], ("ɪ".to_string(), Stress::Primary));
+    // The committed seed rejects the lax form, and it is not what the seed emits.
+    let seed = committed_entities();
+    let nibu = seed.get(&EntityId::parse("entity:nibu").unwrap()).unwrap().unwrap();
+    let p = nibu.pronunciation_in("en-US").unwrap();
+    assert_eq!(p.rejected, ["ˈnɪbu"]);
+    assert_eq!(seg(&p.ipa), ruled_form);
+    assert!(p.rejected.iter().all(|r| seg(r) != seg(&p.ipa)));
+}
+
+#[test]
+fn stress_lands_on_the_vowel_after_the_mark_and_nowhere_else() {
+    use Stress::{None as N, Primary as P, Secondary as S};
+    assert_eq!(seg("ˈnibu"), pairs(&[("n", N), ("i", P), ("b", N), ("u", N)]));
+    assert_eq!(seg("nˈibu"), seg("ˈnibu"));
+    assert_eq!(seg("bˈunˌi"), pairs(&[("b", N), ("u", P), ("n", N), ("i", S)]));
+    assert_eq!(seg("nibu"), pairs(&[("n", N), ("i", N), ("b", N), ("u", N)]));
+}
+
+#[test]
+fn multi_character_phones_are_one_phone_by_longest_match() {
+    use Stress::{None as N, Primary as P};
+    assert_eq!(seg("ˈtʃeɪ"), pairs(&[("tʃ", N), ("eɪ", P)]));
+    assert_eq!(seg("dʒaʊ"), pairs(&[("dʒ", N), ("aʊ", N)]));
+    // /t/ then /ʃ/ is not what a lone "t" and "ʃ" mean when the affricate is listed,
+    // but a symbol sequence the inventory cannot join still splits.
+    assert_eq!(seg("ɔɪt"), pairs(&[("ɔɪ", N), ("t", N)]));
+}
+
+#[test]
+fn a_phone_the_inventory_lacks_is_refused_with_where_and_never_guessed() {
+    let id = EntityId::parse("entity:nibu").unwrap();
+    for (ipa, at, text) in [
+        ("ˈnixu", "ˈni".len(), "xu"),
+        ("ˈniːbu", "ˈni".len(), "ːbu"),
+        ("ˈnibu.", "ˈnibu".len(), "."),
+        ("ˈni bu", "ˈni".len(), " bu"),
+    ] {
+        assert_eq!(
+            phones_of(ipa),
+            Err(LowerError::UnknownPhone { entity: id.clone(), at, text: text.into() }),
+            "{ipa}"
+        );
+    }
+}
+
+#[test]
+fn a_stress_mark_with_no_vowel_to_land_on_is_refused() {
+    let id = EntityId::parse("entity:nibu").unwrap();
+    for (ipa, at) in [("nibuˈ", "nibu".len()), ("ˈˈnibu", 0), ("ˈnˈibu", 0), ("ˈnb", 0)] {
+        assert_eq!(
+            phones_of(ipa),
+            Err(LowerError::DanglingStress { entity: id.clone(), at }),
+            "{ipa}"
+        );
+    }
+}
+
+#[test]
+fn phones_need_a_ruling_and_an_entity_exactly_as_ipa_does() {
+    assert_eq!(
+        weksa::phones(&view(&proof_packet(), &committed().0), &Entities::default()),
+        Err(LowerError::UnknownEntity { entity: EntityId::parse("entity:nibu").unwrap() })
+    );
+    let mut e = Entities::default();
+    e.held.push(nibu(&[("en-US", &["Nibu"])]));
+    assert_eq!(
+        weksa::phones(&view(&proof_packet(), &committed().0), &e),
+        Err(LowerError::NoPronunciation { entity: EntityId::parse("entity:nibu").unwrap() })
+    );
+}
+
+#[test]
+fn the_inventory_parser_refuses_what_it_cannot_read() {
+    for bad in [
+        "i\tvowel\ttense",
+        "i\tvowel\t-\tx",
+        "n\tconsonant\ttense\tx",
+        "i\tvowel\tmid\tx",
+        "ˈi\tvowel\ttense\tx",
+        "\tvowel\ttense\tx",
+        "i\tvowel\ttense\t",
+        "i\tvowel\ttense\ta\ni\tvowel\tlax\tb",
+    ] {
+        assert!(PhoneInventory::parse(bad).is_err(), "{bad:?}");
+    }
+    assert!(PhoneInventory::parse("# c\n\ni\tvowel\ttense\ta\n").is_ok());
+    assert!(PhoneInventory::for_language("sa-Latn").is_none());
+}
+
+/// `nibu-proof-001` re-cut as the request: the addressee asked Nibu to stop,
+/// one frame:3 predication (n4), consent naming it, and no other claim.
+fn asked() -> Packet {
+    let mut p = proof_packet();
+    p.referents.remove(1);
+    let mut ask = p.predications[1].clone();
+    ask.id = nd("n4");
+    ask.concept = iv("concept:6");
+    ask.frame = iv("frame:3");
+    ask.roles = vec![
+        weksa::packet::RoleFill {
+            role: iv("role:1"),
+            filler: nd("n1"),
+        },
+        weksa::packet::RoleFill {
+            role: iv("role:2"),
+            filler: nd("n3"),
+        },
+    ];
+    p.predications = vec![ask];
+    p.discourse.speech_act = Some(iv("speech_act:1"));
+    p.discourse.addressee_consent = Some(nd("n4"));
+    p.constraints.preserve = vec![nd("n1")];
+    p
+}
+
+/// The request plus a frame:2 predication (n5) the consent could wrongly name.
+fn asked_and_stopped() -> Packet {
+    let mut p = asked();
+    let mut stop = proof_packet().predications.remove(1);
+    stop.roles[1].filler = nd("n4");
+    p.predications.push(stop);
+    p
+}
+
+#[test]
+fn a_consented_request_lowers_to_what_the_addressee_asked() {
+    let (inv, _dir) = committed();
+    assert_eq!(lowered(&asked(), &inv).unwrap(), "You asked Nibu to stop.");
+    let mut p = asked();
+    p.provenance.source = weksa::packet::ProvenanceSource::GameTelemetry;
+    assert_eq!(lowered(&p, &inv).unwrap(), "You asked Nibu to stop.");
+}
+
+#[test]
+fn a_request_without_its_consent_is_refused_not_invented() {
+    let (inv, _dir) = committed();
+    let mut p = asked();
+    p.discourse.addressee_consent = None;
+    assert_eq!(
+        lowered(&p, &inv),
+        Err(LowerError::ConsentMissing {
+            predication: nd("n4")
+        })
+    );
+    // Consent that names a different predication is no consent to the request.
+    let mut p = asked_and_stopped();
+    p.discourse.addressee_consent = Some(nd("n5"));
+    assert_eq!(
+        lowered(&p, &inv),
+        Err(LowerError::ConsentMissing {
+            predication: nd("n4")
+        })
+    );
+}
+
+#[test]
+fn consent_to_one_of_two_requests_leaves_the_other_unconsented() {
+    let (inv, _dir) = committed();
+    let mut p = asked();
+    let mut second = p.predications[0].clone();
+    second.id = nd("n5");
+    p.predications.push(second);
+    assert_eq!(
+        lowered(&p, &inv),
+        Err(LowerError::ConsentMissing {
+            predication: nd("n5")
+        })
+    );
+}
+
+#[test]
+fn a_request_by_someone_other_than_the_addressee_is_refused() {
+    let (inv, _dir) = committed();
+    let mut p = asked();
+    p.predications[0].roles[0].filler = nd("n3");
+    p.predications[0].roles[1].filler = nd("n1");
+    assert_eq!(
+        lowered(&p, &inv),
+        Err(LowerError::AskerNotAddressee {
+            predication: nd("n4")
+        })
+    );
+}
+
+#[test]
+fn consent_on_a_claim_that_is_no_request_stays_unrendered() {
+    let (inv, _dir) = committed();
+    let mut p = proof_packet();
+    p.discourse.addressee_consent = Some(nd("n5"));
+    assert_eq!(
+        lowered(&p, &inv),
+        Err(LowerError::Unrendered {
+            what: "addressee consent"
+        })
+    );
+}
+
+#[test]
+fn a_decomposition_or_import_cannot_reach_the_lowerer_with_consent() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let inventory = InventoryStore::open(&root.join("data/interlingua/inventory.cc")).unwrap();
+    let corpus = CorpusStore::open(&root.join("data/corpus/corpus.cc")).unwrap();
+    let entities = EntityStore::open(&root.join("data/entity/entity.cc")).unwrap();
+    for source in [
+        weksa::packet::ProvenanceSource::ModelDecomposition,
+        weksa::packet::ProvenanceSource::ImportedCorpus,
+    ] {
+        let mut p = asked();
+        p.provenance.source = source;
+        let dir = tempfile::tempdir().unwrap();
+        let refused = PacketStore::open(&dir.path().join("p.cc"))
+            .unwrap()
+            .admit(p, &inventory, &corpus, &entities)
+            .unwrap_err();
+        assert!(format!("{refused:?}").contains("V15"), "{source:?}");
+    }
 }
