@@ -504,6 +504,21 @@ fn a_request_without_its_consent_is_refused_not_invented() {
 }
 
 #[test]
+fn consent_to_one_of_two_requests_leaves_the_other_unconsented() {
+    let (inv, _dir) = committed();
+    let mut p = asked();
+    let mut second = p.predications[0].clone();
+    second.id = nd("n5");
+    p.predications.push(second);
+    assert_eq!(
+        lowered(&p, &inv),
+        Err(LowerError::ConsentMissing {
+            predication: nd("n5")
+        })
+    );
+}
+
+#[test]
 fn a_request_by_someone_other_than_the_addressee_is_refused() {
     let (inv, _dir) = committed();
     let mut p = asked();
