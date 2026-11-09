@@ -36,15 +36,24 @@ use crate::packet::{
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Refusal {
     /// V1: the packet's schema_version is not the one these types define.
-    V1SchemaVersion { found: u32 },
+    V1SchemaVersion {
+        found: u32,
+    },
     /// V2: no referents, predications or relations.
     V2PayloadRequired,
     /// V3: a node id repeats across referents and predications.
-    V3DuplicateNode { id: NodeId },
+    V3DuplicateNode {
+        id: NodeId,
+    },
     /// V4: a reference names no node.
-    V4DanglingRef { id: NodeId, at: &'static str },
+    V4DanglingRef {
+        id: NodeId,
+        at: &'static str,
+    },
     /// V5: an inventory id does not resolve at the packet's revision.
-    V5Unresolved { id: InvId },
+    V5Unresolved {
+        id: InvId,
+    },
     /// V6: an inventory id is of the wrong family for its slot.
     V6WrongFamily {
         id: InvId,
@@ -52,21 +61,40 @@ pub enum Refusal {
         at: &'static str,
     },
     /// V7: a feature or extension value does not fit its value kind.
-    V7ValueKind { what: String },
+    V7ValueKind {
+        what: String,
+    },
     /// V8: a feature is not declared for the slot it sits on.
-    V8NotApplicable { feature: InvId, slot: Slot },
+    V8NotApplicable {
+        feature: InvId,
+        slot: Slot,
+    },
     /// V10: the packet's inventory revision has no record.
-    V10UnknownRevision { rev: u32 },
+    V10UnknownRevision {
+        rev: u32,
+    },
     /// V11: a feature id repeats in one slot's list (`slot` is `None` for an
     /// extension id repeated in the packet).
-    V11DuplicateFeature { feature: InvId, slot: Option<Slot> },
+    V11DuplicateFeature {
+        feature: InvId,
+        slot: Option<Slot>,
+    },
     /// V11: a node id repeats in `participants`, `audience` or `preserve`
     /// (`at` names the list).
-    V11DuplicateNodeRef { id: NodeId, at: &'static str },
+    V11DuplicateNodeRef {
+        id: NodeId,
+        at: &'static str,
+    },
     /// V11: a role id repeats in one predication's roles.
-    V11DuplicateRole { role: InvId, predication: NodeId },
+    V11DuplicateRole {
+        role: InvId,
+        predication: NodeId,
+    },
     /// V12: more referents, predications and relations than `Packet::MAX_NODES`.
-    V12TooManyNodes { count: usize, max: usize },
+    V12TooManyNodes {
+        count: usize,
+        max: usize,
+    },
     /// V13: scene features were given for a packet with no addressee. They
     /// state the speaker's relation to the addressee, so with none they
     /// describe nobody.
@@ -75,11 +103,15 @@ pub enum Refusal {
     /// names a node that is not a predication. It is what the addressee asked
     /// for or agreed to, an act, so a referent cannot be its object.
     V14ConsentWithoutAddressee,
-    V14ConsentNotAPredication { id: NodeId },
+    V14ConsentNotAPredication {
+        id: NodeId,
+    },
     /// V15: an addressee consent set by a source that only read wording.
     /// A decomposition of text, or imported corpus text, sees "you asked her
     /// to" as words; only authoring or game telemetry saw the request.
-    V15ConsentSource { source: ProvenanceSource },
+    V15ConsentSource {
+        source: ProvenanceSource,
+    },
 }
 
 impl Refusal {
@@ -109,7 +141,28 @@ impl Refusal {
 
 impl fmt::Display for Refusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}: {self:?}", self.rule())
+        let what = match self {
+            Refusal::V1SchemaVersion { .. } => "unsupported schema version",
+            Refusal::V2PayloadRequired => "packet has no referents, predications or relations",
+            Refusal::V3DuplicateNode { .. } => "a node id repeats",
+            Refusal::V4DanglingRef { .. } => "a reference names no node",
+            Refusal::V5Unresolved { .. } => {
+                "an inventory id does not resolve at the packet's revision"
+            }
+            Refusal::V6WrongFamily { .. } => "an inventory id is of the wrong family for its slot",
+            Refusal::V7ValueKind { .. } => "a value does not fit its value kind",
+            Refusal::V8NotApplicable { .. } => "a feature is not declared for its slot",
+            Refusal::V10UnknownRevision { .. } => "the inventory revision has no record",
+            Refusal::V11DuplicateFeature { .. } => "a feature id repeats in one list",
+            Refusal::V11DuplicateNodeRef { .. } => "a node id repeats in one list",
+            Refusal::V11DuplicateRole { .. } => "a role id repeats in one predication",
+            Refusal::V12TooManyNodes { .. } => "too many nodes",
+            Refusal::V13SceneWithoutAddressee => "scene features given without an addressee",
+            Refusal::V14ConsentWithoutAddressee => "consent given without an addressee",
+            Refusal::V14ConsentNotAPredication { .. } => "consent names no predication",
+            Refusal::V15ConsentSource { .. } => "consent set by a source that only read wording",
+        };
+        write!(f, "{}: {what}", self.rule())
     }
 }
 

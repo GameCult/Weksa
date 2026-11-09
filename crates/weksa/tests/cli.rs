@@ -279,7 +279,13 @@ fn validate_reports_each_packet() {
         .unwrap();
     let refused = validate(&short, &[]);
     assert!(
-        !refused.status.success() && out(&refused).contains("V10"),
+        !refused.status.success()
+            && out(&refused).contains("V10: the inventory revision has no record"),
+        "{}",
+        out(&refused)
+    );
+    assert!(
+        !out(&refused).contains("V10UnknownRevision"),
         "{}",
         out(&refused)
     );
@@ -930,10 +936,13 @@ fn proof_packet_lowers_and_the_lowering_scores_against_items() {
     let args = ["lower", "./p.cc", "packet:6e6962752d303031", "--ipa"];
     let unruled = weksa(d.path(), &args);
     assert!(
-        !unruled.status.success() && out(&unruled).contains("NoPronunciation"),
+        !unruled.status.success() && out(&unruled).contains("entity has no ruled pronunciation"),
         "{}",
         out(&unruled)
     );
+    for leak in ["NoPronunciation", "entity:nibu", "entity {"] {
+        assert!(!out(&unruled).contains(leak), "{leak}: {}", out(&unruled));
+    }
     let ruled = weksa(
         d.path(),
         &[
@@ -966,7 +975,10 @@ fn proof_packet_lowers_and_the_lowering_scores_against_items() {
     assert_eq!(String::from_utf8(ipa.stdout).unwrap(), "ˈnibu\n");
     // The phones line is the committed fixture, byte for byte, and is a different
     // output from --ipa, so the two flags cannot be combined.
-    let phones = weksa(d.path(), &["lower", "./p.cc", "packet:6e6962752d303031", "--phones"]);
+    let phones = weksa(
+        d.path(),
+        &["lower", "./p.cc", "packet:6e6962752d303031", "--phones"],
+    );
     assert!(phones.status.success(), "{}", out(&phones));
     let fixture = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -974,7 +986,16 @@ fn proof_packet_lowers_and_the_lowering_scores_against_items() {
     )
     .unwrap();
     assert_eq!(String::from_utf8(phones.stdout).unwrap(), fixture);
-    let both = weksa(d.path(), &["lower", "./p.cc", "packet:6e6962752d303031", "--phones", "--ipa"]);
+    let both = weksa(
+        d.path(),
+        &[
+            "lower",
+            "./p.cc",
+            "packet:6e6962752d303031",
+            "--phones",
+            "--ipa",
+        ],
+    );
     assert!(!both.status.success(), "{}", out(&both));
     let again = weksa(d.path(), &["lower", "./p.cc", "packet:6e6962752d303031"]);
     assert_eq!(String::from_utf8(again.stdout).unwrap(), text);
@@ -1233,4 +1254,60 @@ fn admitted_on_must_be_a_real_calendar_date() {
         assert!(out(&o).contains("--admitted-on"), "{bad:?}: {}", out(&o));
     }
     assert!(!out(&weksa(d.path(), &["corpus", "dump"])).contains("item:"));
+}
+
+#[test]
+fn clap_errors_never_echo_the_token() {
+    let d = tempfile::tempdir().unwrap();
+    for args in [
+        &["--sentinelflagzz"][..],
+        &["validate", "--sentinelflagzz"],
+        &["sentinelsubzz"],
+        &["corpus", "sentinelsubzz"],
+        &["--inventory"],
+    ] {
+        let o = weksa(d.path(), args);
+        let text = out(&o);
+        assert_eq!(o.status.code(), Some(2), "{args:?}: {text}");
+        assert!(text.contains("error:"), "{args:?}: {text}");
+        assert!(
+            !text.to_lowercase().contains("sentinel"),
+            "{args:?} echoes the token: {text}"
+        );
+    }
+}
+
+#[test]
+fn pronunciation_language_is_never_echoed() {
+    let d = tempfile::tempdir().unwrap();
+    let o = weksa(
+        d.path(),
+        &[
+            "entity",
+            "put",
+            "entity:nibu",
+            "--form",
+            "en-US=NIBU",
+            "--origin",
+            "cast",
+            "--persona",
+            "nibu",
+            "--fixture",
+            "f.yaml",
+            "--pronunciation",
+            "sentinel-LANG=ˈnibu",
+            "--ruled-by",
+            "N",
+            "--ruled-on",
+            "2026-11-07",
+            "--ruling-source",
+            "t",
+        ],
+    );
+    let text = out(&o);
+    assert!(
+        !o.status.success() && text.contains("names a language that has no --form"),
+        "{text}"
+    );
+    assert!(!text.to_lowercase().contains("sentinel"), "{text}");
 }

@@ -325,6 +325,7 @@ fn parse_date(s: &str) -> std::result::Result<String, String> {
 
 /// Parses the command line. A rejected value is reported by the flag that took
 /// it and the reason, never by the value: values are the caller's identifiers.
+/// The same holds for the unknown flags and subcommands clap would quote.
 fn parse_cli() -> Cli {
     use std::error::Error;
     match Cli::try_parse() {
@@ -345,8 +346,19 @@ fn parse_cli() -> Cli {
             eprintln!("error: invalid value for {arg}{reason}");
             std::process::exit(2);
         }
-        Err(e) => e.exit(),
+        Err(e) => match e.kind() {
+            ErrorKind::UnknownArgument => refuse_cli("unknown argument"),
+            ErrorKind::InvalidSubcommand => refuse_cli("unknown subcommand"),
+            _ => e.exit(),
+        },
     }
+}
+
+/// A clap error that would quote the caller's token, as a fixed message that
+/// names the kind only. Usage is `--help`'s to print.
+fn refuse_cli(what: &str) -> ! {
+    eprintln!("error: {what}\n\nFor more information, try '--help'.");
+    std::process::exit(2);
 }
 
 fn need(value: Option<String>, flag: &str) -> Result<String> {
@@ -615,7 +627,12 @@ fn main() -> Result<()> {
                 .map_err(refused)?;
             println!("admitted {key}");
         }
-        Command::Lower { store, key, ipa, phones } => {
+        Command::Lower {
+            store,
+            key,
+            ipa,
+            phones,
+        } => {
             let inventory_store = InventoryStore::open(&cli.inventory)?;
             let inventory = inventory_store.inventory()?;
             let mut packets = PacketStore::open(&store)?;

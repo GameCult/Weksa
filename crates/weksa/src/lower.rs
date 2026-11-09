@@ -161,7 +161,11 @@ pub enum LowerError {
     /// Phones were requested for an entity whose ruled IPA holds a symbol the
     /// language's phone inventory does not list (or the language has no
     /// inventory). The lowerer does not guess a phone.
-    UnknownPhone { entity: EntityId, at: usize, text: String },
+    UnknownPhone {
+        entity: EntityId,
+        at: usize,
+        text: String,
+    },
     /// Phones were requested for an entity whose ruled IPA has a stress mark
     /// with no vowel after it.
     DanglingStress { entity: EntityId, at: usize },
@@ -177,7 +181,24 @@ pub enum LowerError {
 
 impl fmt::Display for LowerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{self:?}")
+        f.write_str(match self {
+            LowerError::Unrendered { .. } => "packet carries a slot the lowerer does not render",
+            LowerError::NoRow { .. } => "no table row for an inventory id the packet uses",
+            LowerError::GlossMismatch { .. } => "table row does not match the inventory's gloss",
+            LowerError::UnknownRole { .. } => "frame template names a role the inventory lacks",
+            LowerError::MissingRole { .. } => "predication fills no role its frame needs",
+            LowerError::UnknownEntity { .. } => "referent cites an entity the port does not hold",
+            LowerError::NoForm { .. } => "entity has no form in the target language",
+            LowerError::NoPronunciation { .. } => "entity has no ruled pronunciation",
+            LowerError::NoEntityReferent => "packet cites no entity",
+            LowerError::UnknownPhone { .. } => {
+                "ruled pronunciation holds a symbol with no listed phone"
+            }
+            LowerError::DanglingStress { .. } => "stress mark with no vowel after it",
+            LowerError::ConsentMissing { .. } => "request lacks the addressee's consent",
+            LowerError::AskerNotAddressee { .. } => "request agent is not the addressee",
+            LowerError::EntityRead { .. } => "entity port failed to read",
+        })
     }
 }
 
@@ -324,7 +345,10 @@ pub fn pronounce(
     input: &LoweringInput,
     entities: &dyn EntityForms,
 ) -> Result<Vec<String>, LowerError> {
-    Ok(ruled(input, entities)?.into_iter().map(|(_, ipa)| ipa).collect())
+    Ok(ruled(input, entities)?
+        .into_iter()
+        .map(|(_, ipa)| ipa)
+        .collect())
 }
 
 /// One entity's ruled pronunciation as the phones line a sound consumer reads:
@@ -347,15 +371,24 @@ pub fn phones(
     ruled(input, entities)?
         .into_iter()
         .map(|(entity, source)| {
-            let unknown = |at, text| LowerError::UnknownPhone { entity: entity.clone(), at, text };
+            let unknown = |at, text| LowerError::UnknownPhone {
+                entity: entity.clone(),
+                at,
+                text,
+            };
             let inventory = inventory.ok_or_else(|| unknown(0, source.clone()))?;
             let phones = inventory.segment(&source).map_err(|e| match e {
                 SegmentError::UnknownPhone { at, text } => unknown(at, text),
-                SegmentError::DanglingStress { at } => {
-                    LowerError::DanglingStress { entity: entity.clone(), at }
-                }
+                SegmentError::DanglingStress { at } => LowerError::DanglingStress {
+                    entity: entity.clone(),
+                    at,
+                },
             })?;
-            Ok(PhoneLine { language: TARGET_LANGUAGE, source, phones })
+            Ok(PhoneLine {
+                language: TARGET_LANGUAGE,
+                source,
+                phones,
+            })
         })
         .collect()
 }
