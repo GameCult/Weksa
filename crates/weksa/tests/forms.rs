@@ -147,3 +147,23 @@ fn grade_bound_is_the_type() {
     assert_eq!(grade["minimum"], 0, "{grade}");
     assert_eq!(schema["$defs"]["NodeId"]["pattern"], "^n[1-9][0-9]{0,3}$");
 }
+
+#[test]
+fn calendar_dates_follow_the_gregorian_rule_and_ascii_digits_only() {
+    use weksa::form::is_calendar_date;
+    for ok in ["2024-02-29", "2000-02-29", "2026-12-31"] {
+        assert!(is_calendar_date(ok), "{ok}");
+    }
+    for bad in [
+        "1900-02-29",
+        "2023-02-29",
+        "2026-04-31",
+        "2026-10-00",
+        "2026-00-10",
+        "+026-10-29",
+        "2026-10-2\u{669}",
+        "\u{6f0}026-10-29",
+    ] {
+        assert!(!is_calendar_date(bad), "{bad}");
+    }
+}

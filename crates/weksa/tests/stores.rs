@@ -358,6 +358,7 @@ fn s6_folds_dotless_i_kana_and_arabic_indic_digits() {
             "room \u{661}\u{662}\u{663}\u{664}\u{665}\u{666}\u{667}\u{668}\u{669}\u{660}",
         ),
         ("gate 45", "gate \u{6f4}\u{6f5}"),
+        ("\u{3096}", "\u{30f6}"),
     ];
     for (n, (a, b)) in pairs.into_iter().enumerate() {
         let (first, second) = (
