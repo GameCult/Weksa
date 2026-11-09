@@ -656,6 +656,34 @@ fn consent_to_one_of_two_requests_leaves_the_other_unconsented() {
 }
 
 #[test]
+fn the_asker_is_the_role_the_inventory_glosses_agent_not_the_first_role() {
+    // role:1 and role:2 swap glosses: "agent" is now role:2, so the asker of
+    // `asked()` (role:1 filled by the addressee) is the one role:2 names, Nibu.
+    // A lookup that took the first role, or the first live entry, would read the
+    // addressee and let the request through.
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = InventoryStore::open(&dir.path().join("i.cc")).unwrap();
+    let (rev1, mut entries) = weksa::inventory::seed();
+    for e in &mut entries {
+        if e.id == iv("role:1") {
+            e.gloss = "patient".into();
+        } else if e.id == iv("role:2") {
+            e.gloss = "agent".into();
+        }
+    }
+    store.admit_revision(rev1, entries).unwrap();
+    let (rev2, entries) = proof_revision();
+    store.admit_revision(rev2, entries).unwrap();
+    let inv = store.inventory().unwrap();
+    assert_eq!(
+        lower(&admitted(&asked(), &store), &inv, &committed_entities()),
+        Err(LowerError::AskerNotAddressee {
+            predication: nd("n4")
+        })
+    );
+}
+
+#[test]
 fn a_request_by_someone_other_than_the_addressee_is_refused() {
     let (inv, _dir) = committed();
     let mut p = asked();
