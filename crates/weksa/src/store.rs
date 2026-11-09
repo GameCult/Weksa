@@ -281,12 +281,23 @@ impl CorpusStore {
             return Err(StoreRefusal::NotNfc { key: item.id }.into());
         }
         let text = normalized(&item.text);
-        if !text.chars().any(char::is_alphanumeric) {
-            return Err(malformed(&item.id, "text has no alphanumeric character"));
-        }
         // Read from the text as given: NFKC maps modifier letters (ʰ) to base letters.
+        // A text of marks, joiners and modifiers says so; any other text with
+        // no alphanumeric character (punctuation, space) gets the plainer reason.
         if !item.text.chars().any(is_base) {
-            return Err(malformed(&item.id, "text has no base letter or digit"));
+            let marks_only = item.text.chars().any(|c| {
+                is_combining_mark(c)
+                    || matches!(c, '\u{200c}' | '\u{200d}')
+                    || is_modifier_letter(c)
+            });
+            return Err(malformed(
+                &item.id,
+                if marks_only {
+                    "text has no base letter or digit"
+                } else {
+                    "text has no alphanumeric character"
+                },
+            ));
         }
         if !is_calendar_date(&item.admitted_on) {
             return Err(malformed(&item.id, "admitted_on is not a YYYY-MM-DD date"));
@@ -415,31 +426,48 @@ fn check_entities(item: &CorpusItem, entities: &EntityStore) -> Result<(), Store
 /// Turkish dotless i and dotted capital I read as i, katakana reads as the
 /// hiragana of the same syllable, and Arabic-Indic and Extended Arabic-Indic
 /// digits read as 0-9. Homoglyphs across scripts (Cyrillic a for Latin a) stay
-/// apart: no key here reads what a character looks like.
+/// apart: no key here reads what a character looks like. A combining dot above
+/// (U+0307) after i is dropped, so İx and i̇x collide as the old case fold made
+/// them; so does plain ix, with both. Over-merging a rare sequence errs toward
+/// held, a lost collision toward leak. U+0307 after any other letter stays.
 fn normalized(text: &str) -> String {
-    let mapped: String = text.nfkc().map(fold_variant).collect();
-    default_case_fold_str(&mapped)
-        .nfkc()
-        .filter(|c| c.is_alphanumeric() || is_combining_mark(*c))
-        .collect()
+    let mapped: String = text.nfkc().flat_map(fold_variant).collect();
+    let mut key = String::new();
+    for c in default_case_fold_str(&mapped).nfkc() {
+        if c == '\u{307}' && key.ends_with('i') {
+            continue;
+        }
+        if c.is_alphanumeric() || is_combining_mark(c) {
+            key.push(c);
+        }
+    }
+    key
 }
 
 /// The one-to-one folds `normalized` adds to NFKC and case folding, applied
 /// before the case fold (U+0130 would otherwise fold to i plus a combining dot,
 /// which the key keeps as a mark).
-fn fold_variant(c: char) -> char {
-    match c {
-        '\u{131}' => 'i',
-        '\u{130}' => 'I',
+fn fold_variant(c: char) -> impl Iterator<Item = char> {
+    let one = |c: char| (c, None);
+    let (first, second) = match c {
+        '\u{131}' => one('i'),
+        '\u{130}' => one('I'),
+        // Voiced katakana wa, wi, we, wo: the hiragana (U+308F-3092) plus the
+        // combining voiced mark, which is how NFKC spells the hiragana forms.
+        '\u{30f7}'..='\u{30fa}' => (
+            char::from_u32(c as u32 - 0x68).unwrap_or(c),
+            Some('\u{3099}'),
+        ),
         // Katakana letters and small letters to hiragana; the iteration marks
         // ヽヾ to ゝゞ. The prolonged sound mark U+30FC stays.
         '\u{30a1}'..='\u{30f6}' | '\u{30fd}'..='\u{30fe}' => {
-            char::from_u32(c as u32 - 0x60).unwrap_or(c)
+            one(char::from_u32(c as u32 - 0x60).unwrap_or(c))
         }
-        '\u{660}'..='\u{669}' => char::from(b'0' + (c as u32 - 0x660) as u8),
-        '\u{6f0}'..='\u{6f9}' => char::from(b'0' + (c as u32 - 0x6f0) as u8),
-        _ => c,
-    }
+        '\u{660}'..='\u{669}' => one(char::from(b'0' + (c as u32 - 0x660) as u8)),
+        '\u{6f0}'..='\u{6f9}' => one(char::from(b'0' + (c as u32 - 0x6f0) as u8)),
+        _ => one(c),
+    };
+    std::iter::once(first).chain(second)
 }
 
 /// A character that can carry a word: alphanumeric and neither a combining
