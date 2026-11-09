@@ -359,6 +359,15 @@ fn s6_folds_dotless_i_kana_and_arabic_indic_digits() {
         ),
         ("gate 45", "gate \u{6f4}\u{6f5}"),
         ("\u{3096}", "\u{30f6}"),
+        // Voiced wa, wi, we, wo: katakana U+30F7-30FA read as the hiragana
+        // plus the combining voiced mark.
+        ("\u{308f}\u{3099}", "\u{30f7}"),
+        ("\u{3090}\u{3099}", "\u{30f8}"),
+        ("\u{3091}\u{3099}", "\u{30f9}"),
+        ("\u{3092}\u{3099}", "\u{30fa}"),
+        // Dotted capital I and i plus a combining dot above
+        // read alike (plain ix collides with both, below).
+        ("\u{130}x", "i\u{307}x"),
     ];
     for (n, (a, b)) in pairs.into_iter().enumerate() {
         let (first, second) = (
@@ -375,6 +384,15 @@ fn s6_folds_dotless_i_kana_and_arabic_indic_digits() {
             "{a:?} vs {b:?}"
         );
     }
+    // Plain ix collides with the dotted spellings too: a rare sequence
+    // over-merges toward held.
+    assert_eq!(
+        refusal(store.add(item("item:fold:80", "ix"), &ents(&d))),
+        StoreRefusal::S6TextHeld {
+            key: "item:fold:80".into(),
+            held_by: "item:fold:27".into()
+        }
+    );
     // Nothing wider: the prolonged sound mark, Devanagari digits and the
     // Cyrillic homoglyph of i stay apart from what they resemble.
     store
@@ -390,9 +408,31 @@ fn s6_folds_dotless_i_kana_and_arabic_indic_digits() {
         .add(item("item:fold:93", "room \u{967}\u{968}"), &ents(&d))
         .unwrap();
     store.add(item("item:fold:94", "bit"), &ents(&d)).unwrap();
+    // A combining dot above after any other letter is kept.
+    store.add(item("item:fold:96", "x"), &ents(&d)).unwrap();
+    store
+        .add(item("item:fold:97", "\u{1e8b}"), &ents(&d))
+        .unwrap();
     store
         .add(item("item:fold:95", "b\u{456}t"), &ents(&d))
         .unwrap();
+    // j has no precomposed dot-above form, so this reaches the guard itself.
+    store.add(item("item:fold:98", "jx"), &ents(&d)).unwrap();
+    store
+        .add(item("item:fold:99", "j\u{307}x"), &ents(&d))
+        .unwrap();
+    // Marks after the dotted i compose with it: i, dot, acute is an i with an
+    // acute, whatever order the writer used.
+    store
+        .add(item("item:fold:100", "\u{ed}x"), &ents(&d))
+        .unwrap();
+    assert_eq!(
+        refusal(store.add(item("item:fold:101", "i\u{307}\u{301}x"), &ents(&d))),
+        StoreRefusal::S6TextHeld {
+            key: "item:fold:101".into(),
+            held_by: "item:fold:100".into()
+        }
+    );
 }
 
 /// `modifier_letters.txt` is the Unicode 17 Lm list, the oracle for the test
@@ -520,11 +560,23 @@ fn s6_keeps_tone_marks_and_viramas_apart() {
             .unwrap_or_else(|e| panic!("{b:?} held by {a:?}: {e}"));
     }
     // A mark alone is still no text.
-    for (n, text) in ["\u{e49}", "\u{94d}"].into_iter().enumerate() {
+    for (n, text) in [
+        "\u{e49}",
+        "\u{94d}",
+        "\u{301}",
+        "\u{200d}",
+        "\u{200c}",
+        "\u{fe0f}",
+        "\u{200d}\u{fe0f}\u{301}",
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let key = format!("item:mk:{}", 90 + n);
         assert_eq!(
             refusal(store.add(item(&key, text), &ents(&d))),
-            malformed(&key, "text has no alphanumeric character")
+            malformed(&key, "text has no base letter or digit"),
+            "{text:?}"
         );
     }
 }
