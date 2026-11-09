@@ -17,13 +17,13 @@ pub mod store;
 pub mod validate;
 
 pub use corpus::{CorpusItem, CorpusItemId, NameSpan, Source, Turn};
-pub use entity::{Entity, EntityOrigin, LanguageForms};
+pub use entity::{Entity, EntityOrigin, LanguageForms, Pronunciation};
 pub use form::FormError;
 pub use inventory::{
     Change, Family, InvId, Inventory, InventoryEntry, InventoryRevision, OptionLabel, OptionSet,
     Slot, ValueKind,
 };
-pub use lower::{LowerError, lower};
+pub use lower::{EntityForms, LowerError, TARGET_LANGUAGE, lower, pronounce};
 pub use packet::{
     EncoderId, EntityId, Grade, NodeId, Packet, PacketId, PacketKind, SCHEMA_VERSION, Stance,
 };

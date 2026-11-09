@@ -93,6 +93,7 @@ pub fn ent(slug: &str, language: &str, forms: &[&str]) -> Entity {
         forms: vec![LanguageForms {
             language: language.into(),
             forms: forms.iter().map(|f| f.to_string()).collect(),
+            pronunciation: None,
         }],
         origin: EntityOrigin::Cast {
             persona: slug.into(),
@@ -265,6 +266,7 @@ pub fn good() -> Packet {
         discourse: Discourse {
             speech_act: Some(iv(WARN)),
             addressee: Some(nd("n1")),
+            addressee_consent: None,
             features: vec![FeatureValue {
                 feature: iv(HEDGE),
                 value: FeatValue::Grade(grade(300)),

@@ -1041,14 +1041,14 @@ fn packet_admission_goes_through_the_validator() {
     let mut w = world();
     let mut store = PacketStore::open(&w.dir.path().join("p.cc")).unwrap();
     let mut bad = good();
-    bad.schema_version = 5;
+    bad.schema_version = 6;
     match store.admit(bad, &w.inventory, &w.corpus, &w.entities) {
         Err(e @ StoreError::Invalid(_)) => {
             assert!(e.to_string().contains("V1"), "{e}");
             let StoreError::Invalid(r) = e else {
                 unreachable!()
             };
-            assert_eq!(r, vec![Refusal::V1SchemaVersion { found: 5 }]);
+            assert_eq!(r, vec![Refusal::V1SchemaVersion { found: 6 }]);
         }
         other => panic!("{other:?}"),
     }

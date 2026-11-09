@@ -202,9 +202,12 @@ operator-attested annotations alone. Who annotates is question
   text against held-out items; novel coverage pooled per order, for n = 1, 2
   and 3 separately, the covered share of all novel n-grams (word n-grams of a
   held-out item that occur in no Train item) over a split's items, with the
-  worst item at n >= 2. Keys split on `_`, `.` and lower-to-upper case
-  transitions as well as UAX #29 boundaries, so a snake_case `OptionLabel`
-  reads as words. Honest glosses of single words saturate n = 1 (the 54 seed
+  worst item at n >= 2. A word is a run of letters, digits, marks and
+  joiners; any other character, and a lower-to-upper case transition, ends it,
+  so `kick:the:bucket` and a snake_case `OptionLabel` read as words. Han, kana,
+  Thai, Lao, Khmer and Burmese write no word boundaries and the scorer holds no
+  dictionary, so a run of them is one word (per-character words would give
+  every honest gloss shared bigrams); a leak there shows at n = 1 and in chrF. Honest glosses of single words saturate n = 1 (the 54 seed
   glosses read max 1.000, s2), so the leak signature is pooled n >= 2.
   Costs: a live persona mints before it names (one typed write, which also
   buys coreference and one rendering per language); public-domain intake

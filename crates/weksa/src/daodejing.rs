@@ -274,6 +274,7 @@ fn build(spec: &Spec) -> Packet {
         discourse: Discourse {
             speech_act: Some(id(spec.speech_act)),
             addressee: None,
+            addressee_consent: None,
             features: vec![],
         },
         referents: spec

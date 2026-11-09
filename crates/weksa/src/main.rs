@@ -7,13 +7,13 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use unicode_normalization::UnicodeNormalization;
 use weksa::corpus::{CorpusItem, ModelFamily, NameSpan, Source, Turn};
-use weksa::entity::{Entity, EntityOrigin, LanguageForms};
+use weksa::entity::{Entity, EntityOrigin, LanguageForms, Pronunciation};
 use weksa::inventory::{proof_revision, seed};
 use weksa::packet::proof_packet;
 use weksa::score::ScoreInput;
 use weksa::{
     CorpusStore, EntityId, EntityStore, InventoryStore, OllamaEmbedder, PacketStore, Scorer,
-    SplitScheme, StoreError, lower, validate,
+    SplitScheme, StoreError, lower, pronounce, validate,
 };
 
 #[derive(Parser)]
@@ -48,7 +48,14 @@ enum Command {
     #[command(subcommand)]
     Packet(PacketCommand),
     /// Lower a stored packet to English text.
-    Lower { store: PathBuf, key: String },
+    Lower {
+        store: PathBuf,
+        key: String,
+        /// Print the ruled IPA of each entity the packet cites, one per line,
+        /// instead of the text; refused for an entity with no ruled pronunciation.
+        #[arg(long)]
+        ipa: bool,
+    },
     /// Score output text (stdin, or --output) against corpus items, one embed call.
     Score(ScoreArgs),
     /// Print the split of a corpus item.
@@ -131,6 +138,22 @@ struct PutArgs {
     /// The work of a `public-domain` origin; refused with any other origin.
     #[arg(long)]
     work: Option<String>,
+    /// `language=ipa`: how that language's citation form is said, bare IPA with
+    /// stress marks. Needs `--ruled-by`, `--ruled-on` and `--ruling-source`.
+    #[arg(long, requires_all = ["ruled_by", "ruled_on", "ruling_source"])]
+    pronunciation: Option<String>,
+    /// Who ruled the pronunciation.
+    #[arg(long)]
+    ruled_by: Option<String>,
+    /// `YYYY-MM-DD`.
+    #[arg(long)]
+    ruled_on: Option<String>,
+    /// Where it was ruled: a room, a document, a run.
+    #[arg(long)]
+    ruling_source: Option<String>,
+    /// A refused pronunciation, bare IPA, repeated.
+    #[arg(long = "rejected", requires = "pronunciation")]
+    rejected: Vec<String>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -150,8 +173,27 @@ impl PutArgs {
                 None => forms.push(LanguageForms {
                     language: language.to_string(),
                     forms: vec![form.nfc().collect()],
+                    pronunciation: None,
                 }),
             }
+        }
+        if let Some(p) = &self.pronunciation {
+            let (language, ipa) = p
+                .split_once('=')
+                .context("--pronunciation is not language=ipa")?;
+            let lf = forms
+                .iter_mut()
+                .find(|lf| lf.language == language)
+                .with_context(|| {
+                    format!("--pronunciation names {language}, which has no --form")
+                })?;
+            lf.pronunciation = Some(Pronunciation {
+                ipa: ipa.nfc().collect(),
+                ruled_by: need(self.ruled_by.clone(), "ruled-by")?,
+                date: need(self.ruled_on.clone(), "ruled-on")?,
+                source: need(self.ruling_source.clone(), "ruling-source")?,
+                rejected: self.rejected.iter().map(|r| r.nfc().collect()).collect(),
+            });
         }
         let origin = match (self.origin, self.persona, self.fixture, self.work) {
             (OriginKind::Cast, persona, fixture, None) => EntityOrigin::Cast {
@@ -538,7 +580,7 @@ fn main() -> Result<()> {
                 .map_err(refused)?;
             println!("admitted {key}");
         }
-        Command::Lower { store, key } => {
+        Command::Lower { store, key, ipa } => {
             let inventory_store = InventoryStore::open(&cli.inventory)?;
             let inventory = inventory_store.inventory()?;
             let mut packets = PacketStore::open(&store)?;
@@ -555,7 +597,14 @@ fn main() -> Result<()> {
                     &EntityStore::open(&cli.entities)?,
                 )
                 .map_err(refused)?;
-            println!("{}", lower(&view, &inventory)?);
+            let entities = EntityStore::open(&cli.entities)?;
+            if ipa {
+                for line in pronounce(&view, &entities)? {
+                    println!("{line}");
+                }
+            } else {
+                println!("{}", lower(&view, &inventory, &entities)?);
+            }
         }
         Command::Score(args) => {
             let output = match &args.output {

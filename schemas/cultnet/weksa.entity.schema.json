@@ -112,11 +112,59 @@
         },
         "language": {
           "type": "string"
+        },
+        "pronunciation": {
+          "description": "How the citation form (`forms[0]`) is said, when someone with the\nauthority to rule on it has. Absent means unruled, never \"spelled as\nread\".",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Pronunciation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
         "language",
         "forms"
+      ]
+    },
+    "Pronunciation": {
+      "description": "A ruled pronunciation of an entity's citation form in one language.",
+      "type": "object",
+      "properties": {
+        "date": {
+          "description": "`YYYY-MM-DD`.",
+          "type": "string"
+        },
+        "ipa": {
+          "description": "Broad IPA with stress marks, bare: no enclosing `/` or `[ ]`. 1 to 64\nbytes, NFC.",
+          "type": "string"
+        },
+        "rejected": {
+          "description": "Pronunciations that were considered and refused, same shape as `ipa`.\nKept so nobody re-proposes one; never emitted.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "ruled_by": {
+          "description": "Who ruled: the entity itself, a writer, an operator.",
+          "type": "string"
+        },
+        "source": {
+          "description": "Where the ruling was made: a room, a document, a run.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ipa",
+        "ruled_by",
+        "date",
+        "source"
       ]
     }
   }

@@ -895,7 +895,7 @@ fn proof_packet_lowers_and_the_lowering_scores_against_items() {
             "--slug",
             "nibu",
             "--text",
-            "Warning: you may endanger yourself by touching the control. The ship mind will prevent that to protect you.",
+            "Warning: you may endanger yourself by touching the control. NIBU will stop that.",
             "--speaker",
             "entity:nibu",
             "--group",
@@ -920,9 +920,52 @@ fn proof_packet_lowers_and_the_lowering_scores_against_items() {
         text.starts_with("Warning: you may endanger yourself"),
         "{text}"
     );
+    // The referent cites entity:nibu: its stored en-US form (NIBU here) reaches the text as stored.
+    assert!(text.contains("NIBU will stop"), "{text}");
 
     let missing = weksa(d.path(), &["lower", "./p.cc", "packet:0000000000000000"]);
     assert!(!missing.status.success() && out(&missing).contains("no packet"));
+
+    // IPA is the ruled pronunciation or nothing: spelling is not one.
+    let args = ["lower", "./p.cc", "packet:6e6962752d303031", "--ipa"];
+    let unruled = weksa(d.path(), &args);
+    assert!(
+        !unruled.status.success() && out(&unruled).contains("NoPronunciation"),
+        "{}",
+        out(&unruled)
+    );
+    let ruled = weksa(
+        d.path(),
+        &[
+            "entity",
+            "put",
+            "entity:nibu",
+            "--form",
+            "en-US=NIBU",
+            "--origin",
+            "cast",
+            "--persona",
+            "nibu",
+            "--fixture",
+            "f.yaml",
+            "--pronunciation",
+            "en-US=ˈnibu",
+            "--ruled-by",
+            "Nibu",
+            "--ruled-on",
+            "2026-11-07",
+            "--ruling-source",
+            "test",
+            "--rejected",
+            "ˈnɪbu",
+        ],
+    );
+    assert!(ruled.status.success(), "{}", out(&ruled));
+    let ipa = weksa(d.path(), &args);
+    assert!(ipa.status.success(), "{}", out(&ipa));
+    assert_eq!(String::from_utf8(ipa.stdout).unwrap(), "ˈnibu\n");
+    let again = weksa(d.path(), &["lower", "./p.cc", "packet:6e6962752d303031"]);
+    assert_eq!(String::from_utf8(again.stdout).unwrap(), text);
 
     std::fs::write(d.path().join("out.txt"), &text).unwrap();
     let url = fake_embedder();

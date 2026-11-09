@@ -50,7 +50,7 @@ fn the_slice_packets_are_admitted_and_lower_to_the_scored_english() {
         .into_iter()
         .map(|p| {
             let view = store.admit(p, &inventory, &corpus, &entities).unwrap();
-            lower(&view, &inv).unwrap()
+            lower(&view, &inv, &entities).unwrap()
         })
         .collect();
     assert_eq!(

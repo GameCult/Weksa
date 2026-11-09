@@ -120,7 +120,7 @@ Packet
   id, schema_version, inventory_rev, kind
   provenance   { source, corpus_item, encoder, confidence }
   context      { setting, medium, participants, audience }
-  discourse    { speech_act, addressee, features }
+  discourse    { speech_act, addressee, addressee_consent, features }
   referents    [ { id, kind, concept, entity, features } ]
   predications [ { id, concept, frame, roles: [ { role, filler } ], features } ]
   relations    [ { relation, from, to, features } ]
@@ -144,8 +144,8 @@ names the rule.
 - V1: `schema_version` is the version these types define.
 - V2: at least one of `referents`, `predications`, `relations` is present.
 - V3: a node id appears once across referents and predications.
-- V4: every role filler, relation end, addressee, participant, audience member
-  and preserved node names a node.
+- V4: every role filler, relation end, addressee, addressee consent,
+  participant, audience member and preserved node names a node.
 - V5: every inventory id resolves at the packet's `inventory_rev`: introduced
   at or before it, and not retired at or before it.
 - V6: an inventory id is of the family its slot takes.
@@ -159,6 +159,10 @@ names the rule.
   predication's roles.
 - V12: a packet has at most 64 referents, predications and relations together
   (a calibration constant, capacity and not meaning).
+- V14: an `addressee_consent` needs an `addressee` and names a predication.
+- V15: an `addressee_consent` is set only by provenance `Authored` or
+  `GameTelemetry`; a decomposition of text or imported corpus text cannot mint
+  it.
 
 V9 is retired and not renumbered: the form of a key or a grade is its type, and
 an extension key's family is V6. `PacketStore::admit` returns the lowering view of a
@@ -189,7 +193,11 @@ ids.
 Why the packet is said: `speech_act` is a speech-act id, `addressee` a node id,
 and `features` carry source-side nuance on content (hedge, certainty, irony and
 whatever the inventory grows). This is source-side communicative pressure, not
-target-language register.
+target-language register. `addressee_consent` is no feature: it names the
+predication the addressee asked for or agreed to, a fact about what the
+addressee did. The English lowerer renders no consent and refuses a packet that
+carries one; a row that speaks for the request ("you asked her to") reads it
+and refuses without it.
 
 ### `stance`
 
