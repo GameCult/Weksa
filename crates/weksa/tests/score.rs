@@ -690,3 +690,155 @@ fn every_script_alike() {
         assert_eq!(got.chrf, 100.0, "{text}");
     }
 }
+
+/// (reference, hypothesis, sacrebleu 2.4.3 sentence_chrf), one near miss per
+/// script: the Thai hypothesis is the reference with its vowels and tone mark
+/// stripped.
+const SCRIPT_PAIRS: [(&str, &str, f64); 5] = [
+    ("민수가 왔다", "민수는 왔다", 26.0),
+    ("Brokkr'ın gemisi geldi", "Brokkr'ın gemisi gitti", 77.7548),
+    ("Brokkrin laiva tuli", "Brokkrin laiva meni", 73.002),
+    ("สมชายมาแล้ว", "สมชยมแลว", 21.8989),
+    ("ブロッカーが来た。", "ブロッカーが行った。", 54.4013),
+];
+
+#[test]
+fn every_script_scores_a_near_miss_as_sacrebleu_does() {
+    let scorer = Scorer::new(Bag);
+    for (reference, hypothesis, want) in SCRIPT_PAIRS {
+        close(score_one(&scorer, reference, hypothesis).chrf, want);
+    }
+}
+
+#[test]
+fn coverage_splits_at_any_non_word_character() {
+    let items = [
+        validation("item:v:1", "mind the hatch before the storm"),
+        train("item:t:1", UNRELATED),
+    ];
+    let want = read(&["mind the hatch"], &items);
+    assert_eq!(want, [(5, 3), (5, 2), (4, 1)]);
+    for joiner in [
+        ":", "\u{b7}", "'", "\u{2019}", "\u{ff3f}", "-", "/", "\u{2014}", "|", "+", "\u{ff1a}",
+        "\u{30fb}",
+    ] {
+        let glued = format!("mind{joiner}the{joiner}hatch");
+        assert_eq!(read(&[&glued], &items), want, "{joiner:?}");
+    }
+    // a mark, a joiner or a digit is part of its word, not a break
+    let items = [validation(
+        "item:v:1",
+        "\u{e2a}\u{e21}\u{e0a}\u{e32}\u{e22} \u{e21}\u{e32}\u{e41}\u{e25}\u{e49}\u{e27} 0400 \u{628}\u{200c}\u{628}",
+    )];
+    assert_eq!(
+        read(&["\u{e21}\u{e32}\u{e41}\u{e25}\u{e49}\u{e27}"], &items)[0],
+        (4, 1)
+    );
+    assert_eq!(read(&["\u{628}\u{200c}\u{628}", "0400"], &items)[0], (4, 2));
+    // a joiner keeps its word whole: the minted half is not a held-out word
+    let items = [validation("item:v:1", "\u{628}\u{200c}\u{62a} \u{62c}")];
+    assert_eq!(read(&["\u{628}\u{200c}\u{62a}"], &items)[0], (2, 1));
+    // decomposed and composed spellings are one word
+    let items = [validation("item:v:1", "Cafe\u{301}")];
+    assert_eq!(read(&["Caf\u{e9}"], &items)[0], (1, 1));
+}
+
+#[test]
+fn coverage_reads_unspaced_scripts_by_run() {
+    // Han, kana and Thai write no word boundaries and the scorer holds no
+    // dictionary, so a run of them is one word, never one word per character.
+    // Honest single-word glosses then read nothing above n=1, as they do in a
+    // spaced script.
+    for (held, glosses) in [
+        (
+            "\u{5c71}\u{7530}\u{592a}\u{90ce}\u{304c}\u{6765}\u{305f}",
+            ["\u{5c71}\u{7530}", "\u{592a}\u{90ce}", "\u{6765}\u{305f}"],
+        ),
+        (
+            "\u{30d6}\u{30ed}\u{30c3}\u{30ab}\u{30fc}\u{304c}\u{6765}\u{305f}\u{3002}",
+            ["\u{30d6}\u{30ed}", "\u{30ab}\u{30fc}", "\u{6765}"],
+        ),
+        (
+            "\u{e2a}\u{e21}\u{e0a}\u{e32}\u{e22}\u{e21}\u{e32}\u{e41}\u{e25}\u{e49}\u{e27}",
+            [
+                "\u{e2a}\u{e21}",
+                "\u{e0a}\u{e32}\u{e22}",
+                "\u{e41}\u{e25}\u{e49}",
+            ],
+        ),
+    ] {
+        let items = [validation("item:v:1", held), train("item:t:1", UNRELATED)];
+        assert_eq!(read(&glosses, &items), [(1, 0), (0, 0), (0, 0)], "{held}");
+        assert_eq!(read(&[held], &items), [(1, 1), (0, 0), (0, 0)], "{held}");
+    }
+    // Delimiters still make words: spaces and punctuation between runs, and a
+    // change between an unspaced script and a spaced one.
+    let items = [
+        validation(
+            "item:v:1",
+            "\u{72ac}\u{304c} \u{8d70}\u{308b}\u{3001}\u{732b}\u{3082} Brokkr\u{5c71}",
+        ),
+        train("item:t:1", UNRELATED),
+    ];
+    assert_eq!(
+        read(
+            &["\u{72ac}\u{304c} \u{8d70}\u{308b} \u{732b}\u{3082} brokkr \u{5c71}"],
+            &items
+        ),
+        [(5, 5), (4, 4), (3, 3)]
+    );
+}
+
+#[test]
+fn an_unspaced_script_ends_a_word_beside_any_other_script() {
+    // the first and last letters or digits of every range the rule names
+    let unspaced = [
+        '\u{3005}',
+        '\u{3007}',
+        '\u{3021}',
+        '\u{3029}',
+        '\u{3038}',
+        '\u{303b}',
+        '\u{3041}',
+        '\u{30ff}',
+        '\u{31f0}',
+        '\u{31ff}',
+        '\u{3400}',
+        '\u{4dbf}',
+        '\u{4e00}',
+        '\u{9fff}',
+        '\u{f900}',
+        '\u{fad9}',
+        '\u{ff66}',
+        '\u{ff9f}',
+        '\u{20000}',
+        '\u{2a6df}',
+        '\u{31350}',
+        '\u{323af}',
+        '\u{e01}',
+        '\u{e59}',
+        '\u{e81}',
+        '\u{edf}',
+        '\u{1000}',
+        '\u{1049}',
+        '\u{1780}',
+        '\u{17e9}',
+    ];
+    for c in unspaced {
+        assert!(c.is_alphanumeric(), "{c:?} is a letter or digit");
+        let items = [validation("item:v:1", &format!("ab{c}"))];
+        assert_eq!(read(&["ab", &c.to_string()], &items)[0], (2, 2), "{c:?}");
+    }
+    // Hangul, Latin and Cyrillic are spaced scripts: no break between them
+    for c in ['\u{ac00}', '\u{d7a3}', '\u{e9}', '\u{44f}', '7'] {
+        let glued = format!("ab{c}");
+        let items = [validation("item:v:1", &glued)];
+        assert_eq!(read(&[&glued], &items)[0], (1, 1), "{c:?}");
+        assert_eq!(read(&["ab"], &items)[0], (1, 0), "{c:?}");
+    }
+    // a combining mark or a joiner after an unspaced character stays on it
+    let held = "\u{4e00}\u{301}\u{200d}ab";
+    let items = [validation("item:v:1", held)];
+    assert_eq!(read(&["\u{4e00}\u{301}\u{200d}", "ab"], &items)[0], (2, 2));
+    assert_eq!(read(&["\u{4e00}"], &items)[0], (2, 0));
+}
