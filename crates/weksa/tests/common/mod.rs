@@ -266,6 +266,7 @@ pub fn good() -> Packet {
         discourse: Discourse {
             speech_act: Some(iv(WARN)),
             addressee: Some(nd("n1")),
+            addressee_consent: None,
             features: vec![FeatureValue {
                 feature: iv(HEDGE),
                 value: FeatValue::Grade(grade(300)),

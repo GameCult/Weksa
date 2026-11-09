@@ -683,3 +683,62 @@ fn v11_role_repeat_in_one_predication_refused() {
     ok.predications.push(second);
     assert_eq!(refusals(&ok), vec![]);
 }
+
+// The addressee's consent: which predication the addressee asked for, set only
+// by a source that saw the request.
+
+fn consenting() -> Packet {
+    let mut p = good();
+    p.discourse.addressee_consent = Some(nd("n2"));
+    p
+}
+
+#[test]
+fn consent_to_a_predication_by_an_authored_or_telemetry_source_passes() {
+    assert_eq!(refusals(&consenting()), vec![]);
+    let mut p = consenting();
+    p.provenance.source = ProvenanceSource::GameTelemetry;
+    assert_eq!(refusals(&p), vec![]);
+}
+
+#[test]
+fn consent_needs_an_addressee() {
+    let mut p = consenting();
+    p.discourse.addressee = None;
+    assert_eq!(refusals(&p), vec![Refusal::V14ConsentWithoutAddressee]);
+}
+
+#[test]
+fn consent_names_a_predication_not_a_referent() {
+    let mut p = consenting();
+    p.discourse.addressee_consent = Some(nd("n1"));
+    assert_eq!(
+        refusals(&p),
+        vec![Refusal::V14ConsentNotAPredication { id: nd("n1") }]
+    );
+}
+
+#[test]
+fn consent_to_nothing_is_dangling_only() {
+    let mut p = consenting();
+    p.discourse.addressee_consent = Some(nd("n99"));
+    assert_eq!(
+        refusals(&p),
+        vec![Refusal::V4DanglingRef {
+            id: nd("n99"),
+            at: "addressee consent"
+        }]
+    );
+}
+
+#[test]
+fn a_source_that_only_read_wording_cannot_set_consent() {
+    for source in [
+        ProvenanceSource::ModelDecomposition,
+        ProvenanceSource::ImportedCorpus,
+    ] {
+        let mut p = consenting();
+        p.provenance.source = source;
+        assert_eq!(refusals(&p), vec![Refusal::V15ConsentSource { source }]);
+    }
+}

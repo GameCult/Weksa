@@ -164,6 +164,17 @@
             }
           ]
         },
+        "addressee_consent": {
+          "description": "The predication the addressee asked for or agreed to. A fact about what\nthe addressee did, never about how the line sounds, so it is no feature:\nonly a source that saw the request may set it (V15), it needs an\naddressee (V14) and names a predication (V14), and a lowering that\nspeaks for the addressee's request (\"you asked her to\") reads it here\nand refuses without it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NodeId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "features": {
           "type": "array",
           "items": {
