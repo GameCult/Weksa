@@ -17,6 +17,14 @@
 //! the target language, is refused: the concept word would say a different
 //! thing than the name the packet cites.
 //!
+//! A request clause ("You asked Nibu to stop.") says what the addressee did, so
+//! it is gated on the packet's own record of it: `Discourse.addressee_consent`
+//! (set only by authoring or game telemetry, V15) must name that predication,
+//! and its agent must be the addressee. Without it the lowerer refuses
+//! ([`LowerError::ConsentMissing`], [`LowerError::AskerNotAddressee`]); it does
+//! not read wording or guess who asked. A consent naming any other predication
+//! is an unrendered slot.
+//!
 //! The table is a temporary owner. Each row speaks for an inventory entry and
 //! names the gloss it speaks for, so a row cannot outlive a change of what its id
 //! means. `language-ontology` moves the rows into ontology documents.
@@ -56,31 +64,31 @@ const CONCEPTS: &[Row] = &[
     ("concept:5", "ship_mind", "ship mind"),
     // The Dao De Jing test bed (`daodejing.rs`). Nouns, then the verbs a
     // `{verb}` frame speaks.
-    ("concept:6", "sage", "sage"),
-    ("concept:7", "mind", "minds"),
-    ("concept:8", "belly", "bellies"),
-    ("concept:9", "will", "wills"),
-    ("concept:10", "bone", "bones"),
-    ("concept:11", "empty", "empties"),
-    ("concept:12", "fill", "fills"),
-    ("concept:13", "weaken", "weakens"),
-    ("concept:14", "strengthen", "strengthens"),
-    ("concept:15", "heaven", "heaven"),
-    ("concept:16", "earth", "earth"),
-    ("concept:17", "is_long_enduring", "is long-enduring"),
-    ("concept:18", "continues_long", "continues long"),
-    ("concept:19", "highest_excellence", "highest excellence"),
-    ("concept:20", "water", "water"),
-    ("concept:21", "true_words", "words that are strictly true"),
-    ("concept:22", "seem_paradoxical", "seem paradoxical"),
+    ("concept:7", "sage", "sage"),
+    ("concept:8", "mind", "minds"),
+    ("concept:9", "belly", "bellies"),
+    ("concept:10", "will", "wills"),
+    ("concept:11", "bone", "bones"),
+    ("concept:12", "empty", "empties"),
+    ("concept:13", "fill", "fills"),
+    ("concept:14", "weaken", "weakens"),
+    ("concept:15", "strengthen", "strengthens"),
+    ("concept:16", "heaven", "heaven"),
+    ("concept:17", "earth", "earth"),
+    ("concept:18", "is_long_enduring", "is long-enduring"),
+    ("concept:19", "continues_long", "continues long"),
+    ("concept:20", "highest_excellence", "highest excellence"),
+    ("concept:21", "water", "water"),
+    ("concept:22", "true_words", "words that are strictly true"),
+    ("concept:23", "seem_paradoxical", "seem paradoxical"),
     (
-        "concept:23",
+        "concept:24",
         "space_between_heaven_and_earth",
         "space between heaven and earth",
     ),
-    ("concept:24", "bellows", "bellows"),
-    ("concept:25", "compare", "compare"),
-    ("concept:26", "resemble", "resemble"),
+    ("concept:25", "bellows", "bellows"),
+    ("concept:26", "compare", "compare"),
+    ("concept:27", "resemble", "resemble"),
 ];
 
 /// Frames: the clause a predication of that frame says. `{gloss}` is the filler
@@ -92,22 +100,31 @@ const FRAMES: &[Row] = &[
         "{agent} may endanger {patient} by touching {instrument}",
     ),
     ("frame:2", "intervention", "{agent} will stop {patient}"),
-    // The Dao De Jing test bed. Frame 3 was written from a Train chapter, 4 and
-    // 5 from Validation chapters, 6 and 7 from Test chapters.
-    ("frame:3", "act", "{agent} {verb} {patient}"),
-    ("frame:4", "intransitive", "{experiencer} {verb}"),
-    ("frame:5", "likeness", "{experiencer} is like {goal}"),
     (
-        "frame:6",
+        "frame:3",
+        "request_intervention",
+        "{agent} asked {patient} to stop",
+    ),
+    // The Dao De Jing test bed. Frame 4 was written from a Train chapter, 5 and
+    // 6 from Validation chapters, 7 and 8 from Test chapters.
+    ("frame:4", "act", "{agent} {verb} {patient}"),
+    ("frame:5", "intransitive", "{experiencer} {verb}"),
+    ("frame:6", "likeness", "{experiencer} is like {goal}"),
+    (
+        "frame:7",
         "seems_paradoxical",
         "{experiencer} seem paradoxical",
     ),
     (
-        "frame:7",
+        "frame:8",
         "may_be_compared",
         "{experiencer} may be compared to {goal}",
     ),
 ];
+
+/// The frame of "{agent} asked {patient} to stop": the one frame that reads
+/// the discourse's addressee consent.
+const REQUEST_FRAME: &str = "frame:3";
 
 /// Speech acts: the opener of the first sentence.
 const SPEECH_ACTS: &[Row] = &[
@@ -138,6 +155,12 @@ pub enum LowerError {
     NoPronunciation { entity: EntityId },
     /// IPA was requested for a packet that cites no entity.
     NoEntityReferent,
+    /// A request predication the packet does not carry the addressee's consent
+    /// to: no consent, or a consent that names another predication. The
+    /// lowerer does not guess who asked.
+    ConsentMissing { predication: NodeId },
+    /// A request predication whose agent is not the discourse addressee.
+    AskerNotAddressee { predication: NodeId },
     /// The entity port failed to read.
     EntityRead { entity: EntityId, why: String },
 }
@@ -182,9 +205,7 @@ pub fn lower(
     {
         return unrendered("features");
     }
-    if input.discourse().addressee_consent.is_some() {
-        return unrendered("addressee consent");
-    }
+    request_gate(input, inv)?;
     if !input.relations().is_empty() {
         return unrendered("relations");
     }
@@ -229,6 +250,59 @@ pub fn lower(
         out.push('.');
     }
     Ok(out)
+}
+
+/// The one place consent is read. A request clause ([`REQUEST_FRAME`]) says what
+/// the addressee did, so it needs the packet's own record of it: the discourse
+/// `addressee_consent`, which validation lets only authoring or game telemetry
+/// set (V15), must name that predication, and its agent must be the addressee.
+/// Nothing here reads wording. A consent naming any other predication is a slot
+/// the lowerer does not render.
+fn request_gate(input: &LoweringInput, inv: &Inventory) -> Result<(), LowerError> {
+    let consent = input.discourse().addressee_consent.as_ref();
+    let requests = input
+        .predications()
+        .iter()
+        .filter(|p| p.frame.to_string() == REQUEST_FRAME);
+    for p in requests {
+        if consent != Some(&p.id) {
+            return Err(LowerError::ConsentMissing {
+                predication: p.id.clone(),
+            });
+        }
+        let agent = inv
+            .entries()
+            .find(|e| {
+                e.family() == Family::Role && e.gloss == "agent" && e.live_at(input.inventory_rev())
+            })
+            .ok_or_else(|| LowerError::UnknownRole {
+                frame: p.frame,
+                role: "agent".to_string(),
+            })?;
+        let asker = p
+            .roles
+            .iter()
+            .find(|r| r.role == agent.id)
+            .map(|r| &r.filler);
+        if asker.is_none() || asker != input.discourse().addressee.as_ref() {
+            return Err(LowerError::AskerNotAddressee {
+                predication: p.id.clone(),
+            });
+        }
+    }
+    match consent {
+        Some(_)
+            if !input
+                .predications()
+                .iter()
+                .any(|p| p.frame.to_string() == REQUEST_FRAME) =>
+        {
+            Err(LowerError::Unrendered {
+                what: "addressee consent",
+            })
+        }
+        _ => Ok(()),
+    }
 }
 
 /// The ruled IPA of every entity a packet cites, one per entity referent in

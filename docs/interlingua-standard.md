@@ -195,9 +195,10 @@ and `features` carry source-side nuance on content (hedge, certainty, irony and
 whatever the inventory grows). This is source-side communicative pressure, not
 target-language register. `addressee_consent` is no feature: it names the
 predication the addressee asked for or agreed to, a fact about what the
-addressee did. The English lowerer renders no consent and refuses a packet that
-carries one; a row that speaks for the request ("you asked her to") reads it
-and refuses without it.
+addressee did. The English lowerer's request row (`frame:3`, "{agent} asked
+{patient} to stop") reads it: the consent must name that predication and its
+agent must be the addressee, else `ConsentMissing` or `AskerNotAddressee`. A
+consent naming any other predication is refused as unrendered.
 
 ### `stance`
 

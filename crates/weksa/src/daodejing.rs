@@ -42,8 +42,8 @@ const CONCEPTS: &[&str] = &[
     "resemble",
 ];
 
-/// Frame glosses, from `frame:3`. 3 is minted from a Train chapter, 4 and 5
-/// from Validation chapters, 6 and 7 from Test chapters.
+/// Frame glosses, from `frame:4`. 4 is minted from a Train chapter, 5 and 6
+/// from Validation chapters, 7 and 8 from Test chapters.
 const FRAMES: &[&str] = &[
     "act",
     "intransitive",
@@ -56,7 +56,7 @@ const FRAMES: &[&str] = &[
 pub fn revision() -> (InventoryRevision, Vec<InventoryEntry>) {
     let mut entries = Vec::new();
     for (family, glosses) in [(Family::Concept, CONCEPTS), (Family::Frame, FRAMES)] {
-        let first = if family == Family::Concept { 6 } else { 3 };
+        let first = if family == Family::Concept { 7 } else { 4 };
         for (i, gloss) in glosses.iter().enumerate() {
             entries.push(InventoryEntry {
                 id: family.id(NonZeroU32::new(first + i as u32).expect("nonzero")),
@@ -85,7 +85,7 @@ fn concept(gloss: &str) -> &'static str {
         .iter()
         .position(|c| *c == gloss)
         .expect("known concept");
-    Box::leak(format!("concept:{}", 6 + at).into_boxed_str())
+    Box::leak(format!("concept:{}", 7 + at).into_boxed_str())
 }
 
 fn frame(gloss: &str) -> &'static str {
@@ -93,7 +93,7 @@ fn frame(gloss: &str) -> &'static str {
         .iter()
         .position(|c| *c == gloss)
         .expect("known frame");
-    Box::leak(format!("frame:{}", 3 + at).into_boxed_str())
+    Box::leak(format!("frame:{}", 4 + at).into_boxed_str())
 }
 
 fn hex8(ascii: &str) -> String {
