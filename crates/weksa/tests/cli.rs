@@ -924,7 +924,7 @@ fn proof_packet_lowers_and_the_lowering_scores_against_items() {
     assert!(text.contains("NIBU will stop"), "{text}");
 
     let missing = weksa(d.path(), &["lower", "./p.cc", "packet:0000000000000000"]);
-    assert!(!missing.status.success() && out(&missing).contains("no packet"));
+    assert!(!missing.status.success() && out(&missing).contains("no such packet"));
 
     // IPA is the ruled pronunciation or nothing: spelling is not one.
     let args = ["lower", "./p.cc", "packet:6e6962752d303031", "--ipa"];
@@ -1008,5 +1008,229 @@ fn proof_packet_lowers_and_the_lowering_scores_against_items() {
             &url,
         ],
     );
-    assert!(!unknown.status.success() && out(&unknown).contains("no item item:nibu:9"));
+    assert!(!unknown.status.success() && out(&unknown).contains("no such item"));
+    assert!(!out(&unknown).contains("item:nibu:9"), "{}", out(&unknown));
+}
+
+/// Runs `args` and demands a refusal whose text holds `reason` and none of the
+/// identifiers the caller supplied.
+fn refuses_without_echo(d: &std::path::Path, args: &[&str], reason: &str) {
+    let o = weksa(d, args);
+    let text = out(&o);
+    assert!(!o.status.success(), "{args:?}: {text}");
+    assert!(text.contains(reason), "{args:?} lacks {reason:?}: {text}");
+    for a in args.iter().filter(|a| a.to_lowercase().contains("canary")) {
+        // An argument may carry the canary beside flag syntax (`--x=...`); the
+        // identifier itself is the part from the canary on.
+        let id = &a[a.to_lowercase().find("canary").unwrap()..];
+        assert!(
+            !text.to_lowercase().contains(&id.to_lowercase()),
+            "{args:?} echoes {id:?}: {text}"
+        );
+    }
+}
+
+#[test]
+fn cli_errors_never_echo_identifiers() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path();
+    cast_entities(p, &["nibu"]);
+    let add = |extra: &[&str]| -> Vec<String> {
+        ["corpus", "add", "--admitted-on", "2026-10-29"]
+            .into_iter()
+            .chain(extra.iter().copied())
+            .map(String::from)
+            .collect()
+    };
+    let run = |args: Vec<String>, reason: &str| {
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        refuses_without_echo(p, &refs, reason);
+    };
+    // The positional entity id, malformed and well formed but unheld.
+    refuses_without_echo(
+        p,
+        &[
+            "entity",
+            "put",
+            "canary-id",
+            "--form",
+            "en-US=X",
+            "--origin",
+            "live",
+            "--persona",
+            "k",
+        ],
+        "not a EntityId",
+    );
+    // --speaker: a malformed id, and a well formed one no entity holds.
+    run(
+        add(&[
+            "--slug",
+            "q",
+            "--text",
+            "Hello there.",
+            "--speaker",
+            "canary-speaker",
+            "--group",
+            "g",
+            "--source",
+            "operator-written",
+        ]),
+        "--speaker",
+    );
+    run(
+        add(&[
+            "--slug",
+            "q",
+            "--text",
+            "Hello there.",
+            "--speaker",
+            "entity:canary",
+            "--group",
+            "g",
+            "--source",
+            "operator-written",
+        ]),
+        "UnknownEntity",
+    );
+    // clap enum values.
+    run(
+        add(&[
+            "--slug",
+            "q",
+            "--text",
+            "Hello there.",
+            "--speaker",
+            "entity:nibu",
+            "--group",
+            "g",
+            "--source",
+            "canary-source",
+        ]),
+        "--source",
+    );
+    refuses_without_echo(
+        p,
+        &[
+            "entity",
+            "put",
+            "entity:kay",
+            "--form",
+            "en-US=X",
+            "--origin",
+            "canary-origin",
+        ],
+        "--origin",
+    );
+    run(
+        add(&[
+            "--slug",
+            "q",
+            "--text",
+            "Hello there.",
+            "--speaker",
+            "entity:nibu",
+            "--group",
+            "g",
+            "--source",
+            "model-written",
+            "--model-family",
+            "canary-family",
+        ]),
+        "--model-family",
+    );
+    // Keys on withdraw, split, validate, lower and score.
+    refuses_without_echo(p, &["corpus", "withdraw", "item:canary:7"], "no such item");
+    refuses_without_echo(p, &["split", "item:canary:7"], "no such item");
+    std::fs::write(p.join("out.txt"), "text").unwrap();
+    refuses_without_echo(
+        p,
+        &["score", "item:canary:7", "--output", "out.txt"],
+        "no such item",
+    );
+    let packets = weksa(p, &["inventory", "seed"]);
+    assert!(packets.status.success(), "{}", out(&packets));
+    let made = weksa(p, &["packet", "proof", "p.cc"]);
+    let _ = made;
+    refuses_without_echo(
+        p,
+        &["validate", "p.cc", "packet:canary:7"],
+        "no such packet",
+    );
+    refuses_without_echo(p, &["lower", "p.cc", "packet:canary:7"], "no such packet");
+    // S6 names no held key; S5 names no group.
+    let held = weksa(
+        p,
+        &add(&[
+            "--slug",
+            "canarya",
+            "--text",
+            "Fresh words here.",
+            "--speaker",
+            "entity:nibu",
+            "--group",
+            "canary-first",
+            "--source",
+            "operator-written",
+        ])
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>(),
+    );
+    assert!(held.status.success(), "{}", out(&held));
+    let copy = add(&[
+        "--slug",
+        "other",
+        "--text",
+        "Fresh words here.",
+        "--speaker",
+        "entity:nibu",
+        "--group",
+        "g",
+        "--source",
+        "operator-written",
+    ]);
+    let copy = weksa(p, &copy.iter().map(String::as_str).collect::<Vec<_>>());
+    assert!(
+        !copy.status.success() && out(&copy).contains("S6TextHeld"),
+        "{}",
+        out(&copy)
+    );
+    assert!(!out(&copy).contains("canary"), "{}", out(&copy));
+    let moved = add(&[
+        "--slug",
+        "other",
+        "--text",
+        "Corrected words here.",
+        "--speaker",
+        "entity:nibu",
+        "--group",
+        "canary-second",
+        "--supersedes",
+        "item:canarya:1",
+        "--source",
+        "operator-written",
+    ]);
+    let moved = weksa(p, &moved.iter().map(String::as_str).collect::<Vec<_>>());
+    assert!(
+        !moved.status.success() && out(&moved).contains("S5SupersedeGroup"),
+        "{}",
+        out(&moved)
+    );
+    assert!(!out(&moved).contains("canary"), "{}", out(&moved));
+}
+
+#[test]
+fn admitted_on_must_be_a_real_calendar_date() {
+    let d = tempfile::tempdir().unwrap();
+    cast_entities(d.path(), &["nibu"]);
+    for bad in ["2026-02-30", "", "junk", "2026-13-01", "2026-1-1"] {
+        let mut args = ADD.to_vec();
+        let at = args.iter().position(|a| *a == "--admitted-on").unwrap();
+        args[at + 1] = bad;
+        let o = weksa(d.path(), &args);
+        assert!(!o.status.success(), "{bad:?}: {}", out(&o));
+        assert!(out(&o).contains("--admitted-on"), "{bad:?}: {}", out(&o));
+    }
+    assert!(!out(&weksa(d.path(), &["corpus", "dump"])).contains("item:"));
 }

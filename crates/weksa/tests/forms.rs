@@ -51,15 +51,12 @@ fn forms_refuse_surface_text() {
 }
 
 #[test]
-fn a_refusal_names_the_form_and_the_value_and_a_form_reads_back_as_written() {
+fn a_refusal_names_the_form_and_keeps_the_value_out_of_its_text() {
     let e = NodeId::parse("n0").unwrap_err();
     assert_eq!(e.form, "NodeId");
     assert_eq!(e.got, "n0");
-    assert_eq!(e.to_string(), "\"n0\" is not a NodeId");
-    assert_eq!(
-        Grade::new(1001).unwrap_err().to_string(),
-        "\"1001\" is not a Grade"
-    );
+    assert_eq!(e.to_string(), "not a NodeId");
+    assert_eq!(Grade::new(1001).unwrap_err().to_string(), "not a Grade");
     assert_eq!(EncoderId::parse(ENCODER_ID).unwrap().as_str(), ENCODER_ID);
     assert_eq!(PacketId::parse(PACKET_ID).unwrap().as_str(), PACKET_ID);
     assert_eq!(
@@ -149,4 +146,24 @@ fn grade_bound_is_the_type() {
     assert_eq!(grade["maximum"], 1000, "{grade}");
     assert_eq!(grade["minimum"], 0, "{grade}");
     assert_eq!(schema["$defs"]["NodeId"]["pattern"], "^n[1-9][0-9]{0,3}$");
+}
+
+#[test]
+fn calendar_dates_follow_the_gregorian_rule_and_ascii_digits_only() {
+    use weksa::form::is_calendar_date;
+    for ok in ["2024-02-29", "2000-02-29", "2026-12-31"] {
+        assert!(is_calendar_date(ok), "{ok}");
+    }
+    for bad in [
+        "1900-02-29",
+        "2023-02-29",
+        "2026-04-31",
+        "2026-10-00",
+        "2026-00-10",
+        "+026-10-29",
+        "2026-10-2\u{669}",
+        "\u{6f0}026-10-29",
+    ] {
+        assert!(!is_calendar_date(bad), "{bad}");
+    }
 }
