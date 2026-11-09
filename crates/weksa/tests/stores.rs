@@ -416,6 +416,23 @@ fn s6_folds_dotless_i_kana_and_arabic_indic_digits() {
     store
         .add(item("item:fold:95", "b\u{456}t"), &ents(&d))
         .unwrap();
+    // j has no precomposed dot-above form, so this reaches the guard itself.
+    store.add(item("item:fold:98", "jx"), &ents(&d)).unwrap();
+    store
+        .add(item("item:fold:99", "j\u{307}x"), &ents(&d))
+        .unwrap();
+    // Marks after the dotted i compose with it: i, dot, acute is an i with an
+    // acute, whatever order the writer used.
+    store
+        .add(item("item:fold:100", "\u{ed}x"), &ents(&d))
+        .unwrap();
+    assert_eq!(
+        refusal(store.add(item("item:fold:101", "i\u{307}\u{301}x"), &ents(&d))),
+        StoreRefusal::S6TextHeld {
+            key: "item:fold:101".into(),
+            held_by: "item:fold:100".into()
+        }
+    );
 }
 
 /// `modifier_letters.txt` is the Unicode 17 Lm list, the oracle for the test

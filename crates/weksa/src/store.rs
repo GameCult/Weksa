@@ -432,16 +432,19 @@ fn check_entities(item: &CorpusItem, entities: &EntityStore) -> Result<(), Store
 /// held, a lost collision toward leak. U+0307 after any other letter stays.
 fn normalized(text: &str) -> String {
     let mapped: String = text.nfkc().flat_map(fold_variant).collect();
-    let mut key = String::new();
-    for c in default_case_fold_str(&mapped).nfkc() {
-        if c == '\u{307}' && key.ends_with('i') {
+    // The dot goes before the last NFKC so the marks left on the i compose with
+    // it (i, dot, acute reads as the i with an acute).
+    let mut dotless = String::new();
+    for c in default_case_fold_str(&mapped).chars() {
+        if c == '\u{307}' && dotless.ends_with('i') {
             continue;
         }
-        if c.is_alphanumeric() || is_combining_mark(c) {
-            key.push(c);
-        }
+        dotless.push(c);
     }
-    key
+    dotless
+        .nfkc()
+        .filter(|&c| c.is_alphanumeric() || is_combining_mark(c))
+        .collect()
 }
 
 /// The one-to-one folds `normalized` adds to NFKC and case folding, applied
