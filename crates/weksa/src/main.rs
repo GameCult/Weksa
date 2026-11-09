@@ -349,10 +349,6 @@ fn parse_cli() -> Cli {
         Err(e) => match e.kind() {
             ErrorKind::UnknownArgument => refuse_cli("unknown argument"),
             ErrorKind::InvalidSubcommand => refuse_cli("unknown subcommand"),
-            ErrorKind::TooManyValues | ErrorKind::WrongNumberOfValues => {
-                refuse_cli("wrong number of values")
-            }
-            ErrorKind::NoEquals => refuse_cli("value needs '='"),
             _ => e.exit(),
         },
     }
