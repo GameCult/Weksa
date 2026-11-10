@@ -23,7 +23,7 @@
 //! uses the template table. The prompt source pin covers `context.rs`,
 //! `split.rs` and `lower.rs`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -801,23 +801,21 @@ pub enum RoundOutcome {
     Recorded(RoundRecord),
 }
 
-/// The rule codes an admission refusal broke, each once: validator rules by
+/// The distinct rule codes an admission refusal broke: validator rules by
 /// code, a store refusal by its variant name. Nothing from the packet or the
 /// stores is kept; an I/O failure is `io`.
-fn admit_rule_codes(e: &StoreError) -> Vec<String> {
-    let mut codes: Vec<String> = match e {
+fn admit_rule_codes(e: &StoreError) -> BTreeSet<String> {
+    match e {
         StoreError::Invalid(rs) => rs.iter().map(|r| r.rule().to_string()).collect(),
-        StoreError::Refused(r) => vec![r
+        StoreError::Refused(r) => [r
             .to_string()
             .split([' ', ':'])
             .next()
             .unwrap_or_default()
-            .to_string()],
-        StoreError::Io(_) => vec!["io".to_string()],
-    };
-    codes.sort();
-    codes.dedup();
-    codes
+            .to_string()]
+        .into(),
+        StoreError::Io(_) => ["io".to_string()].into(),
+    }
 }
 
 /// How one item fared: where it was refused, or the text it lowered to, with

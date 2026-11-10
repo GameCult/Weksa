@@ -2899,6 +2899,16 @@ fn views_with_one_meaning_share_one_unanswered_lowering_prompt() {
     assert_eq!(unique.len(), 2);
 }
 
+/// Several refusals under one rule in one packet: the item still counts once.
+fn every_concept_unknown(d: &mut PacketDraft) {
+    for r in &mut d.referents {
+        r.concept = "concept:999".parse().unwrap();
+    }
+    for p in &mut d.predications {
+        p.concept = "concept:999".parse().unwrap();
+    }
+}
+
 #[test]
 fn admit_refusals_are_counted_by_rule_and_printed_with_the_label() {
     use weksa::packet::EntityId;
@@ -2913,7 +2923,7 @@ fn admit_refusals_are_counted_by_rule_and_printed_with_the_label() {
     };
     let mut model = fake(&[
         (1, edited(1, nobody)),
-        (2, edited(2, unknown_concept)),
+        (2, edited(2, every_concept_unknown)),
         (3, edited(3, empty)),
     ]);
     let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
