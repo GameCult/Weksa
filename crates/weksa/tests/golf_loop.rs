@@ -1698,6 +1698,43 @@ fn a_rejection_leaves_no_candidate_inventory_from_an_earlier_attempt() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn a_failed_accept_write_leaves_neither_the_round_nor_the_decision() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut dao = dao();
+    two_rounds(&mut dao);
+    let run_cc = std::fs::read(dao.root.join("run.cc")).unwrap();
+    let mut model = cycle_fake(ONE_CONCEPT);
+    // The cycle's directory exists, so everything but run.cc can still be
+    // written once the run's root takes no new files: the batch's staging file
+    // is refused, and it is the only write to run.cc a cycle makes.
+    std::fs::create_dir_all(dao.root.join("cycle-1")).unwrap();
+    let chmod = |mode| std::fs::set_permissions(&dao.root, std::fs::Permissions::from_mode(mode));
+    chmod(0o500).unwrap();
+    if std::fs::File::create(dao.root.join("probe")).is_ok() {
+        // Running as a user the mode does not bind: the fault cannot be injected.
+        std::fs::remove_file(dao.root.join("probe")).unwrap();
+        chmod(0o700).unwrap();
+        return;
+    }
+    let err = cycle(&mut dao.run, &mut model, &Scorer::new(Bag)).err();
+    chmod(0o700).unwrap();
+    assert_eq!(err, Some(RunError::Store));
+    assert_eq!(std::fs::read(dao.root.join("run.cc")).unwrap(), run_cc);
+    assert_eq!(dao.run.rounds().unwrap().len(), 2, "no orphan round");
+    assert!(dao.run.decisions().unwrap().is_empty(), "no decision");
+    let reopened = RunStores::open(&dao.root).unwrap();
+    assert_eq!(reopened.rounds().unwrap().len(), 2);
+    assert!(reopened.decisions().unwrap().is_empty());
+    assert_eq!(head_rev(&dao.root), 3);
+
+    // The rerun decides cycle 1 on round 3, as if the failure had not happened.
+    let d = run_cycle(&mut dao, &mut model);
+    assert_eq!((d.k(), d.candidate_round()), (1, Some(3)));
+    assert_eq!(d.verdict(), Verdict::Accepted);
+}
+
 #[test]
 fn unanswered_cycle_writes_nothing() {
     let mut dao = dao();
@@ -2168,6 +2205,15 @@ fn source_tripwires() {
         2,
         "the head and the cycle's file"
     );
+    // Accepting is one write: from the decision literal on, the candidate round
+    // and the decision go through one `put_prepared_batch` and no `.put(`.
+    let tail = run
+        .split("let decided = Decision {")
+        .nth(1)
+        .and_then(|t| t.split("Ok(CycleOutcome::Decided(decided))").next())
+        .unwrap();
+    assert_eq!(tail.matches("put_prepared_batch(").count(), 1);
+    assert!(!tail.contains(".put("), "a second write after the batch");
     // An entry draft carries no id or revision field.
     let encode = read("encode.rs");
     let entry = encode
