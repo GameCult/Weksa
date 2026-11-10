@@ -669,11 +669,11 @@ fn answer_files_write_the_prompt_and_read_the_answer() {
 use std::collections::HashMap;
 
 use common::Bag;
-use weksa::context::{ENCODE_INSTRUCTIONS, MINT_INSTRUCTIONS, Prompt};
+use weksa::context::{ENCODE_INSTRUCTIONS, LOWER_INSTRUCTIONS, MINT_INSTRUCTIONS, Prompt};
 use weksa::daodejing::packets;
 use weksa::model::{AnswerFiles, ModelPort, PortError};
 use weksa::run::{Outcome, RoundOutcome, RoundRecord, Stage, round};
-use weksa::{Embedder, PacketDraft, PacketStore, Scorer};
+use weksa::{CorpusStore, Embedder, InventoryStore, PacketDraft, PacketStore, Scorer};
 
 /// Answers by the item the prompt holds; panics on an item it was not given,
 /// and records every prompt it was shown. A prompt that starts with
@@ -683,6 +683,11 @@ use weksa::{Embedder, PacketDraft, PacketStore, Scorer};
 struct FakeModel {
     name: &'static str,
     answers: HashMap<String, String>,
+    /// The lowering answered for an item: `{"text": lowered[item]}`; a panic on
+    /// an item with none.
+    lowered: HashMap<String, String>,
+    /// When set, the answer to every lowering prompt instead of `lowered`.
+    raw_lowering: Option<Result<String, PortError>>,
     candidate: Option<(u32, HashMap<String, String>)>,
     edit: Option<Result<String, PortError>>,
     seen: Vec<(String, String)>,
@@ -700,6 +705,16 @@ impl ModelPort for FakeModel {
             return self.edit.clone().expect("the model was asked for an edit");
         }
         let key = prompt.item_keys()[0].clone();
+        if prompt.text().starts_with(LOWER_INSTRUCTIONS) {
+            if let Some(raw) = &self.raw_lowering {
+                return raw.clone();
+            }
+            let text = self
+                .lowered
+                .get(&key)
+                .unwrap_or_else(|| panic!("the model was asked to lower {key}"));
+            return Ok(serde_json::json!({ "text": text }).to_string());
+        }
         let answers = match &self.candidate {
             Some((rev, candidate))
                 if prompt
@@ -732,11 +747,30 @@ fn keyed(answers: &[(usize, String)]) -> HashMap<String, String> {
         .collect()
 }
 
+/// The five English texts the deleted template table gave the Dao packets
+/// (`tests/daodejing.rs`): the lowering the fake model answers, so the score
+/// pins hold.
+fn table_english() -> HashMap<String, String> {
+    [
+        "The sage empties the minds. The sage fills the bellies. The sage weakens the wills. The sage strengthens the bones.",
+        "The heaven is long-enduring. The earth continues long.",
+        "The highest excellence is like the water.",
+        "The words that are strictly true seem paradoxical.",
+        "The space between heaven and earth may be compared to the bellows.",
+    ]
+    .iter()
+    .enumerate()
+    .map(|(i, text)| (format!("item:daodejing:{}", i + 1), (*text).to_string()))
+    .collect()
+}
+
 /// A fake that answers the Dao packets for the Train and Validation items.
 fn fake(answers: &[(usize, String)]) -> FakeModel {
     FakeModel {
         name: "fake-model",
         answers: keyed(answers),
+        lowered: table_english(),
+        raw_lowering: None,
         candidate: None,
         edit: None,
         seen: vec![],
@@ -825,8 +859,12 @@ fn round_over_the_dao_stores_scores_train_and_validation() {
         [
             ["item:daodejing:1"],
             ["item:daodejing:2"],
+            ["item:daodejing:3"],
+            ["item:daodejing:1"],
+            ["item:daodejing:2"],
             ["item:daodejing:3"]
-        ]
+        ],
+        "the encode calls, then the lowering calls"
     );
     for (call, (digest, _)) in r.calls().iter().zip(&model.seen) {
         assert_eq!(&call.prompt, digest);
@@ -943,6 +981,28 @@ fn prompts(run: &RunStores) -> Vec<(String, Prompt)> {
         .collect()
 }
 
+/// The key and prompt of every lowering a round over `dao`'s run asks for when
+/// every item encodes to its Dao packet and is admitted, as a round builds them.
+fn lowering_prompts(dao: &Dao, inventory: &InventoryStore) -> Vec<(String, Prompt)> {
+    let corpus = CorpusStore::open(&dao.corpus).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = PacketStore::open(&dir.path().join("p.cc")).unwrap();
+    let inv = inventory.inventory().unwrap();
+    (1..=3)
+        .map(|n| {
+            let mut packet = packets().remove(n - 1);
+            // The encoder step stamps the inventory's latest revision.
+            packet.inventory_rev = inv.latest().unwrap().n;
+            let key = packet.provenance.corpus_item.clone();
+            let view = store
+                .admit(packet, inventory, &corpus, dao.run.entities())
+                .unwrap();
+            let prompt = Prompt::lower(&view, &key, &inv, dao.run.entities()).unwrap();
+            (key.to_string(), prompt)
+        })
+        .collect()
+}
+
 #[test]
 fn unanswered_round_writes_nothing() {
     let mut dao = dao();
@@ -991,12 +1051,53 @@ fn unanswered_round_writes_nothing() {
     assert!(!round1.join("packets.cc").exists());
     assert_eq!(std::fs::read(dao.root.join("run.cc")).unwrap(), run_cc);
 
-    // The last answer completes round 1; the next round is round 2 and asks again.
+    // The last encode answer moves the round to its second phase: the lowering
+    // prompts are asked, and still nothing is written.
     let (key, p) = &expected[2];
     std::fs::write(round1.join(format!("{}.answer", p.digest())), &answers[key]).unwrap();
+    let lowering = lowering_prompts(&dao, dao.run.inventory());
+    let mut files = AnswerFiles::new(dao.run.next_round_dir().unwrap(), "fake-model".into());
+    let RoundOutcome::Unanswered { prompts: digests } =
+        round(&mut dao.run, &mut files, &Scorer::new(Bag)).unwrap()
+    else {
+        panic!("answered lowering from nothing")
+    };
+    let want_lower: Vec<String> = lowering.iter().map(|(_, p)| p.digest()).collect();
+    assert_eq!(digests, want_lower);
+    assert!(dao.run.rounds().unwrap().is_empty());
+    assert!(!round1.join("packets.cc").exists());
+    assert_eq!(std::fs::read(dao.root.join("run.cc")).unwrap(), run_cc);
+    for (_, p) in &lowering {
+        assert_eq!(
+            std::fs::read_to_string(round1.join(format!("{}.prompt", p.digest()))).unwrap(),
+            p.text()
+        );
+    }
+
+    // Two of three lowerings is still nothing written; the third completes round 1.
+    let table = table_english();
+    let lowered = |key: &str| serde_json::json!({ "text": table[key] }).to_string();
+    for (key, p) in &lowering[..2] {
+        std::fs::write(round1.join(format!("{}.answer", p.digest())), lowered(key)).unwrap();
+    }
+    let mut files = AnswerFiles::new(dao.run.next_round_dir().unwrap(), "fake-model".into());
+    let RoundOutcome::Unanswered { prompts: digests } =
+        round(&mut dao.run, &mut files, &Scorer::new(Bag)).unwrap()
+    else {
+        panic!("answered from two of three lowerings")
+    };
+    assert_eq!(digests, [want_lower[2].clone()]);
+    assert!(dao.run.rounds().unwrap().is_empty());
+    assert!(!round1.join("packets.cc").exists());
+    assert_eq!(std::fs::read(dao.root.join("run.cc")).unwrap(), run_cc);
+    let (key, p) = &lowering[2];
+    std::fs::write(round1.join(format!("{}.answer", p.digest())), lowered(key)).unwrap();
     let mut files = AnswerFiles::new(dao.run.next_round_dir().unwrap(), "fake-model".into());
     let r = recorded(round(&mut dao.run, &mut files, &Scorer::new(Bag)).unwrap());
-    assert_eq!(r.n(), 1);
+    assert_eq!((r.n(), r.calls().len()), (1, 6));
+    assert_eq!(two_dp(r.train_mean().chrf.unwrap()), 44.18);
+
+    // Round 2 asks again, encode first.
     let mut files = AnswerFiles::new(dao.run.next_round_dir().unwrap(), "fake-model".into());
     assert!(dao.root.join("round-2").parent().is_some());
     let RoundOutcome::Unanswered { prompts: again } =
@@ -1011,11 +1112,12 @@ fn unanswered_round_writes_nothing() {
     );
     assert_eq!(dao.run.rounds().unwrap().len(), 1);
 
-    // Answered, round 2 is recorded as round 2, after round 1.
-    for (key, p) in &expected {
+    // Answered in both phases, round 2 is recorded as round 2, after round 1.
+    for (key, p) in expected.iter().chain(&lowering) {
+        let answer = answers.get(key).cloned().unwrap_or_else(|| lowered(key));
         std::fs::write(
             dao.root.join(format!("round-2/{}.answer", p.digest())),
-            &answers[key],
+            answer,
         )
         .unwrap();
     }
@@ -1105,7 +1207,8 @@ fn refusal_stages_are_counted() {
     };
     let junk = "not json at all".to_string();
 
-    // Train refused at each stage; Validation refused at the other two.
+    // Train refused at Parse; Validation refused at Admit, and a relation
+    // lowers (the model renders relations; the deleted table did not).
     let r = run([
         junk.clone(),
         edited(2, unknown_concept),
@@ -1116,14 +1219,15 @@ fn refusal_stages_are_counted() {
     // A refused item is in the mean as 0: n counts every item, scored the real ones.
     let m = r.train_mean();
     assert_eq!((m.count, m.chrf, m.meaning), (1, Some(0.0), Some(0.0)));
-    assert_eq!((r.train_scored(), r.validation_scored()), (0, 0));
+    assert_eq!((r.train_scored(), r.validation_scored()), (0, 1));
     assert_eq!(r.validation_refused().parse, 0);
     assert_eq!(
         (r.validation_refused().admit, r.validation_refused().lower),
-        (1, 1)
+        (1, 0)
     );
     let m = r.validation_mean();
-    assert_eq!((m.count, m.chrf, m.meaning), (2, Some(0.0), Some(0.0)));
+    assert_eq!(m.count, 2);
+    assert!(m.chrf.unwrap() > 0.0, "the relation item lowered and scored");
 
     // Validation items 2 and 3 score a and b when both lower (the Dao bed:
     // 82.12 and 74.99). Refusing one halves the mean; it cannot raise it.
@@ -1157,12 +1261,7 @@ fn refusal_stages_are_counted() {
         "(74.99 + 0) / 2 = {b_half}"
     );
 
-    let a_only = run([edited(1, with_relation), good_answers()[1].1.clone(), junk]);
-    assert_eq!(a_only.train()[0].outcome, Outcome::Refused(Stage::Lower));
-    assert!(
-        a_only.train()[0].packet.is_some(),
-        "a packet that lowers badly was admitted"
-    );
+    let a_only = run([good_answers()[0].1.clone(), good_answers()[1].1.clone(), junk]);
     assert_eq!(a_only.validation_refused().parse, 1);
     let a_half = a_only.validation_mean().chrf.unwrap();
     assert!(
@@ -1200,8 +1299,18 @@ fn non_utf8_encode_answer_is_a_parse_refusal() {
         };
         std::fs::write(round1.join(format!("{}.answer", p.digest())), bytes).unwrap();
     }
+    // Item 3 never reaches the second phase.
+    let table = table_english();
+    for (key, p) in lowering_prompts(&dao, dao.run.inventory())
+        .iter()
+        .filter(|(key, _)| key != "item:daodejing:3")
+    {
+        let answer = serde_json::json!({ "text": table[key] }).to_string();
+        std::fs::write(round1.join(format!("{}.answer", p.digest())), answer).unwrap();
+    }
     let mut files = AnswerFiles::new(round1.clone(), "fake-model".into());
     let r = recorded(round(&mut dao.run, &mut files, &Scorer::new(Bag)).unwrap());
+    assert_eq!(r.calls().len(), 5);
     // Item 3 is Validation: its refusal is a Parse refusal and the round stands.
     let v = r.validation_refused();
     assert_eq!((v.parse, v.admit, v.lower), (1, 0, 0));
@@ -1459,9 +1568,9 @@ fn errors_echo_no_input() {
         format!("{:?}", RunError::Drift(DriftOf::Model)),
         "drift in Model"
     );
-    // The Prompts text names the two files its digest covers, and only them.
+    // The Prompts text names the three files its digest covers.
     let prompts = RunError::Drift(DriftOf::Prompts).to_string();
-    assert!(prompts.contains("context.rs") && prompts.contains("split.rs"));
+    assert!(["context.rs", "split.rs", "lower.rs"].iter().all(|f| prompts.contains(f)));
     assert_eq!(format!("{:?}", RunError::Drift(DriftOf::Prompts)), prompts);
 }
 
@@ -1471,11 +1580,18 @@ fn prompts_come_only_from_context() {
     let mut model = fake(&good_answers());
     let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
     assert_eq!(model.seen.len(), r.calls().len());
+    assert_eq!(model.seen.len(), 6);
     for ((digest, text), call) in model.seen.iter().zip(r.calls()) {
-        assert!(text.starts_with(ENCODE_INSTRUCTIONS));
         assert_eq!(call.items.len(), 1);
-        assert_eq!(text.matches("[item:").count(), 1);
-        assert!(text.contains(&format!("[{}]", call.items[0])));
+        if text.starts_with(ENCODE_INSTRUCTIONS) {
+            assert_eq!(text.matches("[item:").count(), 1);
+            assert!(text.contains(&format!("[{}]", call.items[0])));
+        } else {
+            // A lowering prompt holds no item block and prints no item key.
+            assert!(text.starts_with(LOWER_INSTRUCTIONS));
+            assert_eq!(text.matches("[item:").count(), 0);
+            assert!(!text.contains("item:daodejing"));
+        }
         assert_eq!(&call.prompt, digest);
         assert_eq!(*digest, format!("{:016x}", fnv1a64(text.as_bytes())));
     }
@@ -1948,6 +2064,28 @@ fn unanswered_cycle_writes_nothing() {
     assert_eq!(dao.run.rounds().unwrap().len(), 2);
     assert!(dao.run.decisions().unwrap().is_empty());
 
+    // With the encodes answered, the candidate round asks its lowerings, listing
+    // the candidate inventory; still nothing is written.
+    let candidate = InventoryStore::open(&dir.join("inventory.cc")).unwrap();
+    let lowering = lowering_prompts(&dao, &candidate);
+    let CycleOutcome::Unanswered { prompts: lower } = ask(&mut dao) else {
+        panic!("answered the candidate lowerings from nothing")
+    };
+    assert_eq!(
+        lower,
+        lowering.iter().map(|(_, p)| p.digest()).collect::<Vec<_>>()
+    );
+    assert!(lowering[0].1.text().contains("\n\ninventory rev:4\n"));
+    assert!(!dir.join("packets.cc").exists());
+    assert_eq!(std::fs::read(dao.root.join("run.cc")).unwrap(), run_cc);
+    assert_eq!(dao.run.rounds().unwrap().len(), 2);
+    assert!(dao.run.decisions().unwrap().is_empty());
+    let table = table_english();
+    for (key, p) in &lowering {
+        let answer = serde_json::json!({ "text": table[key] }).to_string();
+        std::fs::write(dir.join(format!("{}.answer", p.digest())), answer).unwrap();
+    }
+
     // Answered, the cycle is decided; the next one uses cycle-2.
     let d = decided(ask(&mut dao));
     assert_eq!((d.k(), d.verdict()), (1, Verdict::Accepted));
@@ -1966,6 +2104,21 @@ fn unanswered_cycle_writes_nothing() {
 
 #[test]
 fn the_editor_sees_train_only() {
+    run_the_editor_canary(CANARY_LOWERED);
+}
+
+/// What the lowerer says for the canary Validation item.
+const CANARY_LOWERED: &str = "CANARYLOWERED";
+
+#[test]
+fn validation_lowerings_never_reach_the_editor() {
+    // The same run under another lowering for the canary: the editor's prompts
+    // never print either, and nothing recorded holds either.
+    run_the_editor_canary("CANARYLOWERED");
+    run_the_editor_canary("the zebra ate the quartz");
+}
+
+fn run_the_editor_canary(canary_lowered: &str) {
     let canary_key = "item:canary:1";
     let canary_text = "CANARYVALIDATIONTEXT";
     let mut dao = dao_over(|corpus, entities| {
@@ -1980,6 +2133,7 @@ fn the_editor_sees_train_only() {
     });
     let with_canary = |mut m: FakeModel| {
         m.answers.insert(canary_key.into(), json(&draft_of(2)));
+        m.lowered.insert(canary_key.into(), canary_lowered.into());
         if let Some((_, c)) = m.candidate.as_mut() {
             c.insert(canary_key.into(), json(&draft_of(2)));
         }
@@ -2006,7 +2160,12 @@ fn the_editor_sees_train_only() {
     assert_eq!(d2.base_round(), 1);
 
     let corpus = weksa::CorpusStore::open(&dao.corpus).unwrap();
-    let mut held_out: Vec<String> = vec![canary_key.into(), canary_text.into(), "canary".into()];
+    let mut held_out: Vec<String> = vec![
+        canary_key.into(),
+        canary_text.into(),
+        "canary".into(),
+        canary_lowered.into(),
+    ];
     for n in 2..=5 {
         let item = corpus.get(&format!("item:daodejing:{n}")).unwrap().unwrap();
         held_out.extend([item.id, item.text]);
@@ -2052,8 +2211,22 @@ fn the_editor_sees_train_only() {
             );
         }
     }
+    // Round records list the keys of the items they called, never lowered text.
+    for text in [
+        format!("{:?}", dao.run.rounds().unwrap()),
+        format!("{:?}", dao.run.decisions().unwrap()),
+    ] {
+        for needle in [canary_lowered, canary_text] {
+            assert!(!text.to_lowercase().contains(&needle.to_lowercase()));
+        }
+    }
     let run_cc = std::fs::read(dao.root.join("run.cc")).unwrap();
-    for needle in [canary_text, "item:daodejing:4", "item:daodejing:5"] {
+    for needle in [
+        canary_text,
+        canary_lowered,
+        "item:daodejing:4",
+        "item:daodejing:5",
+    ] {
         assert!(
             !run_cc.windows(needle.len()).any(|w| w == needle.as_bytes()),
             "{needle}"
@@ -2352,6 +2525,18 @@ fn source_tripwires() {
         .collect();
     let count = |needle: &str| code.iter().filter(|l| l.contains(needle)).count();
     assert!(!run.contains("pub fn new"));
+    // The round does not call the template table: the model lowers.
+    assert_eq!(count("lower(&"), 0, "run.rs calls the table");
+    assert_eq!(count("crate::lower::lower"), 0, "run.rs imports the table");
+    assert_eq!(count("Prompt::lower("), 1, "one lowering call site");
+    // Prompt::lower takes the view, the item's key, the inventory and the entity
+    // port: no corpus item, train set, offer or store.
+    let start = context.find("pub fn lower(").unwrap();
+    let signature = &context[start..start + context[start..].find(") -> ").unwrap()];
+    for banned in ["CorpusItem,", "CorpusItem)", "TrainItems", "EncoderOffer", "Store"] {
+        assert!(!signature.contains(banned), "Prompt::lower takes {banned}");
+    }
+    assert!(signature.contains("&LoweringInput") && signature.contains("&CorpusItemId"));
     assert_eq!(count("admit_revision("), 1, "one door call");
     assert_eq!(
         count("std::fs::copy"),
@@ -2383,4 +2568,163 @@ fn source_tripwires() {
             "EntryDraft has a {banned} field"
         );
     }
+}
+
+// ---- the lowerer ----
+
+/// Lowercase letters and digits only: what survives any re-spacing or re-casing.
+fn squashed(text: &str) -> String {
+    text.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+#[test]
+fn the_lowerer_sees_no_item_text() {
+    let canary_key = "item:canary:1";
+    let mut dao = dao_over(|corpus, entities| {
+        let entities = weksa::EntityStore::open(entities).unwrap();
+        let mut store = weksa::CorpusStore::open(corpus).unwrap();
+        let mut item = store.get("item:daodejing:2").unwrap().unwrap();
+        item.id = canary_key.into();
+        item.text = "CANARYVALIDATIONTEXT of the zebra".into();
+        item.names = vec![];
+        item.prior_turns = vec![];
+        store.add(item, &entities).unwrap();
+    });
+    let mut model = fake(&good_answers());
+    model.answers.insert(canary_key.into(), json(&draft_of(2)));
+    model.lowered.insert(canary_key.into(), "CANARYLOWERED".into());
+    let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+
+    let corpus = weksa::CorpusStore::open(&dao.corpus).unwrap();
+    let items = corpus.all().unwrap();
+    assert!(items.len() >= 6, "the canary and the five Legge items");
+    let packet_keys: Vec<String> = PacketStore::open(&dao.root.join("round-1/packets.cc"))
+        .unwrap()
+        .all()
+        .unwrap()
+        .iter()
+        .map(|p| p.id.to_string())
+        .collect();
+    assert_eq!(packet_keys.len(), 4);
+
+    let lowering: Vec<&(String, String)> = model
+        .seen
+        .iter()
+        .filter(|(_, t)| t.starts_with(LOWER_INSTRUCTIONS))
+        .collect();
+    assert_eq!(lowering.len(), 4, "one lowering per admitted packet");
+    for (digest, text) in &lowering {
+        let flat = squashed(text);
+        for item in &items {
+            // Any split: Train, Validation and Test text alike.
+            assert!(!text.contains(&item.text), "{}", item.id);
+            assert!(!flat.contains(&squashed(&item.text)), "{}", item.id);
+            for needle in [item.id.as_str(), item.group.as_str(), item.speaker.as_str()] {
+                assert!(!text.contains(needle), "{needle}");
+            }
+        }
+        for key in &packet_keys {
+            assert!(!text.contains(key.as_str()), "{key}");
+        }
+        assert!(!text.to_lowercase().contains("canary"));
+        assert!(!text.contains("confidence"));
+        // Its one call is its item.
+        let call = r.calls().iter().find(|c| &c.prompt == digest).unwrap();
+        assert_eq!(call.items.len(), 1);
+        assert!(call.items[0].starts_with("item:"));
+    }
+    // The encode and lowering calls name the same four items.
+    let keys = |lowering: bool| {
+        let mut keys: Vec<&str> = r
+            .calls()
+            .iter()
+            .filter(|c| {
+                lowering
+                    == model.seen.iter().any(|(d, t)| {
+                        d == &c.prompt && t.starts_with(LOWER_INSTRUCTIONS)
+                    })
+            })
+            .map(|c| c.items[0].as_str())
+            .collect();
+        keys.sort_unstable();
+        keys
+    };
+    assert_eq!(keys(true), keys(false));
+}
+
+#[test]
+fn lowering_refusals_count_at_lower() {
+    let run = |raw: Result<String, PortError>| {
+        let mut dao = dao();
+        let mut model = fake(&good_answers());
+        model.raw_lowering = Some(raw);
+        recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap())
+    };
+    for (what, raw) in [
+        ("non-JSON", Ok("The sage empties the minds.".to_string())),
+        ("unknown key", Ok(r#"{"text":"a","trace":"b"}"#.to_string())),
+        ("missing text", Ok("{}".to_string())),
+        ("empty text", Ok(r#"{"text":""}"#.to_string())),
+        ("blank text", Ok("{\"text\":\" \\n \"}".to_string())),
+        ("non-UTF-8", Err(PortError::Io(std::io::ErrorKind::InvalidData))),
+    ] {
+        let r = run(raw);
+        assert_eq!(r.train()[0].outcome, Outcome::Refused(Stage::Lower), "{what}");
+        assert!(
+            r.train()[0].packet.is_some(),
+            "{what}: the admitted packet is kept on the Train row"
+        );
+        let v = r.validation_refused();
+        assert_eq!((v.parse, v.admit, v.lower), (0, 0, 2), "{what}");
+        assert_eq!((r.train_scored(), r.validation_scored()), (0, 0), "{what}");
+        let m = r.validation_mean();
+        assert_eq!((m.count, m.chrf), (2, Some(0.0)), "{what}");
+    }
+}
+
+#[test]
+fn an_added_entry_can_be_lowered() {
+    // The edit adds a concept; the candidate encode answer cites it. The
+    // candidate's lowering prompt lists it and the item scores: the gain path a
+    // table with no row for it blocked.
+    let mut dao = dao();
+    two_rounds(&mut dao);
+    let mut cited = draft_of(1);
+    cited.referents[0].concept = "concept:28".parse().unwrap();
+    let mut model = cycle_fake(ONE_CONCEPT);
+    model
+        .candidate
+        .as_mut()
+        .unwrap()
+        .1
+        .insert("item:daodejing:1".into(), json(&cited));
+    run_cycle(&mut dao, &mut model);
+    let candidate_lowerings: Vec<&str> = model
+        .seen
+        .iter()
+        .map(|(_, t)| t.as_str())
+        .filter(|t| t.starts_with(LOWER_INSTRUCTIONS) && t.contains("\n\ninventory rev:4\n"))
+        .collect();
+    assert_eq!(candidate_lowerings.len(), 3);
+    for text in &candidate_lowerings {
+        assert!(text.contains("\nconcept:28: a general meaning the Dao names"));
+    }
+    assert_eq!(
+        candidate_lowerings
+            .iter()
+            .filter(|t| t.contains(r#""concept":"concept:28""#))
+            .count(),
+        1,
+        "exactly the item that cites the new concept"
+    );
+    let rounds = dao.run.rounds().unwrap();
+    let candidate = rounds.last().unwrap();
+    assert_eq!(candidate.inventory_rev(), 4);
+    assert!(matches!(
+        candidate.train()[0].outcome,
+        Outcome::Scored { .. }
+    ));
 }

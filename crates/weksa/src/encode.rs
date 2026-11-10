@@ -1,7 +1,8 @@
-//! The encoder and editor steps: what a model's answer becomes. This is the one
-//! place JSON is read (the xenos boundary): a model answers in JSON,
-//! `PacketDraft::parse` or `EditDraft::parse` reads it (both through
-//! `from_json`), and nothing is stored as JSON. The encoder writes meaning
+//! The encoder, editor and lowerer steps: what a model's answer becomes. This is
+//! the one place JSON is read (the xenos boundary): a model answers in JSON,
+//! `PacketDraft::parse`, `EditDraft::parse` or `LoweringDraft::parse` reads it
+//! (all through `from_json`), and nothing is stored as JSON. The lowerer writes
+//! `text` only. The encoder writes meaning
 //! only; `into_packet` sets the id, schema version, inventory revision, kind,
 //! provenance, constraints and extensions, and an empty trace, so a model that
 //! saw a Validation item cannot hand its words to whoever reads packets. The
@@ -199,6 +200,19 @@ impl EditDraft {
     }
 }
 
+/// A lowering as the lowerer writes it: the English text, nothing else.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LoweringDraft {
+    pub text: String,
+}
+
+impl LoweringDraft {
+    pub fn parse(answer: &str) -> Result<Self, DraftError> {
+        from_json(answer)
+    }
+}
+
 /// `encoder:<hex16>`, a digest of the model id and the prompt digest.
 pub fn encoder_id(model: &str, prompt_digest: &str) -> EncoderId {
     let digest = fnv1a64(format!("weksa-encoder-v1:{model}:{prompt_digest}").as_bytes());
@@ -271,6 +285,24 @@ mod tests {
         assert_eq!(made.trace, Trace::default());
         // The meaning is the draft's, whole.
         assert_eq!(PacketDraft::of(&made), draft);
+    }
+
+    #[test]
+    fn lowering_draft_parse() {
+        let draft = LoweringDraft::parse("\n {\"text\":\"a\"} \n").unwrap();
+        assert_eq!(draft.text, "a");
+        for bad in [
+            r#"{"text":"a","trace":"b"}"#,
+            r#"{}"#,
+            r#"{"text":1}"#,
+            "the sage acts",
+            "",
+        ] {
+            let err = LoweringDraft::parse(bad).unwrap_err();
+            // Position only: no answer bytes in either rendering.
+            let shown = format!("{err} {err:?}");
+            assert!(!shown.contains("sage") && !shown.contains("trace"), "{shown}");
+        }
     }
 
     #[test]

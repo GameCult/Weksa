@@ -91,17 +91,18 @@ enum LoopCommand {
     },
     /// Run one round of the run at ROOT. The stores are read only from the
     /// run's record: the global --corpus, --inventory and --entities are not
-    /// read. Prompts without answers are written to the round's directory and
-    /// the command exits 3; rerun after the `.answer` files exist.
+    /// read. Encode prompts are written first; once they are answered a rerun
+    /// writes the lowering prompts. The command exits 3 each time until every
+    /// prompt has an answer.
     Round {
         root: PathBuf,
         #[arg(long, default_value = "http://127.0.0.1:11434")]
         ollama_url: String,
     },
     /// Run one edit-accept cycle of the run at ROOT. The stores are read only
-    /// from the run's record. Prompts without answers are written to the
-    /// cycle's directory and the command exits 3; rerun after the `.answer`
-    /// files exist.
+    /// from the run's record. The editor's prompt, then the candidate round's
+    /// encode prompts, then its lowering prompts are written in turn; the
+    /// command exits 3 each time until every prompt has an answer.
     Cycle {
         root: PathBuf,
         #[arg(long, default_value = "http://127.0.0.1:11434")]

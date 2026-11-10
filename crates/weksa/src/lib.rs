@@ -23,7 +23,7 @@ pub mod store;
 pub mod validate;
 
 pub use corpus::{CorpusItem, CorpusItemId, NameSpan, Source, Turn};
-pub use encode::{EditDraft, PacketDraft};
+pub use encode::{EditDraft, LoweringDraft, PacketDraft};
 pub use entity::{Entity, EntityOrigin, LanguageForms, Pronunciation};
 pub use form::FormError;
 pub use inventory::{

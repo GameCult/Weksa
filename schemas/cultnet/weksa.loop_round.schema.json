@@ -5,6 +5,7 @@
   "type": "object",
   "properties": {
     "calls": {
+      "description": "The encode calls, then the lowering calls, each with its prompt digest\nand one item key.",
       "type": "array",
       "items": {
         "$ref": "#/$defs/Call"
@@ -218,11 +219,19 @@
     },
     "Stage": {
       "description": "Where a round refused: the first stage that did.",
-      "type": "string",
-      "enum": [
-        "Parse",
-        "Admit",
-        "Lower"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "Parse",
+            "Admit"
+          ]
+        },
+        {
+          "description": "The lowering prompt could not be built, or its answer was not UTF-8, not\na `LoweringDraft`, or empty text.",
+          "type": "string",
+          "const": "Lower"
+        }
       ]
     },
     "TrainRow": {

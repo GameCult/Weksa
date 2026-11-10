@@ -1,5 +1,8 @@
-//! The English lowerer: the validated lowering view of a packet to text, by a
-//! fixed table keyed by inventory ids. It renders predications, referents and the
+//! The English template lowerer: the validated lowering view of a packet to
+//! text, by a fixed table keyed by inventory ids. It is the deterministic
+//! lowerer of `weksa lower`, the proof fixtures and their tests; the golf loop
+//! lowers through the `ModelPort` (`run.rs`, `Prompt::lower`), and follow-up
+//! `table-retirement` decides this table's future. It renders predications, referents and the
 //! speech act, and nothing else: no style, no model, no corpus text. It takes a
 //! [`LoweringInput`], so it cannot see the trace or the corpus item. A packet
 //! carrying a feature, relation, extension, role fill or referent it does not
@@ -497,7 +500,7 @@ fn name(entities: &dyn EntityForms, id: &EntityId) -> Result<String, LowerError>
         .ok_or_else(|| LowerError::NoForm { entity: id.clone() })
 }
 
-fn entity(entities: &dyn EntityForms, id: &EntityId) -> Result<Entity, LowerError> {
+pub(crate) fn entity(entities: &dyn EntityForms, id: &EntityId) -> Result<Entity, LowerError> {
     entities
         .entity(id)
         .map_err(|e| LowerError::EntityRead {

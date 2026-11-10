@@ -17,6 +17,11 @@
 //! later reader compares the rounds of one run only. `RunStores` is the one
 //! public producer of [`TrainItems`] and [`EncoderOffer`]: the CLI paths that
 //! take caller stores (`validate`, `packet proof|dao`, `lower`) are unchanged.
+//!
+//! A round encodes, admits, then lowers each admitted view through the
+//! `ModelPort` (`Prompt::lower`), in two answer phases; the CLI's `lower` still
+//! uses the template table. The prompt source pin covers `context.rs`,
+//! `split.rs` and `lower.rs`.
 
 use std::fmt;
 use std::io::ErrorKind;
@@ -30,13 +35,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::context::{EditFeedback, EncoderOffer, Prompt, TrainItems};
 use crate::corpus::{CorpusItem, CorpusItemId};
-use crate::encode::{EditDraft, PacketDraft, encoder_id};
+use crate::encode::{EditDraft, LoweringDraft, PacketDraft, encoder_id};
 use crate::form::{is_attestation, is_slug};
-use crate::lower::lower;
 use crate::model::{ModelPort, PortError};
 use crate::score::{CHRF_VERSION, Embedder, ItemScore, ScoreInput, Scorer, SplitMean, aggregate};
 use crate::split::{Split, SplitScheme, fnv1a64, fnv1a64_of, hex16};
 use crate::store::{CorpusStore, EntityStore, InventoryStore, PacketStore, open_cache_over};
+use crate::validate::LoweringInput;
 
 /// The digest of the prompt builder's source: `context.rs`, then `split.rs`,
 /// whose scheme and digest function decide which lines the prompt holds as
@@ -101,6 +106,8 @@ pub struct RunRecord {
 pub enum Stage {
     Parse,
     Admit,
+    /// The lowering prompt could not be built, or its answer was not UTF-8, not
+    /// a `LoweringDraft`, or empty text.
     Lower,
 }
 
@@ -188,6 +195,8 @@ pub struct RoundRecord {
     embedder: String,
     #[cultcache(key = 8)]
     chrf_version: String,
+    /// The encode calls, then the lowering calls, each with its prompt digest
+    /// and one item key.
     #[cultcache(key = 9)]
     calls: Vec<Call>,
     #[cultcache(key = 10)]
@@ -346,7 +355,7 @@ impl fmt::Display for RunError {
             RunError::NoRun => f.write_str("the root holds no run"),
             RunError::Malformed(what) => write!(f, "malformed {what}"),
             RunError::Drift(DriftOf::Prompts) => f.write_str(
-                "drift in Prompts (the prompt source digest covers context.rs and split.rs)",
+                "drift in Prompts (the prompt source digest covers context.rs, split.rs and lower.rs)",
             ),
             RunError::Drift(of) => write!(f, "drift in {of:?}"),
             RunError::NoInventory => f.write_str("the inventory holds no revision"),
@@ -707,10 +716,12 @@ enum Fate {
 
 /// One round: encodes every live Train and Validation item of the run's pinned
 /// corpus through `model`, admits each packet into the round's own
-/// `<root>/round-<n>/packets.cc`, lowers, scores, and records the round. The
-/// round is all or nothing: while any prompt is unanswered, nothing is written,
-/// and a round that fails before its record is put (the embedder down) leaves no
-/// `packets.cc` behind, so a rerun with revised answers starts clean. A mean
+/// `<root>/round-<n>/packets.cc`, lowers each admitted view through the same
+/// port, scores, and records the round. The round has two answer phases, all
+/// or nothing: while any encode or lowering prompt is unanswered, nothing
+/// reaches `run.cc` and the round directory keeps no `packets.cc`. A round that
+/// fails before its record is put (the embedder down) leaves no `packets.cc`
+/// behind, so a rerun with revised answers starts clean. A mean
 /// counts an item that was refused or did not lower as 0, so refusing a weak
 /// item cannot raise it; `scored` counts beside it say how many were real.
 pub fn round<M: ModelPort, E: Embedder>(
@@ -800,6 +811,8 @@ fn score_round<M: ModelPort, E: Embedder>(
     let encoder = encoder_id(model.model(), &run.record.prompt_digest);
     let mut items: Vec<CorpusItem> = Vec::new();
     let mut fates: Vec<Fate> = Vec::new();
+    // Phase 1 ends at admission: each admitted view waits for its lowering.
+    let mut admitted: Vec<(usize, CorpusItemId, String, LoweringInput)> = Vec::new();
     for (key, answer) in &answers {
         let item = run.corpus.get(key).map_err(store)?.ok_or(RunError::Store)?;
         let id = CorpusItemId::parse(key).map_err(|_| RunError::Store)?;
@@ -810,15 +823,55 @@ fn score_round<M: ModelPort, E: Embedder>(
                 let packet_key = packet.id.to_string();
                 match packets.admit(packet, inventory_store, &run.corpus, &run.entities) {
                     Err(_) => Fate::Refused(Stage::Admit, None),
-                    Ok(view) => match lower(&view, &inventory, &run.entities) {
-                        Err(_) => Fate::Refused(Stage::Lower, Some(packet_key)),
-                        Ok(text) => Fate::Lowered(text, packet_key),
-                    },
+                    Ok(view) => {
+                        admitted.push((fates.len(), id, packet_key, view));
+                        // Replaced below by what the lowering answers.
+                        Fate::Refused(Stage::Lower, None)
+                    }
                 }
             }
         };
         items.push(item);
         fates.push(fate);
+    }
+
+    // Phase 2: one lowering prompt per admitted view, answered through the
+    // port. Nothing is kept unless every one is answered.
+    let mut unanswered = Vec::new();
+    for (at, id, packet_key, view) in &admitted {
+        let Ok(prompt) = Prompt::lower(view, id, &inventory, &run.entities) else {
+            fates[*at] = Fate::Refused(Stage::Lower, Some(packet_key.clone()));
+            continue;
+        };
+        calls.push(Call {
+            prompt: prompt.digest(),
+            items: prompt.item_keys().to_vec(),
+        });
+        fates[*at] = match model.answer(&prompt) {
+            Ok(answer) => match LoweringDraft::parse(&answer) {
+                Ok(draft) if !draft.text.trim().is_empty() => {
+                    Fate::Lowered(draft.text, packet_key.clone())
+                }
+                _ => Fate::Refused(Stage::Lower, Some(packet_key.clone())),
+            },
+            Err(PortError::Io(ErrorKind::InvalidData)) => {
+                Fate::Refused(Stage::Lower, Some(packet_key.clone()))
+            }
+            Err(PortError::Unanswered) => {
+                unanswered.push(prompt.digest());
+                continue;
+            }
+            Err(PortError::Io(kind)) => {
+                discard_packets(dir);
+                return Err(RunError::Io(kind));
+            }
+        };
+    }
+    if !unanswered.is_empty() {
+        discard_packets(dir);
+        return Ok(RoundOutcome::Unanswered {
+            prompts: unanswered,
+        });
     }
 
     // One score call over what lowered; none when nothing did.
@@ -1685,6 +1738,16 @@ mod tests {
                     r#"{"add":[{"family":"Concept","gloss":"a general meaning the Dao names"}]}"#
                         .to_string(),
                 );
+            }
+            if prompt.text().starts_with(crate::context::LOWER_INSTRUCTIONS) {
+                // The table's English for the Dao items, the lowerer's answer.
+                let text = match prompt.item_keys()[0].as_str() {
+                    "item:daodejing:1" => "The sage empties the minds. The sage fills the bellies. The sage weakens the wills. The sage strengthens the bones.",
+                    "item:daodejing:2" => "The heaven is long-enduring. The earth continues long.",
+                    "item:daodejing:3" => "The highest excellence is like the water.",
+                    other => panic!("lowering asked about {other}"),
+                };
+                return Ok(format!(r#"{{"text":"{text}"}}"#));
             }
             let answers = if prompt.text().contains("\n\ninventory rev:4\n") {
                 &self.good

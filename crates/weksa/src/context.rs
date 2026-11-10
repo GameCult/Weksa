@@ -1,12 +1,14 @@
-//! The one place prompt text is built from corpus text. Corpus text reaches a
-//! model call only as a [`Prompt`], and a `Prompt` is made only by minting from
-//! [`TrainItems`] or by encoding one item an [`EncoderOffer`] holds: Train-only
-//! minting and per-item encoding (leak-owned-by-flow-and-scorer-3,
-//! loop-context-builder-2). Instruction text is [`MINT_INSTRUCTIONS`] and
-//! [`ENCODE_INSTRUCTIONS`], consts in this module; both prompts also list the
-//! inventory at the run's revision. A mint prompt is the editor's: it reads
-//! [`TrainItems`], an [`Inventory`] and an [`EditFeedback`] and nothing else, so
-//! no held-out text, key or per-item score can reach it.
+//! The one place prompt text is built. Corpus text reaches a model call only as
+//! a [`Prompt`], and a `Prompt` is made only by minting from [`TrainItems`], by
+//! encoding one item an [`EncoderOffer`] holds, or by lowering one
+//! [`LoweringInput`], which holds no corpus text, item key, group or speaker:
+//! Train-only minting, per-item encoding and text-free lowering
+//! (leak-owned-by-flow-and-scorer-3, loop-context-builder-2). Instruction text
+//! is [`MINT_INSTRUCTIONS`], [`ENCODE_INSTRUCTIONS`] and [`LOWER_INSTRUCTIONS`],
+//! consts in this module; every prompt also lists the inventory at the run's
+//! revision. A mint prompt is the editor's: it reads [`TrainItems`], an
+//! [`Inventory`] and an [`EditFeedback`] and nothing else, so no held-out text,
+//! key or per-item score can reach it.
 //!
 //! Item text may hold line breaks; the renderer indents every continuation line
 //! (`indented`), so item text cannot forge a `[key]` line or a paragraph.
@@ -16,14 +18,21 @@
 //! run with a different corpus digest, visible in its record; nothing inside a
 //! process its forger controls can stop it.
 
+use std::collections::BTreeMap;
 use std::marker::PhantomData;
 
-use crate::corpus::CorpusItem;
+use serde::Serialize;
+
+use crate::corpus::{CorpusItem, CorpusItemId};
 use crate::inventory::{Inventory, InventoryEntry, OptionLabel, ValueKind};
-use crate::packet::EntityId;
+use crate::lower::{EntityForms, LowerError, TARGET_LANGUAGE, entity};
+use crate::packet::{
+    Context, Discourse, EntityId, Extension, Predication, Referent, Relation, Stance,
+};
 use crate::run::LADDER_STEP;
 use crate::split::{Checkpoint, Split, SplitScheme, fnv1a64, hex16};
 use crate::store::{CorpusStore, normalized};
+use crate::validate::LoweringInput;
 
 /// The instructions a mint prompt starts with: the editor's whole brief. Fixed
 /// per run by `PROMPT_SOURCE_DIGEST`.
@@ -52,6 +61,14 @@ Fields:
 - stance: {features}; the speaker's felt affect and restraint, never the affect the line displays.
 Node ids are n1, n2, and so on, one per referent and predication. Every other id comes from the inventory listed below and must be live at its revision. An entity comes only from the entities line.
 A feature is {feature, value}; value is {\"Grade\": 0 to 1000}, {\"Option\": label} or {\"Flag\": true or false}, as the inventory lists the feature's kind.";
+
+/// The instructions a lowering prompt starts with: the lowerer's whole brief.
+/// Fixed per run by `PROMPT_SOURCE_DIGEST`.
+pub const LOWER_INSTRUCTIONS: &str = "\
+Say the packet below in English (en-US), as one utterance of its speaker: all of its meaning and nothing it does not carry.
+Every id is the inventory's listed below and every feature value is as listed. The stance is the speaker's felt affect and restraint: it shapes how the utterance is said, not what it says.
+A referent with an entity is named by one of that entity's forms on the entities line.
+Answer with one JSON object and nothing else: {\"text\": \"...\"}. No code fence, no commentary.";
 
 /// The live Train items of a corpus, in key order. The only input minting
 /// reads; it cannot be built from a slice, and no accessor returns text or an
@@ -286,7 +303,7 @@ impl EditFeedback {
 }
 
 /// Text for a model call, and the keys of the items it holds. The only
-/// constructors are [`Prompt::mint`] and [`Prompt::encode`].
+/// constructors are [`Prompt::mint`], [`Prompt::encode`] and [`Prompt::lower`].
 ///
 /// ```
 /// # let dir = tempfile::tempdir().unwrap();
@@ -418,6 +435,20 @@ fn inventory_lines(inventory: &Inventory, rev: u32) -> String {
         .collect()
 }
 
+/// The meaning a lowering prompt prints: the view's fields minus kind and
+/// constraints, which are not meaning, and scene, speaker and group, which
+/// are not in the packet.
+#[derive(Serialize)]
+struct Meaning<'a> {
+    context: &'a Context,
+    discourse: &'a Discourse,
+    referents: &'a [Referent],
+    predications: &'a [Predication],
+    relations: &'a [Relation],
+    extensions: &'a [Extension],
+    stance: &'a Stance,
+}
+
 /// Printed in place of a prior turn whose text no live Train item holds.
 const ELIDED: &str = "[elided]";
 
@@ -462,6 +493,48 @@ impl Prompt {
             text,
             items: vec![offer.item.id.clone()],
         }
+    }
+
+    /// [`LOWER_INSTRUCTIONS`], the meaning of `input` (no kind, constraints,
+    /// scene, speaker or group), the en-US forms of every entity its referents
+    /// cite, and the entries of `inventory` live at the view's revision. `item`
+    /// goes only to [`Prompt::item_keys`], never into the text. A cited entity
+    /// the port lacks, or one with no en-US form, is an error and no prompt.
+    pub fn lower(
+        input: &LoweringInput,
+        item: &CorpusItemId,
+        inventory: &Inventory,
+        entities: &dyn EntityForms,
+    ) -> Result<Prompt, LowerError> {
+        let mut forms: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+        for id in input.referents().iter().filter_map(|r| r.entity.as_ref()) {
+            let found = entity(entities, id)?;
+            let named = found
+                .forms_in(TARGET_LANGUAGE)
+                .filter(|f| !f.is_empty())
+                .ok_or_else(|| LowerError::NoForm { entity: id.clone() })?;
+            forms.insert(id.as_str(), named.to_vec());
+        }
+        let meaning = Meaning {
+            context: input.context(),
+            discourse: input.discourse(),
+            referents: input.referents(),
+            predications: input.predications(),
+            relations: input.relations(),
+            extensions: input.extensions(),
+            stance: input.stance(),
+        };
+        let rev = input.inventory_rev();
+        let text = format!(
+            "{LOWER_INSTRUCTIONS}\n\npacket: {}\n\nentities: {}\n\ninventory rev:{rev}{}",
+            serde_json::to_string(&meaning).expect("a meaning is plain data"),
+            serde_json::to_string(&forms).expect("forms are plain data"),
+            inventory_lines(inventory, rev)
+        );
+        Ok(Prompt {
+            text,
+            items: vec![item.as_str().to_string()],
+        })
     }
 
     /// 16 lowercase hex digits of FNV-1a 64 of the text: the name of the prompt

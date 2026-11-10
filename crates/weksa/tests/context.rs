@@ -539,3 +539,150 @@ fn mint_and_encode_list_the_same_inventory() {
     };
     assert_ne!(at(2), at(4), "the revision selects the entries");
 }
+
+mod lowering {
+    use std::path::{Path, PathBuf};
+
+    use weksa::context::{LOWER_INSTRUCTIONS as LOWER, Prompt};
+    use weksa::daodejing::packets;
+    use weksa::entity::{Entity, EntityOrigin, LanguageForms};
+    use weksa::packet::{EntityId, Packet, proof_packet};
+    use weksa::{
+        CorpusItemId, CorpusStore, EntityForms, EntityStore, Inventory, InventoryStore,
+        LowerError, LoweringInput, PacketStore,
+    };
+
+    fn data(sub: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data").join(sub)
+    }
+
+    fn admitted(
+        packet: Packet,
+        inv: &InventoryStore,
+        corpus: &str,
+        entities: &EntityStore,
+    ) -> LoweringInput {
+        let corpus = CorpusStore::open(&data(corpus)).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        PacketStore::open(&dir.path().join("p.cc"))
+            .unwrap()
+            .admit(packet, inv, &corpus, entities)
+            .unwrap()
+    }
+
+    fn dao(index: usize) -> (LoweringInput, Inventory, EntityStore, CorpusItemId) {
+        let inv = InventoryStore::open(&data("daodejing/inventory.cc")).unwrap();
+        let entities = EntityStore::open(&data("daodejing/entity.cc")).unwrap();
+        let packet = packets().remove(index);
+        let item = packet.provenance.corpus_item.clone();
+        let view = admitted(packet, &inv, "daodejing/corpus.cc", &entities);
+        (view, inv.inventory().unwrap(), entities, item)
+    }
+
+    /// An entity port a test controls.
+    struct Held(Vec<Entity>);
+
+    impl EntityForms for Held {
+        fn entity(&self, id: &EntityId) -> anyhow::Result<Option<Entity>> {
+            Ok(self.0.iter().find(|e| &e.id == id).cloned())
+        }
+    }
+
+    fn nibu(forms: &[(&str, &[&str])]) -> Entity {
+        Entity {
+            id: EntityId::parse("entity:nibu").unwrap(),
+            forms: forms
+                .iter()
+                .map(|(language, forms)| LanguageForms {
+                    language: (*language).into(),
+                    forms: forms.iter().map(|f| (*f).into()).collect(),
+                    pronunciation: None,
+                })
+                .collect(),
+            origin: EntityOrigin::Cast {
+                persona: "nibu".into(),
+                fixture: "f.yaml".into(),
+            },
+        }
+    }
+
+    #[test]
+    fn lower_prompt_text_is_pinned() {
+        let (view, inv, entities, item) = dao(2);
+        let prompt = Prompt::lower(&view, &item, &inv, &entities).unwrap();
+        let (head, listing) = prompt.text().split_once("inventory rev:3\n").unwrap();
+        let expected = format!(
+            "{LOWER}\n\npacket: {}\n\nentities: {{}}\n\n",
+            concat!(
+                r#"{"context":{"setting":null,"medium":null,"participants":[],"audience":[]},"#,
+                r#""discourse":{"speech_act":"speech_act:1","addressee":null,"addressee_consent":null,"features":[]},"#,
+                r#""referents":[{"id":"n1","kind":"referent_kind:11","concept":"concept:20","entity":null,"features":[]},"#,
+                r#"{"id":"n2","kind":"referent_kind:11","concept":"concept:21","entity":null,"features":[]}],"#,
+                r#""predications":[{"id":"n3","concept":"concept:27","frame":"frame:6","roles":[{"role":"role:3","filler":"n1"},{"role":"role:6","filler":"n2"}],"features":[]}],"#,
+                r#""relations":[],"extensions":[],"#,
+                r#""stance":{"features":[{"feature":"feature:18","value":{"Grade":800}},{"feature":"feature:16","value":{"Grade":300}}]}}"#
+            )
+        );
+        assert_eq!(head, expected);
+        assert!(listing.starts_with("concept:1: endanger\n"));
+        assert!(listing.contains("\nfeature:18: "));
+        // The brief says what the spec says it must.
+        for needed in [
+            "en-US",
+            "all of its meaning and nothing it does not carry",
+            "felt affect and restraint",
+            "shapes how the utterance is said, not what it says",
+            "forms on the entities line",
+            r#"{"text": "..."}"#,
+        ] {
+            assert!(LOWER.contains(needed), "{needed}");
+        }
+        // The one call it makes is its item; the key is in no text.
+        assert_eq!(prompt.item_keys(), [item.as_str()]);
+        assert!(!prompt.text().contains(item.as_str()));
+    }
+
+    #[test]
+    fn an_entity_referent_prints_its_en_us_forms_citation_first() {
+        let cast = InventoryStore::open(&data("interlingua/inventory.cc")).unwrap();
+        let cast_entities = EntityStore::open(&data("entity/entity.cc")).unwrap();
+        let view = admitted(proof_packet(), &cast, "corpus/corpus.cc", &cast_entities);
+        let item = CorpusItemId::parse("item:nibu:1").unwrap();
+        let held = Held(vec![nibu(&[
+            ("sa-Latn", &["Nibuwa"]),
+            ("en-US", &["Nibu", "Nibu's"]),
+        ])]);
+        let prompt = Prompt::lower(&view, &item, &cast.inventory().unwrap(), &held).unwrap();
+        assert!(
+            prompt
+                .text()
+                .contains("\n\nentities: {\"entity:nibu\":[\"Nibu\",\"Nibu's\"]}\n\n"),
+            "{}",
+            prompt.text()
+        );
+        assert!(!prompt.text().contains("Nibuwa"));
+    }
+
+    #[test]
+    fn lower_prompt_refuses_an_entity_without_an_english_form() {
+        let cast = InventoryStore::open(&data("interlingua/inventory.cc")).unwrap();
+        let cast_entities = EntityStore::open(&data("entity/entity.cc")).unwrap();
+        let view = admitted(proof_packet(), &cast, "corpus/corpus.cc", &cast_entities);
+        let inv = cast.inventory().unwrap();
+        let item = CorpusItemId::parse("item:nibu:1").unwrap();
+        let id = EntityId::parse("entity:nibu").unwrap();
+        for (held, want) in [
+            (
+                Held(vec![nibu(&[("sa-Latn", &["Nibuwa"])])]),
+                LowerError::NoForm { entity: id.clone() },
+            ),
+            (
+                Held(vec![nibu(&[("en-US", &[])])]),
+                LowerError::NoForm { entity: id.clone() },
+            ),
+            (Held(vec![]), LowerError::UnknownEntity { entity: id }),
+        ] {
+            assert_eq!(Prompt::lower(&view, &item, &inv, &held).err(), Some(want));
+        }
+    }
+}
