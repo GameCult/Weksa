@@ -48,7 +48,9 @@ fn a_run_pins_its_stores_and_refuses_drift() {
                 entities: &e,
             },
             model,
-            "bag", weksa::run::LowererReach::ToolLessRelay, ModelFamily::Unrecorded
+            "bag",
+            weksa::run::LowererReach::ToolLessRelay,
+            ModelFamily::Unrecorded,
         )
     };
 
@@ -149,7 +151,9 @@ fn a_run_works_on_its_own_copy_of_the_inventory() {
             entities: &e,
         },
         "fake-model",
-        "bag", weksa::run::LowererReach::ToolLessRelay, ModelFamily::Unrecorded
+        "bag",
+        weksa::run::LowererReach::ToolLessRelay,
+        ModelFamily::Unrecorded,
     )
     .unwrap();
 
@@ -224,7 +228,9 @@ fn create_refuses_a_root_that_holds_an_inventory_and_never_truncates_it() {
                 entities: &dao.entities,
             },
             "fake-model",
-            "bag", weksa::run::LowererReach::ToolLessRelay, ModelFamily::Unrecorded
+            "bag",
+            weksa::run::LowererReach::ToolLessRelay,
+            ModelFamily::Unrecorded,
         )
     };
 
@@ -269,7 +275,9 @@ fn a_create_that_fails_leaves_no_inventory_and_the_retry_succeeds() {
                 entities,
             },
             "fake-model",
-            "bag", weksa::run::LowererReach::ToolLessRelay, ModelFamily::Unrecorded
+            "bag",
+            weksa::run::LowererReach::ToolLessRelay,
+            ModelFamily::Unrecorded,
         )
     };
     // A directory opens for reading and fails mid-copy, after the destination exists.
@@ -382,14 +390,33 @@ fn a_store_changed_between_its_digest_and_its_open_is_drift() {
         entities: &e,
     };
     assert_eq!(
-        RunStores::create_between(&root, "t", paths(), "fake-model", "bag", weksa::run::LowererReach::ToolLessRelay, ModelFamily::Unrecorded, || more(&mut w)).err(),
+        RunStores::create_between(
+            &root,
+            "t",
+            paths(),
+            "fake-model",
+            "bag",
+            weksa::run::LowererReach::ToolLessRelay,
+            ModelFamily::Unrecorded,
+            || more(&mut w)
+        )
+        .err(),
         Some(RunError::Drift(DriftOf::Corpus))
     );
     assert!(!root.join("inventory.cc").exists());
     // Not the copy and not the lock the store's open left beside it.
     assert!(!root.join("inventory.cc.lock").exists());
     assert_eq!(RunStores::open(&root).err(), Some(RunError::NoRun));
-    RunStores::create(&root, "t", paths(), "fake-model", "bag", weksa::run::LowererReach::ToolLessRelay, ModelFamily::Unrecorded).unwrap();
+    RunStores::create(
+        &root,
+        "t",
+        paths(),
+        "fake-model",
+        "bag",
+        weksa::run::LowererReach::ToolLessRelay,
+        ModelFamily::Unrecorded,
+    )
+    .unwrap();
 }
 
 /// Runs `change` in the window between the pins and the open, at `open` and at
@@ -412,9 +439,16 @@ fn window(
         inventory: &i,
         entities: &e,
     };
-    let created = RunStores::create_between(&root, "t", paths, "fake-model", "bag", weksa::run::LowererReach::ToolLessRelay, ModelFamily::Unrecorded, || {
-        change(&mut w, &root)
-    })
+    let created = RunStores::create_between(
+        &root,
+        "t",
+        paths,
+        "fake-model",
+        "bag",
+        weksa::run::LowererReach::ToolLessRelay,
+        ModelFamily::Unrecorded,
+        || change(&mut w, &root),
+    )
     .err();
     let left = root.join("inventory.cc").exists() || root.join("inventory.cc.lock").exists();
     (opened, created, left, RunStores::open(&root).err())
@@ -829,7 +863,9 @@ fn dao_over(edit: impl FnOnce(&Path, &Path)) -> Dao {
             entities: &entities,
         },
         "fake-model",
-        "bag", weksa::run::LowererReach::ToolLessRelay, ModelFamily::Unrecorded
+        "bag",
+        weksa::run::LowererReach::ToolLessRelay,
+        ModelFamily::Unrecorded,
     )
     .unwrap();
     Dao {
@@ -1478,17 +1514,41 @@ fn errors_echo_no_input() {
         inventory: &missing,
         entities: &missing,
     };
-    let e = RunStores::create(&root, "ok", stores, "m", "bag", weksa::run::LowererReach::ToolLessRelay, ModelFamily::Unrecorded)
-        .err()
-        .unwrap();
+    let e = RunStores::create(
+        &root,
+        "ok",
+        stores,
+        "m",
+        "bag",
+        weksa::run::LowererReach::ToolLessRelay,
+        ModelFamily::Unrecorded,
+    )
+    .err()
+    .unwrap();
     note(&e, &e);
-    let e = RunStores::create(&root, &format!("{canary}!"), stores, "m", "bag", weksa::run::LowererReach::ToolLessRelay, ModelFamily::Unrecorded)
-        .err()
-        .unwrap();
+    let e = RunStores::create(
+        &root,
+        &format!("{canary}!"),
+        stores,
+        "m",
+        "bag",
+        weksa::run::LowererReach::ToolLessRelay,
+        ModelFamily::Unrecorded,
+    )
+    .err()
+    .unwrap();
     note(&e, &e);
-    let e = RunStores::create(&root, "ok", stores, &format!("{canary}\n"), "bag", weksa::run::LowererReach::ToolLessRelay, ModelFamily::Unrecorded)
-        .err()
-        .unwrap();
+    let e = RunStores::create(
+        &root,
+        "ok",
+        stores,
+        &format!("{canary}\n"),
+        "bag",
+        weksa::run::LowererReach::ToolLessRelay,
+        ModelFamily::Unrecorded,
+    )
+    .err()
+    .unwrap();
     note(&e, &e);
     let w = world();
     let run = run_over(w.dir.path());
@@ -1520,7 +1580,9 @@ fn errors_echo_no_input() {
             entities: &dao.entities,
         },
         "fake-model",
-        "bag", weksa::run::LowererReach::ToolLessRelay, ModelFamily::Unrecorded
+        "bag",
+        weksa::run::LowererReach::ToolLessRelay,
+        ModelFamily::Unrecorded,
     )
     .unwrap();
     let mut model = cycle_fake(&format!("{{\"{canary}\":1}}"));
@@ -2450,7 +2512,9 @@ fn a_changed_head_is_drift() {
             entities: &dao.entities,
         },
         "fake-model",
-        "bag", weksa::run::LowererReach::ToolLessRelay, ModelFamily::Unrecorded
+        "bag",
+        weksa::run::LowererReach::ToolLessRelay,
+        ModelFamily::Unrecorded,
     )
     .unwrap();
     assert_eq!(
@@ -2769,8 +2833,16 @@ fn a_summary_line_says_how_lowerings_were_answered() {
         inventory: &dao.inventory,
         entities: &dao.entities,
     };
-    RunStores::create(&root, "b", paths, "fake-model", "bag", LowererReach::BriefedSubagent, ModelFamily::Unrecorded)
-        .unwrap();
+    RunStores::create(
+        &root,
+        "b",
+        paths,
+        "fake-model",
+        "bag",
+        LowererReach::BriefedSubagent,
+        ModelFamily::Unrecorded,
+    )
+    .unwrap();
     let run = RunStores::open(&root).unwrap();
     assert_eq!(run.record().lowerer_reach, LowererReach::BriefedSubagent);
     assert_eq!(
@@ -3002,7 +3074,11 @@ fn parse_reasons_by_class() {
     for (code, answer) in cases {
         let (dao, r) = round_with_item_1(answer);
         assert_eq!(reasons(&r), [(code, 1)], "{code}");
-        assert_eq!(r.train()[0].outcome, Outcome::Refused(Stage::Parse), "{code}");
+        assert_eq!(
+            r.train()[0].outcome,
+            Outcome::Refused(Stage::Parse),
+            "{code}"
+        );
         let line = dao.run.round_line(&r);
         assert!(line.contains(&format!("parse-reasons={code}x1")), "{line}");
     }
@@ -3364,4 +3440,123 @@ fn a_recall_mean_is_over_every_probe_an_unreadable_answer_counts_0_and_a_withdra
     let named = m.seen.iter().filter(|t| t.contains("translator: James Legge")).count();
     let unnamed = m.seen.iter().filter(|t| t.contains("work: not published")).count();
     assert_eq!((named, unnamed), (2, 1));
+}
+
+/// Answers every prompt with text that is not a draft, so a round measures only
+/// what it counts before admission.
+struct NotADraft;
+
+impl weksa::model::ModelPort for NotADraft {
+    fn model(&self) -> &str {
+        "not-a-draft"
+    }
+    fn answer(&mut self, _: &weksa::context::Prompt) -> Result<String, weksa::model::PortError> {
+        Ok("not a draft".to_string())
+    }
+}
+
+struct OneBag;
+
+impl weksa::score::Embedder for OneBag {
+    fn model(&self) -> &str {
+        "bag"
+    }
+    fn embed(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+        Ok(texts.iter().map(|_| vec![1.0]).collect())
+    }
+}
+
+/// A corpus of every shape a family count must tell apart, and the own-family
+/// count of a round over it by an answerer of `family`.
+fn mixed_family_round(family: ModelFamily) -> u32 {
+    use common::{cast, group_in_bucket, item_in};
+    use weksa::corpus::Source;
+    use weksa::run::{LowererReach, RoundOutcome, round};
+
+    let mut w = world();
+    let written = |family| Source::ModelWritten {
+        family,
+        generator: None,
+        prompt_digest: None,
+    };
+    let public_domain = Source::PublicDomain {
+        work: "w".into(),
+        author: "a".into(),
+        edition_url: "https://example.org/e".into(),
+        licence: "PD".into(),
+        jurisdiction: "US".into(),
+        translator: "t".into(),
+        edition_year: 1900,
+    };
+    let (train, validation, test) = (
+        group_in_bucket(10),
+        group_in_bucket(50),
+        group_in_bucket(90),
+    );
+    let items = [
+        // Offered, Anthropic: two of them count for Anthropic.
+        ("item:mix:1", &train, written(ModelFamily::Anthropic)),
+        ("item:mix:2", &validation, written(ModelFamily::Anthropic)),
+        // Offered, other families or no model at all: never Anthropic's.
+        ("item:mix:3", &train, written(ModelFamily::OpenAi)),
+        ("item:mix:4", &train, written(ModelFamily::Unrecorded)),
+        ("item:mix:5", &train, public_domain),
+        ("item:mix:6", &train, cast()),
+        // Model-written in a Test group: in no split, never offered.
+        ("item:mix:7", &test, written(ModelFamily::Anthropic)),
+        // Withdrawn after admission: never offered.
+        ("item:mix:8", &train, written(ModelFamily::Anthropic)),
+    ];
+    let entities = common::entities_in(w.dir.path());
+    for (key, group, source) in items {
+        let text = format!("Line {key}, distinct.");
+        w.corpus
+            .add(item_in(key, &text, group, source), &entities)
+            .unwrap();
+    }
+    w.corpus.withdraw("item:mix:8").unwrap();
+    let dir = w.dir.path().to_path_buf();
+    for name in ["c.cc", "i.cc", "entities.cc"] {
+        assert!(dir.join(name).exists(), "{name}");
+    }
+    let mut run = RunStores::create(
+        &dir.join("run"),
+        "mix",
+        RunPaths {
+            corpus: &dir.join("c.cc"),
+            inventory: &dir.join("i.cc"),
+            entities: &dir.join("entities.cc"),
+        },
+        "not-a-draft",
+        "bag",
+        LowererReach::ToolLessRelay,
+        family,
+    )
+    .unwrap();
+    let scorer = weksa::score::Scorer::new(OneBag);
+    match round(&mut run, &mut NotADraft, &scorer).unwrap() {
+        RoundOutcome::Recorded(r) => {
+            // Seven items were offered: the world's own cast item and mix 1 to 6;
+            // the Test-group and withdrawn items were not.
+            assert_eq!(
+                r.parse_reasons().iter().map(|c| c.count).sum::<u32>(),
+                7,
+                "offered items"
+            );
+            r.own_family()
+        }
+        RoundOutcome::Unanswered { .. } => panic!("answered"),
+    }
+}
+
+#[test]
+fn own_family_counts_offered_items_of_the_answerer_family() {
+    // Two live Train/Validation Anthropic items; the Test-group and withdrawn
+    // Anthropic items are not offered, so they are not counted.
+    assert_eq!(mixed_family_round(ModelFamily::Anthropic), 2);
+    assert_eq!(mixed_family_round(ModelFamily::OpenAi), 1);
+    // Google wrote nothing here; an unrecorded answerer counts no item, though
+    // an offered item is itself unrecorded.
+    assert_eq!(mixed_family_round(ModelFamily::Google), 0);
+    assert_eq!(mixed_family_round(ModelFamily::Unrecorded), 0);
 }

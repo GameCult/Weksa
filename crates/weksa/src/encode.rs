@@ -94,24 +94,27 @@ impl DraftClass {
             Category::Syntax => DraftClass::Syntax,
             Category::Eof => DraftClass::Eof,
             Category::Io => DraftClass::Other,
-            // Only the leading words of serde's message are read, and only to
-            // pick one of these classes; the message is not kept.
-            Category::Data => {
-                let msg = e.to_string();
-                if msg.starts_with("missing field") {
-                    DraftClass::MissingField
-                } else if msg.starts_with("unknown field") {
-                    DraftClass::UnknownField
-                } else if msg.starts_with("invalid type") {
-                    DraftClass::InvalidType
-                } else if msg.starts_with("invalid value") {
-                    DraftClass::InvalidValue
-                } else if msg.starts_with("not a ") {
-                    DraftClass::BadForm
-                } else {
-                    DraftClass::Other
-                }
-            }
+            Category::Data => Self::of_data(&e.to_string()),
+        }
+    }
+
+    /// serde_json offers no kind for a data error: its message opens with serde's
+    /// own fixed words, or with a [`crate::form::FormError`]'s `not a `. Only
+    /// those words are read, to pick a class; the message is not kept, and any
+    /// other opening is [`DraftClass::Other`].
+    fn of_data(msg: &str) -> Self {
+        if msg.starts_with("missing field") {
+            DraftClass::MissingField
+        } else if msg.starts_with("unknown field") {
+            DraftClass::UnknownField
+        } else if msg.starts_with("invalid type") {
+            DraftClass::InvalidType
+        } else if msg.starts_with("invalid value") {
+            DraftClass::InvalidValue
+        } else if msg.starts_with("not a ") {
+            DraftClass::BadForm
+        } else {
+            DraftClass::Other
         }
     }
 }
@@ -319,15 +322,26 @@ mod tests {
     }
 
     #[test]
-    fn a_draft_error_is_classed_from_serdes_vocabulary_and_keeps_no_text() {
+    fn draft_class_per_real_serde_error() {
+        // Each class is fed by the error serde_json raises for a real answer.
         let class = |answer: &str| PacketDraft::parse(answer).unwrap_err().class;
         assert_eq!(class("not json"), DraftClass::Syntax);
         assert_eq!(class("{\"referents\": ["), DraftClass::Eof);
         assert_eq!(class("{}"), DraftClass::MissingField);
-        // The classes serde's own messages open with, read off a plain error.
-        let of = |r: Result<u8, serde_json::Error>| DraftClass::of(&r.unwrap_err());
-        assert_eq!(of(serde_json::from_str("300")), DraftClass::InvalidValue);
-        assert_eq!(of(serde_json::from_str("\"x\"")), DraftClass::InvalidType);
+        assert_eq!(class("{\"bogus\": 1}"), DraftClass::UnknownField);
+        assert_eq!(class("{\"confidence\": \"x\"}"), DraftClass::InvalidType);
+        assert_eq!(class("{\"confidence\": -1}"), DraftClass::InvalidValue);
+        let bad_id = r#"{"referents": [{"id": "entity:x"}]}"#;
+        assert_eq!(class(bad_id), DraftClass::BadForm);
+        // A data error opening with words this reader does not know is Other.
+        assert_eq!(
+            DraftClass::of_data("something serde never said"),
+            DraftClass::Other
+        );
+        assert_eq!(DraftClass::of_data(""), DraftClass::Other);
+        // None keeps a token of the answer.
+        let secret = r#"{"confidence": "canary-token"}"#;
+        assert!(!format!("{:?}", PacketDraft::parse(secret).unwrap_err()).contains("canary"));
         // Every code is distinct and none can hold answer text: they are fixed.
         let all = [
             DraftClass::Syntax,
