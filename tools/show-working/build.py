@@ -49,7 +49,8 @@ data = json.loads(run([str(target / "examples" / "show_working")]))
 REFS_EXTRA = ["item:nibu:2"]
 # The page publishes only the corpus items its fixtures cite (plus the extra
 # reference each lowered fixture is scored against). A Validation or Test item
-# is never published: the dump holds every split.
+# is never published, even when hand-added to REFS_EXTRA or cited by a fixture:
+# the dump holds every split, and the guard below reads each item's split.
 cited = {fx["corpus_item"] for fx in data["fixtures"]} | set(REFS_EXTRA)
 corpus = {}
 for m in re.finditer(r'^(item:\S+) \[(.*?)\]\n  "(.*)"$', run([str(weksa_bin), "corpus", "dump"]), re.M):
@@ -57,6 +58,10 @@ for m in re.finditer(r'^(item:\S+) \[(.*?)\]\n  "(.*)"$', run([str(weksa_bin), "
         corpus[m.group(1)] = {"text": m.group(3), "meta": m.group(2)}
 if set(corpus) != cited:
     sys.exit(f"corpus dump lacks cited items {sorted(cited - set(corpus))}; unexpected {sorted(set(corpus) - cited)}")
+# The dump's meta ends with the split (`... group=g Validation`, `... excluded`).
+held_out = {k: v["meta"].split()[-1] for k, v in corpus.items() if v["meta"].split()[-1] in ("Validation", "Test")}
+if held_out:
+    sys.exit(f"refusing to publish held-out items (nothing written): {held_out}")
 model = "qwen3-embedding:0.6b"
 
 
@@ -84,11 +89,6 @@ data["build"] = {
 }
 out_dir.mkdir(parents=True, exist_ok=True)
 (out_dir / "data.json").write_text(json.dumps(data, indent=1, ensure_ascii=False), encoding="utf-8")
-# Guard, read back from the published file: no item key outside what a fixture cites.
-published = json.loads((out_dir / "data.json").read_text(encoding="utf-8"))
-stray = set(published["corpus"]) - cited
-if stray or set(published["corpus"]) != cited:
-    sys.exit(f"data.json corpus {sorted(published['corpus'])} is not exactly the cited items {sorted(cited)}; stray: {sorted(stray)}")
 
 # -- 3. the page --------------------------------------------------------------
 CSS = """
@@ -182,7 +182,7 @@ def outcome_html(fx):
                 f"<h3>Closeness to the corpus ({e(data['build']['embedder'])})</h3>{''.join(sc)}")
     if o["kind"] == "lower_error":
         er = o["error"]
-        return f"<h3>Refused by the lowerer</h3><div class='refusal'><b>LowerError::{e(er['variant'])}</b>: {e(er['reason'])}<br><span class='mono'>{e(er['debug'])}</span></div><p class='meta'>No text, so no score: nothing was invented to score.</p>"
+        return f"<h3>Refused by the lowerer</h3><div class='refusal'><b>LowerError::{e(er['variant'])}</b>: {e(er['reason'])}</div><p class='meta'>No text, so no score: nothing was invented to score.</p>"
     items = "".join(f"<li><b>{e(r['rule'])}</b> <span class='mono'>{e(r['detail'])}</span></li>" for r in o["refusals"])
     return f"<h3>Refused at admission</h3><div class='refusal'><ul>{items}</ul></div><p class='meta'>The packet never became a lowering input, so the lowerer never saw it.</p>"
 
