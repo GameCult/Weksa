@@ -851,6 +851,55 @@ fn a_failed_round_leaves_nothing_a_rerun_collides_with() {
 }
 
 #[test]
+fn a_stale_packet_store_in_an_unrecorded_round_dir_is_discarded_at_start() {
+    // A previous attempt that died after admitting (a crash, a kill) left its
+    // packets and lock in the next round's directory.
+    let mut first = dao();
+    let mut model = fake(&good_answers());
+    recorded(round(&mut first.run, &mut model, &Scorer::new(Bag)).unwrap());
+
+    let mut dao = dao();
+    let dir = dao.root.join("round-1");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::copy(
+        first.root.join("round-1/packets.cc"),
+        dir.join("packets.cc"),
+    )
+    .unwrap();
+    std::fs::write(dir.join("packets.cc.lock"), "stale").unwrap();
+
+    // The session revised item 1's answer; the stale packet for it is the old one.
+    let mut revised = draft_of(1);
+    revised.confidence = weksa::packet::Grade::new(321).unwrap();
+    let mut answers = good_answers();
+    answers[0].1 = json(&revised);
+    let mut model = fake(&answers);
+    let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    assert!(
+        matches!(r.train()[0].outcome, Outcome::Scored { .. }),
+        "the revised draft is not refused as a changed packet: {:?}",
+        r.train()[0]
+    );
+    assert_eq!(r.validation_refused(), Default::default());
+    let stored = PacketStore::open(&dir.join("packets.cc"))
+        .unwrap()
+        .all()
+        .unwrap();
+    assert_eq!(stored.len(), 3);
+    assert!(stored.iter().any(|p| p.provenance.confidence.get() == 321));
+    assert!(
+        !stored.iter().any(|p| p.provenance.confidence.get() == 600
+            && p.provenance.corpus_item.as_str() == "item:daodejing:1"),
+        "the stale packet is gone"
+    );
+    assert_ne!(
+        std::fs::read(dir.join("packets.cc.lock")).unwrap_or_default(),
+        b"stale",
+        "the stale lock was removed"
+    );
+}
+
+#[test]
 fn the_round_line_prints_each_split_under_its_own_name() {
     let mut dao = dao();
     let mut model = fake(&good_answers());
