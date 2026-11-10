@@ -2898,3 +2898,51 @@ fn views_with_one_meaning_share_one_unanswered_lowering_prompt() {
     unique.dedup();
     assert_eq!(unique.len(), 2);
 }
+
+/// Several refusals under one rule in one packet: the item still counts once.
+fn every_concept_unknown(d: &mut PacketDraft) {
+    for r in &mut d.referents {
+        r.concept = "concept:999".parse().unwrap();
+    }
+    for p in &mut d.predications {
+        p.concept = "concept:999".parse().unwrap();
+    }
+}
+
+#[test]
+fn admit_refusals_are_counted_by_rule_and_printed_with_the_label() {
+    use weksa::packet::EntityId;
+    let mut dao = dao();
+    let empty = |d: &mut PacketDraft| {
+        d.referents.clear();
+        d.predications.clear();
+        d.relations.clear();
+    };
+    let nobody = |d: &mut PacketDraft| {
+        d.referents[0].entity = Some("entity:nobody".parse::<EntityId>().unwrap());
+    };
+    let mut model = fake(&[
+        (1, edited(1, nobody)),
+        (2, edited(2, every_concept_unknown)),
+        (3, edited(3, empty)),
+    ]);
+    let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    let rules: Vec<(&str, u32)> = r
+        .admit_rules()
+        .iter()
+        .map(|c| (c.rule.as_str(), c.count))
+        .collect();
+    assert_eq!(rules, [("UnknownEntity", 1), ("V2", 1), ("V5", 1)]);
+    let line = dao.run.round_line(&r);
+    assert!(
+        line.ends_with("admit-rules=UnknownEntityx1,V2x1,V5x1 lowering=tool-less-relay"),
+        "{line}"
+    );
+
+    // A round nothing refused names no rule and prints none.
+    let mut dao = self::dao();
+    let mut model = fake(&good_answers());
+    let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    assert!(r.admit_rules().is_empty());
+    assert!(!dao.run.round_line(&r).contains("admit-rules"));
+}
