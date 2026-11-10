@@ -609,11 +609,13 @@ pub enum SceneRead {
 /// call, so the second fails for that call and nothing else.
 ///
 /// ```
-/// fn build(p: &weksa::packet::Packet) { let _ = p; }
+/// fn build(p: &weksa::packet::Packet, item: &weksa::CorpusItem) { let _ = (p, item); }
 /// ```
 ///
 /// ```compile_fail
-/// fn build(p: &weksa::packet::Packet) { let _ = weksa::LoweringInput::of(p); }
+/// fn build(p: &weksa::packet::Packet, item: &weksa::CorpusItem) {
+///     let _ = weksa::LoweringInput::of(p, item);
+/// }
 /// ```
 ///
 /// A lowering view is never read from bytes: `Deserialize` would let a caller
@@ -752,8 +754,9 @@ impl LoweringInput {
     pub fn stance(&self) -> &Stance {
         &self.stance
     }
-    /// The features of the scene relation from the speaker to the addressee;
-    /// empty until `with_scene`, or when the scene holds none.
+    /// The features of the scene relation from the speaker to the addressee.
+    /// Empty for every [`SceneRead`] but `Selected` (and for a selected
+    /// relation that has no features): ask [`scene_read`](Self::scene_read) which.
     pub fn scene(&self) -> &[FeatureValue] {
         match &self.scene {
             SceneRead::Selected { features, .. } => features,
