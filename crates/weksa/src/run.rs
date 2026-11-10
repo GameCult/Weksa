@@ -1474,6 +1474,17 @@ mod tests {
             let drop = reading(50.0, meaning - LADDER_STEP, 0.5);
             assert_eq!(decide(&base, &drop, &zero), Verdict::Rejected(Why::NoGain));
         }
+        // Two-decimal chrF readings are not binary-exact: in float, 84 of these
+        // pairs would read as a regression of more than 0.5.
+        for i in 60..10_000 {
+            let base = reading(f64::from(i) / 100.0, 0.5, 0.5);
+            let drop = reading(f64::from(i - 50) / 100.0, 0.5, 0.5);
+            assert_eq!(
+                decide(&base, &drop, &zero),
+                Verdict::Rejected(Why::NoGain),
+                "{i}"
+            );
+        }
     }
 
     fn replicate(n: u32, digest: &str, chrf: f64, meaning: f64) -> RoundRecord {
