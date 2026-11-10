@@ -1428,13 +1428,13 @@ fn the_round_line_prints_each_split_under_its_own_name() {
     let mut dao = dao();
     let mut model = fake(&good_answers());
     let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
-    let line = r.summary_line();
+    let line = dao.run.round_line(&r);
     // Train is item 1 alone, Validation items 2 and 3; the numbers differ.
     let (t, v) = (r.train_mean(), r.validation_mean());
     assert_eq!(
         line,
         format!(
-            "round 1 rev 3 train n=1 scored=1 chrf={:.2} meaning={:.4} refused=0 validation n=2 scored=2 chrf={:.2} meaning={:.4} refused parse=0 admit=0 lower=0",
+            "round 1 rev 3 train n=1 scored=1 chrf={:.2} meaning={:.4} refused=0 validation n=2 scored=2 chrf={:.2} meaning={:.4} refused parse=0 admit=0 lower=0 lowering=tool-less-relay",
             t.chrf.unwrap(),
             t.meaning.unwrap(),
             v.chrf.unwrap(),
@@ -1534,11 +1534,11 @@ fn errors_echo_no_input() {
     }
     let d = decided(cycle(&mut canary_run, &mut model, &Scorer::new(Bag)).unwrap());
     assert_eq!(d.verdict(), Verdict::Rejected(Why::EditParse));
-    all.extend([format!("{d:?}"), d.summary_line()]);
+    all.extend([format!("{d:?}"), canary_run.cycle_line(&d)]);
     let mut non_utf8 = cycle_fake("");
     non_utf8.edit = Some(Err(PortError::Io(std::io::ErrorKind::InvalidData)));
     let d = decided(cycle(&mut canary_run, &mut non_utf8, &Scorer::new(Bag)).unwrap());
-    all.extend([format!("{d:?}"), d.summary_line()]);
+    all.extend([format!("{d:?}"), canary_run.cycle_line(&d)]);
     weksa::InventoryStore::open(&canary_root.join("inventory.cc"))
         .unwrap()
         .admit_revision(
@@ -1726,9 +1726,9 @@ fn cycle_accepts_a_gain_past_the_floor() {
     // The line, with the readings printed to four places.
     let (b, c) = (d.base().composite, d.candidate().unwrap().composite);
     assert_eq!(
-        d.summary_line(),
+        dao.run.cycle_line(&d),
         format!(
-            "cycle 1 rev 3->4 base={b:.4} candidate={c:.4} floor=0.0000 threshold=0.0050 accepted"
+            "cycle 1 rev 3->4 base={b:.4} candidate={c:.4} floor=0.0000 threshold=0.0050 accepted lowering=tool-less-relay"
         )
     );
 
@@ -1786,9 +1786,9 @@ fn cycle_rejects_no_gain_and_keeps_the_head() {
     assert_eq!(d.candidate(), Some(d.base()));
     let c = d.base().composite;
     assert_eq!(
-        d.summary_line(),
+        dao.run.cycle_line(&d),
         format!(
-            "cycle 1 rev 3->4 base={c:.4} candidate={c:.4} floor=0.0000 threshold=0.0050 rejected no-gain"
+            "cycle 1 rev 3->4 base={c:.4} candidate={c:.4} floor=0.0000 threshold=0.0050 rejected no-gain lowering=tool-less-relay"
         )
     );
     assert_eq!(head_rev(&dao.root), 3);
@@ -2207,9 +2207,9 @@ fn run_the_editor_canary(canary_lowered: &str) {
     // Nothing the cycle writes or prints holds a held-out key or text.
     for text in [
         format!("{d:?}"),
-        d.summary_line(),
+        dao.run.cycle_line(&d),
         format!("{d2:?}"),
-        d2.summary_line(),
+        dao.run.cycle_line(&d2),
     ] {
         for needle in &held_out {
             assert!(
@@ -2312,9 +2312,9 @@ fn edit_refusals_are_decisions() {
             "edit-admit"
         };
         assert_eq!(
-            d.summary_line(),
+            dao.run.cycle_line(&d),
             format!(
-                "cycle 1 rev 3->none base={:.4} candidate=none floor=0.0000 threshold=0.0050 rejected {tag}",
+                "cycle 1 rev 3->none base={:.4} candidate=none floor=0.0000 threshold=0.0050 rejected {tag} lowering=tool-less-relay",
                 d.base().composite
             ),
             "{name}"
@@ -2679,6 +2679,12 @@ fn lowering_refusals_count_at_lower() {
         ("non-UTF-8", Err(PortError::Io(std::io::ErrorKind::InvalidData))),
         ("NUL", Ok(serde_json::json!({ "text": "The sage\u{0}acts." }).to_string())),
         ("bell", Ok(serde_json::json!({ "text": "The sage \u{7}acts." }).to_string())),
+        ("carriage return", Ok(serde_json::json!({ "text": "The sage\racts." }).to_string())),
+        (
+            "over length in bytes, within it in chars",
+            Ok(serde_json::json!({ "text": "\u{e9}".repeat(weksa::encode::MAX_LOWERING_BYTES / 2 + 1) })
+                .to_string()),
+        ),
         (
             "over length",
             Ok(serde_json::json!({ "text": "a".repeat(weksa::encode::MAX_LOWERING_BYTES + 1) })
@@ -2776,6 +2782,7 @@ fn a_summary_line_says_how_lowerings_were_answered() {
 fn lowering_text_at_the_bound_is_scored_and_line_breaks_are_text() {
     for text in [
         "a".repeat(weksa::encode::MAX_LOWERING_BYTES),
+        "\u{e9}".repeat(weksa::encode::MAX_LOWERING_BYTES / 2),
         "The sage acts.\n\tThe sage rests.".to_string(),
     ] {
         let mut dao = dao();
