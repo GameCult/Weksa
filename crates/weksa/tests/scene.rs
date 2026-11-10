@@ -1,244 +1,274 @@
-//! The speaker's relation to the addressee as a lowering input: the relation of
-//! a `weksa.scene` document from the speaker to the addressee referent's
-//! entity, typed feature values of slot `Scene` checked against the inventory
-//! at the view's revision, never wording.
+//! The speaker's relation to the addressee as a lowering input. `with_scene`
+//! names neither speaker nor scene: the view knows its corpus item, so the
+//! speaker is the item's speaker and the scene is the store's latest for the
+//! item's group. The relation is the one from that speaker to the addressee
+//! referent's entity. Typed feature values only, never wording.
 
 mod common;
-use std::path::Path;
-
-use common::{eid, grade, iv, lab, nd};
+use common::{cast, eid, entities_in, grade, item_in, lab, nd};
 use weksa::inventory::{proof_revision, seed, speaker_scene_revision};
 use weksa::packet::{FeatValue, FeatureValue, Packet, proof_packet};
 use weksa::speaker::{Annotator, PairRelation, Party, Scene};
 use weksa::{
-    CorpusStore, EntityId, EntityStore, Inventory, InventoryStore, LoweringInput, PacketStore,
-    Refusal, lower,
+    CorpusStore, EntityStore, Inventory, InventoryStore, LoweringInput, NameSpan, PacketStore,
+    Refusal, SpeakerStateStore, StoreError, lower,
 };
 
-fn store() -> (InventoryStore, Inventory, tempfile::TempDir) {
+struct W {
+    dir: tempfile::TempDir,
+    inventory: InventoryStore,
+    corpus: CorpusStore,
+    entities: EntityStore,
+    state: SpeakerStateStore,
+}
+
+/// Group `g` holds `item:nibu:1`: Nibu says "Brokkr, come here." Group `h`
+/// holds `item:nibu:2`, also spoken by Nibu.
+fn world() -> W {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = InventoryStore::open(&dir.path().join("i.cc")).unwrap();
+    let mut inventory = InventoryStore::open(&dir.path().join("i.cc")).unwrap();
     for (rev, entries) in [seed(), proof_revision(), speaker_scene_revision()] {
-        store.admit_revision(rev, entries).unwrap();
+        inventory.admit_revision(rev, entries).unwrap();
     }
-    let inv = store.inventory().unwrap();
-    (store, inv, dir)
+    let entities = entities_in(dir.path());
+    let mut corpus = CorpusStore::open(&dir.path().join("c.cc")).unwrap();
+    let mut first = item_in("item:nibu:1", "Brokkr, come here.", "g", cast());
+    first.names = vec![NameSpan {
+        entity: eid("brokkr"),
+        start: 0,
+        end: 6,
+    }];
+    corpus.add(first, &entities).unwrap();
+    corpus
+        .add(item_in("item:nibu:2", "Go away.", "h", cast()), &entities)
+        .unwrap();
+    let state = SpeakerStateStore::open(&dir.path().join("s.cc")).unwrap();
+    W {
+        dir,
+        inventory,
+        corpus,
+        entities,
+        state,
+    }
 }
 
-fn admitted(packet: &Packet, inventory: &InventoryStore) -> LoweringInput {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let corpus = CorpusStore::open(&root.join("data/corpus/corpus.cc")).unwrap();
-    let entities = EntityStore::open(&root.join("data/entity/entity.cc")).unwrap();
-    let dir = tempfile::tempdir().unwrap();
-    PacketStore::open(&dir.path().join("p.cc"))
-        .unwrap()
-        .admit(packet.clone(), inventory, &corpus, &entities)
-        .unwrap()
+fn inv(w: &W) -> Inventory {
+    w.inventory.inventory().unwrap()
 }
 
-/// The proof packet at `rev`. Its referent `n1` has no entity and `n3` is
-/// `entity:nibu`; `addressee` names which one is spoken to, or none.
-fn packet(rev: u32, addressee: Option<&str>) -> Packet {
-    let mut p = proof_packet();
-    p.inventory_rev = rev;
-    p.discourse.addressee = addressee.map(nd);
-    p
-}
-
-fn feat(inv: &Inventory, gloss: &str, value: FeatValue) -> FeatureValue {
-    let id = inv
-        .entries()
+fn feat(gloss: &str, value: FeatValue) -> FeatureValue {
+    let feature = seed()
+        .1
+        .into_iter()
+        .chain(speaker_scene_revision().1)
         .find(|e| e.gloss == gloss)
         .unwrap_or_else(|| panic!("no feature {gloss}"))
         .id;
-    FeatureValue { feature: id, value }
+    FeatureValue { feature, value }
 }
 
-fn rules(r: Result<LoweringInput, Vec<Refusal>>) -> Vec<&'static str> {
-    r.unwrap_err().iter().map(Refusal::rule).collect()
+fn intimacy(v: u16) -> Vec<FeatureValue> {
+    vec![feat("intimacy", FeatValue::Grade(grade(v)))]
 }
 
-fn speaker() -> EntityId {
-    eid("brokkr")
+fn status() -> Vec<FeatureValue> {
+    vec![
+        feat("relative_status", FeatValue::Option(lab("above"))),
+        feat("intimacy", FeatValue::Grade(grade(200))),
+        feat("in_group", FeatValue::Flag(false)),
+    ]
 }
 
-/// Brokkr speaks; the scene holds a relation to Nibu and one to an unnamed
-/// party, with different values.
-fn scene(inv: &Inventory) -> Scene {
-    scene_with(vec![
-        PairRelation {
-            from: speaker(),
-            to: Party::Named(eid("nibu")),
-            features: vec![
-                feat(inv, "relative_status", FeatValue::Option(lab("above"))),
-                feat(inv, "intimacy", FeatValue::Grade(grade(200))),
-                feat(inv, "in_group", FeatValue::Flag(false)),
-            ],
-        },
-        PairRelation {
-            from: speaker(),
-            to: Party::Unnamed,
-            features: vec![feat(inv, "intimacy", FeatValue::Grade(grade(7)))],
-        },
-    ])
+fn relation(from: &str, to: Party, features: Vec<FeatureValue>) -> PairRelation {
+    PairRelation {
+        from: eid(from),
+        to,
+        features,
+    }
 }
 
-fn scene_with(relations: Vec<PairRelation>) -> Scene {
+/// Nibu's relations to Brokkr and to an unnamed party, and Brokkr's to Nibu.
+fn scene(group: &str, n: u32, participants: &[&str], relations: Vec<PairRelation>) -> Scene {
     Scene {
-        group: "g".into(),
-        n: 1,
+        group: group.into(),
+        n,
         inventory_rev: 3,
-        participants: vec![speaker(), eid("nibu")],
+        participants: participants.iter().map(|p| eid(p)).collect(),
         relations,
         annotator: Annotator::Operator,
     }
 }
 
-fn selected(view: LoweringInput, inv: &Inventory, s: &Scene) -> Vec<FeatureValue> {
-    view.with_scene(inv, s, &speaker())
+fn standard(group: &str, n: u32) -> Scene {
+    scene(
+        group,
+        n,
+        &["nibu", "brokkr"],
+        vec![
+            relation("nibu", Party::Named(eid("brokkr")), status()),
+            relation("nibu", Party::Unnamed, intimacy(7)),
+            relation("brokkr", Party::Named(eid("nibu")), intimacy(99)),
+        ],
+    )
+}
+
+fn put(w: &mut W, s: Scene) {
+    w.state
+        .put_scene(s, &w.inventory, &w.corpus, &w.entities)
+        .unwrap();
+}
+
+/// The line of `item:nibu:1` at `rev`, its addressee node `addressee` (`n1`
+/// has no entity, `n3` is Brokkr), through the packet door.
+fn view_of(w: &W, rev: u32, addressee: Option<&str>) -> LoweringInput {
+    let mut p: Packet = proof_packet();
+    p.inventory_rev = rev;
+    p.referents[2].entity = Some(eid("brokkr"));
+    p.discourse.addressee = addressee.map(nd);
+    // A packet key holds its packet for good, so each view gets a fresh store.
+    let scratch = tempfile::tempdir().unwrap();
+    PacketStore::open(&scratch.path().join("p.cc"))
         .unwrap()
-        .scene()
-        .to_vec()
+        .admit(p, &w.inventory, &w.corpus, &w.entities)
+        .unwrap()
+}
+
+fn rules(r: Result<LoweringInput, StoreError>) -> Vec<&'static str> {
+    match r.map(|_| ()).unwrap_err() {
+        StoreError::Invalid(rs) => rs.iter().map(Refusal::rule).collect(),
+        other => panic!("not a rule refusal: {other}"),
+    }
 }
 
 #[test]
 fn a_scene_relation_reaches_the_lowering_view_and_changes_no_english() {
-    let (store, inv, _dir) = store();
-    let plain = admitted(&packet(3, Some("n3")), &store);
+    let mut w = world();
+    put(&mut w, standard("g", 1));
+    let plain = view_of(&w, 3, Some("n3"));
     assert!(plain.scene().is_empty());
-    let s = scene(&inv);
-    let with = plain.clone().with_scene(&inv, &s, &speaker()).unwrap();
-    assert_eq!(with.scene(), s.relations[0].features.as_slice());
-    assert!(!with.scene().is_empty());
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let entities = EntityStore::open(&root.join("data/entity/entity.cc")).unwrap();
+    let with = plain.clone().with_scene(&inv(&w), &w.state).unwrap();
+    assert_eq!(with.scene(), status().as_slice());
     assert_eq!(
-        lower(&with, &inv, &entities).unwrap(),
-        lower(&plain, &inv, &entities).unwrap()
+        lower(&with, &inv(&w), &w.entities).unwrap(),
+        lower(&plain, &inv(&w), &w.entities).unwrap()
     );
 }
 
 #[test]
 fn with_scene_selects_by_addressee() {
-    let (store, inv, _dir) = store();
-    let s = scene(&inv);
-    // A referent with an entity selects the relation to that entity.
-    let named = selected(admitted(&packet(3, Some("n3")), &store), &inv, &s);
-    assert_eq!(named, s.relations[0].features);
-    // A referent without one selects the relation to an unnamed party.
-    let unnamed = selected(admitted(&packet(3, Some("n1")), &store), &inv, &s);
-    assert_eq!(unnamed, s.relations[1].features);
-    // No addressee selects nothing.
-    assert!(selected(admitted(&packet(3, None), &store), &inv, &s).is_empty());
-    // A named addressee the scene lacks selects nothing, though an unnamed
-    // relation exists.
-    let only_unnamed = scene_with(vec![s.relations[1].clone()]);
-    assert!(
-        selected(
-            admitted(&packet(3, Some("n3")), &store),
-            &inv,
-            &only_unnamed
-        )
-        .is_empty()
-    );
-    // Another speaker's relations are not selected.
-    let view = admitted(&packet(3, Some("n3")), &store);
-    let theirs = Scene {
-        participants: vec![speaker(), eid("nibu"), eid("hero")],
-        ..s.clone()
+    let mut w = world();
+    put(&mut w, standard("g", 1));
+    let take = |w: &W, addressee| {
+        view_of(w, 3, addressee)
+            .with_scene(&inv(w), &w.state)
+            .unwrap()
+            .scene()
+            .to_vec()
     };
-    assert!(
-        view.with_scene(&inv, &theirs, &eid("hero"))
-            .unwrap()
-            .scene()
-            .is_empty()
+    // A referent with an entity selects the relation to that entity; a
+    // referent without one, the relation to an unnamed party; and the
+    // speaker's relation, never Brokkr's to Nibu.
+    assert_eq!(take(&w, Some("n3")), status());
+    assert_eq!(take(&w, Some("n1")), intimacy(7));
+    // No addressee selects nothing.
+    assert!(take(&w, None).is_empty());
+}
+
+#[test]
+fn a_named_addressee_the_scene_lacks_never_falls_back_to_unnamed() {
+    let mut w = world();
+    // Brokkr is not a participant and Nibu has only an unnamed relation.
+    put(
+        &mut w,
+        scene(
+            "g",
+            1,
+            &["nibu", "player"],
+            vec![relation("nibu", Party::Unnamed, intimacy(7))],
+        ),
     );
-    // A replacement replaces: an empty selection clears the earlier one.
-    let first = admitted(&packet(3, Some("n3")), &store)
-        .with_scene(&inv, &s, &speaker())
+    let got = view_of(&w, 3, Some("n3"))
+        .with_scene(&inv(&w), &w.state)
         .unwrap();
-    assert!(
-        first
-            .with_scene(&inv, &only_unnamed, &speaker())
-            .unwrap()
-            .scene()
-            .is_empty()
+    assert!(got.scene().is_empty());
+    // A participant without a relation behaves the same.
+    put(
+        &mut w,
+        scene(
+            "g",
+            2,
+            &["nibu", "brokkr"],
+            vec![relation("nibu", Party::Unnamed, intimacy(7))],
+        ),
     );
+    let got = view_of(&w, 3, Some("n3"))
+        .with_scene(&inv(&w), &w.state)
+        .unwrap();
+    assert!(got.scene().is_empty());
+}
+
+#[test]
+fn the_scene_is_the_items_group_and_its_latest_revision() {
+    let mut w = world();
+    // Group h holds a different relation for the same pair.
+    put(
+        &mut w,
+        scene(
+            "h",
+            1,
+            &["nibu", "brokkr"],
+            vec![relation("nibu", Party::Named(eid("brokkr")), intimacy(1))],
+        ),
+    );
+    // No scene for the item's group selects nothing, whatever other groups hold.
+    let got = view_of(&w, 3, Some("n3"))
+        .with_scene(&inv(&w), &w.state)
+        .unwrap();
+    assert!(got.scene().is_empty());
+    // Revisions: the highest n is read.
+    put(&mut w, standard("g", 1));
+    let mut second = standard("g", 2);
+    second.relations[0].features = intimacy(5);
+    put(&mut w, second);
+    let got = view_of(&w, 3, Some("n3"))
+        .with_scene(&inv(&w), &w.state)
+        .unwrap();
+    assert_eq!(got.scene(), intimacy(5).as_slice());
+    // A replacement replaces: a store without the scene clears the selection.
+    let empty = SpeakerStateStore::open(&w.dir.path().join("empty.cc")).unwrap();
+    let cleared = got.with_scene(&inv(&w), &empty).unwrap();
+    assert!(cleared.scene().is_empty());
 }
 
 #[test]
 fn with_scene_refusals() {
-    let (store, inv, _dir) = store();
-    let view = admitted(&packet(3, Some("n3")), &store);
-    let to_nibu = |features| {
-        scene_with(vec![PairRelation {
-            from: speaker(),
-            to: Party::Named(eid("nibu")),
-            features,
-        }])
-    };
-    let take = |s: &Scene| view.clone().with_scene(&inv, s, &speaker());
-    // A speaker the scene does not list.
+    let mut w = world();
+    put(&mut w, standard("g", 1));
+    // The scene was admitted at revision 3; a view of revision 2 predates the
+    // Scene features, so the selected relation's ids do not resolve there.
     assert_eq!(
-        view.clone()
-            .with_scene(&inv, &scene(&inv), &eid("hero"))
-            .map(|_| ())
-            .unwrap_err(),
-        [Refusal::V16SpeakerNotInScene]
-    );
-    // A label the feature does not declare.
-    let lordly = feat(&inv, "relative_status", FeatValue::Option(lab("lordly")));
-    assert_eq!(rules(take(&to_nibu(vec![lordly]))), ["V7"]);
-    // A value of the wrong kind.
-    let flag = feat(&inv, "intimacy", FeatValue::Flag(true));
-    assert_eq!(rules(take(&to_nibu(vec![flag]))), ["V7"]);
-    // A stance feature in a relation.
-    let anger = feat(&inv, "anger", FeatValue::Grade(grade(1)));
-    assert_eq!(rules(take(&to_nibu(vec![anger]))), ["V8"]);
-    // A speaker feature in a relation.
-    let age = feat(&inv, "education", FeatValue::Grade(grade(1)));
-    assert_eq!(rules(take(&to_nibu(vec![age]))), ["V8"]);
-    // Twice in one list.
-    let twice = vec![
-        feat(&inv, "intimacy", FeatValue::Grade(grade(1))),
-        feat(&inv, "intimacy", FeatValue::Grade(grade(2))),
-    ];
-    assert_eq!(rules(take(&to_nibu(twice))), ["V11"]);
-    // Revision 2 predates the Scene features, so their ids do not resolve there.
-    let old = admitted(&packet(2, Some("n3")), &store);
-    assert_eq!(
-        rules(old.with_scene(&inv, &scene(&inv), &speaker())),
+        rules(view_of(&w, 2, Some("n3")).with_scene(&inv(&w), &w.state)),
         ["V5", "V5", "V5"]
     );
-    // An unselected relation is not checked: only the selected one is.
-    let bad_elsewhere = scene_with(vec![
-        PairRelation {
-            from: speaker(),
-            to: Party::Unnamed,
-            features: vec![feat(&inv, "anger", FeatValue::Grade(grade(1)))],
-        },
-        PairRelation {
-            from: speaker(),
-            to: Party::Named(eid("nibu")),
-            features: vec![],
-        },
-    ]);
-    assert!(take(&bad_elsewhere).unwrap().scene().is_empty());
-}
-
-#[test]
-fn feature_ids_are_stable() {
-    let (_store, inv, _dir) = store();
-    let ids: Vec<_> = [
-        "relative_status",
-        "intimacy",
-        "in_group",
-        "socioeconomic_standing",
-        "education",
-        "age_cohort",
-    ]
-    .map(|g| feat(&inv, g, FeatValue::Flag(true)).feature)
-    .into();
-    let want: Vec<_> = (19..=24).map(|n| iv(&format!("feature:{n}"))).collect();
-    assert_eq!(ids, want);
+    // A scene that does not list the item's speaker: group k admitted while
+    // Brokkr was its only speaker, then an item of Nibu's joins it.
+    let mut item = item_in("item:brokkr:1", "Hello.", "k", cast());
+    item.speaker = eid("brokkr");
+    w.corpus.add(item, &w.entities).unwrap();
+    put(&mut w, scene("k", 1, &["brokkr"], vec![]));
+    w.corpus
+        .add(
+            item_in("item:nibu:3", "Hello there.", "k", cast()),
+            &w.entities,
+        )
+        .unwrap();
+    let mut p = proof_packet();
+    p.inventory_rev = 3;
+    p.provenance.corpus_item = weksa::CorpusItemId::parse("item:nibu:3").unwrap();
+    p.referents[2].entity = Some(eid("nibu"));
+    let view = PacketStore::open(&w.dir.path().join("p3.cc"))
+        .unwrap()
+        .admit(p, &w.inventory, &w.corpus, &w.entities)
+        .unwrap();
+    assert_eq!(rules(view.with_scene(&inv(&w), &w.state)), ["V16"]);
 }

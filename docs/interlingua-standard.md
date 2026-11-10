@@ -163,6 +163,7 @@ names the rule.
 - V15: an `addressee_consent` is set only by provenance `Authored` or
   `GameTelemetry`; a decomposition of text or imported corpus text cannot mint
   it.
+- V17: an `addressee` names a referent, not a predication.
 
 V9 is retired and not renumbered: the form of a key or a grade is its type, and
 an extension key's family is V6. `PacketStore::admit` returns the lowering view of a
@@ -190,7 +191,7 @@ ids.
 
 ### `discourse`
 
-Why the packet is said: `speech_act` is a speech-act id, `addressee` a node id,
+Why the packet is said: `speech_act` is a speech-act id, `addressee` a referent's node id (V17),
 and `features` carry source-side nuance on content (hedge, certainty, irony and
 whatever the inventory grows). This is source-side communicative pressure, not
 target-language register. `addressee_consent` is no feature: it names the
@@ -226,11 +227,13 @@ latest plus one, and the latest revision is the highest `n`. Each carries an
 `Annotator`, `Operator` or `Model` with an attestation string for its generator.
 Both hold typed feature values only, never text. A feature of slot `Stance`,
 `Speaker` or `Scene` sits in that slot alone (each layer has one writer and one
-lifetime), which `admit_revision` enforces. `LoweringInput::with_scene` takes a
-scene document and the speaker; the speaker must be a participant (V16), and
-the relation selected is the speaker's to the entity of the addressee referent
-(to `Unnamed` when that referent has no entity, to nothing when the packet has
-no addressee). V13 is retired.
+lifetime), which `admit_revision` enforces. `LoweringInput::with_scene` takes the
+store and names neither speaker nor scene: the view knows its corpus item, so
+the speaker is the item's speaker and the scene is the store's latest for the
+item's group. The speaker must be a participant (V16), and the relation
+selected is the speaker's to the entity of the addressee referent (to
+`Unnamed` when that referent has no entity, to nothing when the packet has no
+addressee or the scene holds no such relation). V13 is retired.
 
 ### `referents`
 

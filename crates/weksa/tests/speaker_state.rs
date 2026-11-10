@@ -22,7 +22,7 @@ struct W {
 }
 
 /// Group `g` holds two live items (speakers nibu and brokkr) and one withdrawn
-/// item (speaker hero).
+/// item (speaker hero); group `g2` holds one live item of nibu's.
 fn world() -> W {
     let dir = tempfile::tempdir().unwrap();
     let mut inventory = InventoryStore::open(&dir.path().join("i.cc")).unwrap();
@@ -35,9 +35,14 @@ fn world() -> W {
         ("item:nibu:1", "Come here.", "nibu"),
         ("item:nibu:2", "Go there.", "brokkr"),
         ("item:nibu:3", "Stay away.", "hero"),
+        ("item:nibu:4", "Elsewhere.", "g2"),
     ] {
         let mut item = item_in(key, text, "g", cast());
         item.speaker = eid(speaker);
+        if key == "item:nibu:4" {
+            item.group = "g2".into();
+            item.speaker = eid("nibu");
+        }
         corpus.add(item, &entities).unwrap();
     }
     corpus.withdraw("item:nibu:3").unwrap();
@@ -219,6 +224,26 @@ fn scene_revisions_append() {
     assert_eq!(w.state.scene("g").unwrap().unwrap().n, 10);
     let listed: Vec<u32> = w.state.all_scenes().unwrap().iter().map(|s| s.n).collect();
     assert_eq!(listed, (1..=10).collect::<Vec<_>>());
+    // Numbering is per group: the first scene of another group is revision 1
+    // whatever g holds, and its second is 2.
+    let other = |n| Scene {
+        group: "g2".into(),
+        participants: vec![eid("nibu")],
+        relations: vec![],
+        ..scene(n, 1)
+    };
+    assert_eq!(
+        refused(put_scene(&mut w, other(2))),
+        not_next(&scene_key("g2", 2), 1, 2)
+    );
+    assert_eq!(put_scene(&mut w, other(1)).unwrap(), AddOutcome::Added);
+    assert_eq!(
+        refused(put_scene(&mut w, other(3))),
+        not_next(&scene_key("g2", 3), 2, 3)
+    );
+    assert_eq!(put_scene(&mut w, other(2)).unwrap(), AddOutcome::Added);
+    assert_eq!(w.state.scene("g2").unwrap().unwrap().n, 2);
+    assert_eq!(w.state.scene("g").unwrap().unwrap().n, 10);
 }
 
 #[test]

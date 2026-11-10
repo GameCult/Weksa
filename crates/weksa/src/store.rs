@@ -21,7 +21,7 @@ use crate::inventory::{
 };
 use crate::packet::{EntityId, Packet};
 use crate::speaker::{Annotator, MAX_PARTICIPANTS, Party, Scene, Speaker, scene_key, speaker_key};
-use crate::validate::{LoweringInput, Refusal, admissible, feature_refusals};
+use crate::validate::{LoweringInput, Refusal, feature_refusals, validate};
 
 /// A broken store rule, named.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -959,7 +959,7 @@ impl PacketStore {
         corpus: &CorpusStore,
         entities: &EntityStore,
     ) -> Result<LoweringInput, StoreError> {
-        let view = admissible(&packet, &inventory.inventory()?).map_err(StoreError::Invalid)?;
+        validate(&packet, &inventory.inventory()?).map_err(StoreError::Invalid)?;
         let item = corpus.resolve(&packet.provenance.corpus_item)?;
         if item.withdrawn {
             return Err(StoreRefusal::WithdrawnCorpusItem {
@@ -983,6 +983,7 @@ impl PacketStore {
                 .into());
             }
         }
+        let view = LoweringInput::of(&packet, &item);
         let key = packet.id.to_string();
         if let Some(existing) = self.get(&key)? {
             if existing == packet {

@@ -1,13 +1,14 @@
 //! The validator owns the inventory and form rules a packet must meet. Every
 //! path that admits a packet applies them, but `validate` only judges: it
 //! returns `Ok(())` or the refusals. [`LoweringInput`], the only thing a
-//! lowerer sees, comes from `PacketStore::admit` alone, which builds it through
-//! the crate-private `admissible`. The stance is checked like every feature
-//! list, in slot `Stance`. The rules are V1..V8, V10..V12 and V14..V16: the
+//! lowerer sees, comes from `PacketStore::admit` alone, which builds it from
+//! the admitted packet and its corpus item through the crate-private
+//! `LoweringInput::of`. The stance is checked like every feature
+//! list, in slot `Stance`. The rules are V1..V8, V10..V12 and V14..V17: the
 //! shape of an id or a grade is its type's parse, not a rule, so V9 is retired
-//! and not renumbered; V13 is retired too. [`LoweringInput::with_scene`] takes
-//! a [`Scene`](crate::speaker::Scene) document, and `feature_refusals` is the
-//! one feature check it and the speaker-state store share.
+//! and not renumbered; V13 is retired too. [`LoweringInput::with_scene`] reads the
+//! scene of the view's own item group from the speaker-state store, and
+//! `feature_refusals` is the one feature check it and that store share.
 //!
 //! `validate` owns form and capacity and makes no leak decision. A packet's one
 //! free text is its trace (`notes` and `rejected_readings`): `validate` does not
@@ -27,12 +28,13 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
+use crate::corpus::CorpusItem;
 use crate::inventory::{Family, InvId, Inventory, InventoryEntry, Slot, ValueKind};
 use crate::packet::{
     Constraints, Context, Discourse, EntityId, Extension, FeatValue, FeatureValue, NodeId, Packet,
     PacketKind, Predication, ProvenanceSource, Referent, Relation, SCHEMA_VERSION, Stance,
 };
-use crate::speaker::Scene;
+use crate::store::{SpeakerStateStore, StoreError};
 
 /// A broken rule, named.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -110,8 +112,13 @@ pub enum Refusal {
     V15ConsentSource {
         source: ProvenanceSource,
     },
-    /// V16: `with_scene` was given a speaker the scene does not list.
+    /// V16: `with_scene` found the item's speaker absent from its group's scene.
     V16SpeakerNotInScene,
+    /// V17: an addressee that names a predication. An act is not someone
+    /// spoken to, so the addressee names a referent.
+    V17AddresseeNotAReferent {
+        id: NodeId,
+    },
 }
 
 impl Refusal {
@@ -135,6 +142,7 @@ impl Refusal {
             }
             Refusal::V15ConsentSource { .. } => "V15",
             Refusal::V16SpeakerNotInScene => "V16",
+            Refusal::V17AddresseeNotAReferent { .. } => "V17",
         }
     }
 }
@@ -161,6 +169,7 @@ impl fmt::Display for Refusal {
             Refusal::V14ConsentNotAPredication { .. } => "consent names no predication",
             Refusal::V15ConsentSource { .. } => "consent set by a source that only read wording",
             Refusal::V16SpeakerNotInScene => "the speaker is not a participant of the scene",
+            Refusal::V17AddresseeNotAReferent { .. } => "the addressee names no referent",
         };
         write!(f, "{}: {what}", self.rule())
     }
@@ -180,28 +189,6 @@ impl fmt::Display for Refusal {
 /// fn lower(p: &Packet, i: &Inventory) -> Result<LoweringInput, Vec<Refusal>> { weksa::validate(p, i) }
 /// ```
 pub fn validate(packet: &Packet, inventory: &Inventory) -> Result<(), Vec<Refusal>> {
-    admissible(packet, inventory).map(|_| ())
-}
-
-/// The one implementation of the rules. Crate-private: `PacketStore::admit` is
-/// the only caller that keeps the view.
-///
-/// The first block is the same call through the public name, so the second
-/// fails for the private path and nothing else.
-///
-/// ```
-/// use weksa::{Inventory, packet::Packet};
-/// fn judge(p: &Packet, i: &Inventory) { let _ = weksa::validate::validate(p, i); }
-/// ```
-///
-/// ```compile_fail
-/// use weksa::{Inventory, packet::Packet};
-/// fn lower(p: &Packet, i: &Inventory) { let _ = weksa::validate::admissible(p, i); }
-/// ```
-pub(crate) fn admissible(
-    packet: &Packet,
-    inventory: &Inventory,
-) -> Result<LoweringInput, Vec<Refusal>> {
     let mut out = Vec::new();
     if packet.schema_version != SCHEMA_VERSION {
         out.push(Refusal::V1SchemaVersion {
@@ -221,6 +208,7 @@ pub(crate) fn admissible(
     }
     let nodes = check_nodes(packet, &mut out);
     check_refs(packet, &nodes, &mut out);
+    check_addressee(packet, &nodes, &mut out);
     check_repeats(packet, &mut out);
     check_consent(packet, &nodes, &mut out);
     if inventory.has_revision(packet.inventory_rev) {
@@ -235,11 +223,7 @@ pub(crate) fn admissible(
             rev: packet.inventory_rev,
         });
     }
-    if out.is_empty() {
-        Ok(LoweringInput::of(packet))
-    } else {
-        Err(out)
-    }
+    if out.is_empty() { Ok(()) } else { Err(out) }
 }
 
 fn check_nodes(packet: &Packet, out: &mut Vec<Refusal>) -> BTreeSet<NodeId> {
@@ -282,6 +266,17 @@ fn check_refs(packet: &Packet, nodes: &BTreeSet<NodeId>, out: &mut Vec<Refusal>)
         for id in list {
             need(id, at);
         }
+    }
+}
+
+/// V17: the addressee, when it names a node, names a referent. A dangling id
+/// is V4's.
+fn check_addressee(packet: &Packet, nodes: &BTreeSet<NodeId>, out: &mut Vec<Refusal>) {
+    if let Some(a) = &packet.discourse.addressee
+        && nodes.contains(a)
+        && !packet.referents.iter().any(|r| &r.id == a)
+    {
+        out.push(Refusal::V17AddresseeNotAReferent { id: a.clone() });
     }
 }
 
@@ -560,11 +555,17 @@ fn fits(kind: Option<&ValueKind>, value: &FeatValue) -> bool {
 /// fn read(l: weksa::LoweringInput) { let _ = l.scene; }
 /// ```
 ///
-/// Scene values come only from a `weksa.scene` document: the raw-values door
-/// is gone. The first block is the same call with a document; the second hands
-/// it feature values and fails for that alone.
+/// Scene values come only from the store: the call names neither speaker nor
+/// scene. The first block is the call with the store; the second hands it a
+/// scene value and a speaker and fails for that alone.
 ///
 /// ```
+/// fn pick(l: weksa::LoweringInput, i: &weksa::Inventory, s: &weksa::SpeakerStateStore) {
+///     let _ = l.with_scene(i, s);
+/// }
+/// ```
+///
+/// ```compile_fail
 /// fn pick(
 ///     l: weksa::LoweringInput,
 ///     i: &weksa::Inventory,
@@ -618,11 +619,16 @@ pub struct LoweringInput {
     constraints: Constraints,
     extensions: Vec<Extension>,
     stance: Stance,
+    /// The item's speaker and group, as the corpus store holds them: the
+    /// only source of whose relation `with_scene` selects, and from which scene.
+    speaker: EntityId,
+    group: String,
     scene: Vec<FeatureValue>,
 }
 
 impl LoweringInput {
-    fn of(p: &Packet) -> Self {
+    /// The view of an admitted packet and the corpus item it was minted for.
+    pub(crate) fn of(p: &Packet, item: &CorpusItem) -> Self {
         Self {
             inventory_rev: p.inventory_rev,
             kind: p.kind,
@@ -634,38 +640,44 @@ impl LoweringInput {
             constraints: p.constraints.clone(),
             extensions: p.extensions.clone(),
             stance: p.stance.clone(),
+            speaker: item.speaker.clone(),
+            group: item.group.clone(),
             scene: Vec::new(),
         }
     }
 
     /// Adds the speaker's relation to the addressee, the only path for scene
-    /// values into a view; they come only from a `weksa.scene` document. The
-    /// speaker must be a participant of `scene` (V16). With no addressee, or
-    /// one that names no referent, nothing is selected; otherwise the relation
-    /// from the speaker to the addressee referent's entity (to `Unnamed` when
-    /// the referent has none) is checked like every feature list, in slot
-    /// `Scene` at this view's inventory revision, and replaces any earlier
-    /// scene. The English lowerer ignores it.
+    /// values into a view. The speaker is the item's speaker and the scene is
+    /// the latest the store holds for the item's group; the caller names
+    /// neither. No scene for the group selects nothing; a scene that does not
+    /// list the item's speaker is V16. With no addressee nothing is selected;
+    /// otherwise the relation from the speaker to the addressee referent's
+    /// entity (to `Unnamed` when the referent has none) is checked like every
+    /// feature list, in slot `Scene` at this view's inventory revision, and
+    /// replaces any earlier scene. The English lowerer ignores it.
     pub fn with_scene(
         mut self,
         inventory: &Inventory,
-        scene: &Scene,
-        speaker: &EntityId,
-    ) -> Result<Self, Vec<Refusal>> {
-        if !scene.participants.contains(speaker) {
-            return Err(vec![Refusal::V16SpeakerNotInScene]);
+        state: &SpeakerStateStore,
+    ) -> Result<Self, StoreError> {
+        self.scene = Vec::new();
+        let Some(scene) = state.scene(&self.group)? else {
+            return Ok(self);
+        };
+        if !scene.participants.contains(&self.speaker) {
+            return Err(StoreError::Invalid(vec![Refusal::V16SpeakerNotInScene]));
         }
-        let addressee = self
+        let selected = self
             .discourse
             .addressee
             .as_ref()
-            .and_then(|id| self.referents.iter().find(|r| &r.id == id));
-        let selected = addressee
-            .map(|r| scene.relation(speaker, r.entity.as_ref()))
-            .unwrap_or_default();
+            .and_then(|a| self.referents.iter().find(|r| &r.id == a))
+            .map_or(&[][..], |r| {
+                scene.relation(&self.speaker, r.entity.as_ref())
+            });
         let out = feature_refusals(inventory, self.inventory_rev, selected, Slot::Scene);
         if !out.is_empty() {
-            return Err(out);
+            return Err(StoreError::Invalid(out));
         }
         self.scene = selected.to_vec();
         Ok(self)

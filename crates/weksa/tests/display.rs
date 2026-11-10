@@ -122,6 +122,8 @@ fn refusal_display_names_the_rule_and_no_identifier() {
         Refusal::V15ConsentSource {
             source: ProvenanceSource::ImportedCorpus,
         },
+        Refusal::V16SpeakerNotInScene,
+        Refusal::V17AddresseeNotAReferent { id: node() },
     ];
     for r in &all {
         assert!(r.to_string().starts_with(r.rule()), "{r:?}");
