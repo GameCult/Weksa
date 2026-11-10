@@ -9,7 +9,7 @@
 use crate::corpus::CorpusItem;
 use crate::packet::EntityId;
 use crate::split::{Checkpoint, Split, SplitScheme};
-use crate::store::CorpusStore;
+use crate::store::{CorpusStore, normalized};
 
 /// The live Train items of a corpus, in key order. The only input minting
 /// reads; it cannot be built from a slice, and no accessor returns text or an
@@ -60,6 +60,15 @@ impl TrainItems {
 
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
+    }
+
+    /// Whether a live Train item of `group` holds `text`, compared by the
+    /// store's own text key.
+    fn holds(&self, group: &str, text: &str) -> bool {
+        let key = normalized(text);
+        self.items
+            .iter()
+            .any(|item| item.group == group && normalized(&item.text) == key)
     }
 
     pub fn keys(&self) -> impl Iterator<Item = &str> {
@@ -162,35 +171,50 @@ pub struct Prompt {
     items: Vec<String>,
 }
 
-fn block(item: &CorpusItem) -> String {
-    let mut lines: Vec<String> = item
-        .prior_turns
-        .iter()
-        .map(|t| format!("{}: {}", t.speaker, t.text))
+/// What a prompt prints of an item: its line, and its prior turns only as the
+/// one owner allows. A prior turn is a copy of text, not a reference, so it can
+/// outlive a withdrawal or quote a held-out line; its text is printed only when
+/// a live Train item of the item's group holds it, and the speaker alone is
+/// printed otherwise. Mint prints no prior turns (`prior: None`).
+fn block(item: &CorpusItem, prior: Option<&TrainItems>) -> String {
+    let mut lines: Vec<String> = prior
+        .into_iter()
+        .flat_map(|train| {
+            item.prior_turns.iter().map(move |t| {
+                if train.holds(&item.group, &t.text) {
+                    format!("{}: {}", t.speaker, t.text)
+                } else {
+                    format!("{}: {ELIDED}", t.speaker)
+                }
+            })
+        })
         .collect();
     lines.push(format!("[{}] {}: {}", item.id, item.speaker, item.text));
     lines.join("\n")
 }
 
+/// Printed in place of a prior turn whose text no live Train item holds.
+const ELIDED: &str = "[elided]";
+
 impl Prompt {
     /// Instructions, then every Train item in key order.
     pub fn mint(instructions: &'static str, train: &TrainItems) -> Prompt {
         let mut parts = vec![instructions.to_string()];
-        parts.extend(train.items.iter().map(block));
+        parts.extend(train.items.iter().map(|item| block(item, None)));
         Prompt {
             text: parts.join("\n\n"),
             items: train.keys().map(str::to_string).collect(),
         }
     }
 
-    /// Instructions, the one offered item, and the entities a packet for it
-    /// may cite.
-    pub fn encode(instructions: &'static str, offer: &EncoderOffer) -> Prompt {
+    /// Instructions, the one offered item with its prior turns resolved
+    /// against `train`, and the entities a packet for it may cite.
+    pub fn encode(instructions: &'static str, offer: &EncoderOffer, train: &TrainItems) -> Prompt {
         let ids: Vec<&str> = offer.entities.iter().map(EntityId::as_str).collect();
         Prompt {
             text: format!(
                 "{instructions}\n\n{}\n\nentities: {}",
-                block(&offer.item),
+                block(&offer.item, Some(train)),
                 ids.join(", ")
             ),
             items: vec![offer.item.id.clone()],

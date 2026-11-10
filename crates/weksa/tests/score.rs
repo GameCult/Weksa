@@ -948,3 +948,24 @@ fn validation_and_test_leak_agree_in_method() {
     assert_eq!(t.max_chrf(), v.max_chrf.as_ref().map(|p| p.chrf));
     assert_eq!(t.coverage_by_n(), v.coverage_by_n.as_slice());
 }
+
+#[test]
+fn held_out_train_union_excludes_withdrawn_train_items() {
+    let mut gone = train("item:t:1", HELD_OUT);
+    gone.withdrawn = true;
+    let held = validation("item:v:1", HELD_OUT);
+    let d = leak_diagnostic(
+        &[HELD_OUT],
+        &[gone, held.clone(), train("item:t:2", UNRELATED)],
+    );
+    assert_eq!(
+        d.coverage_by_n
+            .iter()
+            .map(|c| (c.novel, c.covered))
+            .collect::<Vec<_>>(),
+        [(12, 12), (11, 11), (10, 10)],
+        "a withdrawn Train text makes no n-gram known"
+    );
+    let live = leak_diagnostic(&[HELD_OUT], &[train("item:t:1", HELD_OUT), held]);
+    assert_eq!(live.coverage_by_n[0].novel, 0, "a live Train text does");
+}

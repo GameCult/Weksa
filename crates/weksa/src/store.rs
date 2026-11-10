@@ -430,7 +430,7 @@ fn check_entities(item: &CorpusItem, entities: &EntityStore) -> Result<(), Store
 /// (U+0307) after i is dropped, so İx and i̇x collide as the old case fold made
 /// them; so does plain ix, with both. Over-merging a rare sequence errs toward
 /// held, a lost collision toward leak. U+0307 after any other letter stays.
-fn normalized(text: &str) -> String {
+pub(crate) fn normalized(text: &str) -> String {
     let mapped: String = text.nfkc().flat_map(fold_variant).collect();
     // The dot goes before the last NFKC so the marks left on the i compose with
     // it (i, dot, acute reads as the i with an acute).

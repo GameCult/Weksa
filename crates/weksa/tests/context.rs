@@ -147,17 +147,17 @@ fn prompts_render_deterministically() {
     assert_eq!(
         Prompt::mint(MINT, &t).text(),
         format!(
-            "{MINT}\n\nentity:brokkr: Well?\n[item:a:1] entity:nibu: Hello there.\n\n[item:a:2] entity:nibu: Second line."
+            "{MINT}\n\n[item:a:1] entity:nibu: Hello there.\n\n[item:a:2] entity:nibu: Second line."
         )
     );
     assert_eq!(Prompt::mint(MINT, &t).item_keys(), ["item:a:1", "item:a:2"]);
 
     let offer = EncoderOffer::for_round(&store.get("item:a:2").unwrap().unwrap()).unwrap();
     assert_eq!(
-        Prompt::encode(ENCODE, &offer).text(),
+        Prompt::encode(ENCODE, &offer, &t).text(),
         format!("{ENCODE}\n\n[item:a:2] entity:nibu: Second line.\n\nentities: entity:nibu")
     );
-    assert_eq!(Prompt::encode(ENCODE, &offer).item_keys(), ["item:a:2"]);
+    assert_eq!(Prompt::encode(ENCODE, &offer, &t).item_keys(), ["item:a:2"]);
 }
 
 #[test]
@@ -234,7 +234,8 @@ fn cited_world() -> (Corpus, CorpusItem, CorpusItem) {
 
 #[test]
 fn encoder_offer_entities_are_the_items_own() {
-    let (_c, mine, sibling) = cited_world();
+    let (c, mine, sibling) = cited_world();
+    let t = TrainItems::from_corpus(&c.store).unwrap();
     assert_eq!(
         mine.cited_entities()
             .map(|e| e.as_str())
@@ -255,7 +256,7 @@ fn encoder_offer_entities_are_the_items_own() {
         "a sibling's entity is not the item's"
     );
     assert_eq!(offer.key(), "item:a:1");
-    let p = Prompt::encode(ENCODE, &offer);
+    let p = Prompt::encode(ENCODE, &offer, &t);
     assert!(
         p.text()
             .ends_with("entities: entity:brokkr, entity:hero, entity:kay")
@@ -302,4 +303,110 @@ fn offer_and_store_agree() {
             Err(other) => panic!("{slug}: {other:?}"),
         }
     }
+}
+
+/// Items of one Train group and of a Test group, with the lines each prior
+/// turn quotes.
+#[test]
+fn prior_turns_print_only_text_a_live_train_item_holds() {
+    let dir = tempfile::tempdir().unwrap();
+    let entities = entities_in(dir.path());
+    let mut store = CorpusStore::open(&dir.path().join("c.cc")).unwrap();
+    let (train_g, other_train_g) = (group_in_bucket(10), group_in_bucket(11));
+    let turn = |text: &str| Turn {
+        speaker: common::eid("brokkr"),
+        text: text.into(),
+    };
+    let mut add = |key: &str, text: &str, group: &str, turns: Vec<Turn>| {
+        let mut item = item_in(key, text, group, cast());
+        item.prior_turns = turns;
+        store.add(item, &entities).unwrap();
+    };
+    add("item:a:1", "withdrawnsecret line", &train_g, vec![]);
+    add("item:a:4", "livecontext line", &train_g, vec![]);
+    add(
+        "item:a:2",
+        "reply line",
+        &train_g,
+        vec![turn("withdrawnsecret line")],
+    );
+    add(
+        "item:a:3",
+        "second reply",
+        &train_g,
+        vec![turn("testsecret line")],
+    );
+    add(
+        "item:a:5",
+        "third reply",
+        &train_g,
+        vec![turn("livecontext line")],
+    );
+    add(
+        "item:a:6",
+        "other reply",
+        &train_g,
+        vec![turn("elsewhere line")],
+    );
+    add("item:o:1", "elsewhere line", &other_train_g, vec![]);
+    add(
+        "item:b:1",
+        "validation reply",
+        &group_in_bucket(50),
+        vec![turn("testsecret line")],
+    );
+    add("item:c:1", "testsecret line", &group_in_bucket(90), vec![]);
+    store.withdraw("item:a:1").unwrap();
+
+    let t = TrainItems::from_corpus(&store).unwrap();
+    let mint = Prompt::mint(MINT, &t);
+    for secret in ["withdrawnsecret", "testsecret", "validation reply"] {
+        assert!(!mint.text().contains(secret), "mint printed {secret}");
+    }
+    assert!(
+        !mint.text().contains("brokkr"),
+        "mint prints no prior turns"
+    );
+
+    let encode = |key: &str| {
+        let item = store.get(key).unwrap().unwrap();
+        Prompt::encode(ENCODE, &EncoderOffer::for_round(&item).unwrap(), &t)
+            .text()
+            .to_string()
+    };
+    let withdrawn = encode("item:a:2");
+    assert!(!withdrawn.contains("withdrawnsecret"));
+    assert!(withdrawn.contains("entity:brokkr: [elided]\n[item:a:2]"));
+    let test_quote = encode("item:a:3");
+    assert!(!test_quote.contains("testsecret"));
+    assert!(test_quote.contains("entity:brokkr: [elided]"));
+    let validation = encode("item:b:1");
+    assert!(!validation.contains("testsecret"));
+    assert!(validation.contains("entity:brokkr: [elided]"));
+    assert!(encode("item:a:5").contains("entity:brokkr: livecontext line\n[item:a:5]"));
+    let cross_group = encode("item:a:6");
+    assert!(
+        !cross_group.contains("elsewhere"),
+        "a held line of another group is not this group's"
+    );
+}
+
+#[test]
+fn prior_turn_match_uses_the_stores_text_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let entities = entities_in(dir.path());
+    let mut store = CorpusStore::open(&dir.path().join("c.cc")).unwrap();
+    let g = group_in_bucket(10);
+    store
+        .add(item_in("item:a:1", "Context Line", &g, cast()), &entities)
+        .unwrap();
+    let mut reply = item_in("item:a:2", "reply", &g, cast());
+    reply.prior_turns = vec![Turn {
+        speaker: common::eid("brokkr"),
+        text: "context line".into(),
+    }];
+    store.add(reply.clone(), &entities).unwrap();
+    let t = TrainItems::from_corpus(&store).unwrap();
+    let p = Prompt::encode(ENCODE, &EncoderOffer::for_round(&reply).unwrap(), &t);
+    assert!(p.text().contains("entity:brokkr: context line"));
 }
