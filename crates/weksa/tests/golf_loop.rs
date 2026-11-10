@@ -2241,15 +2241,6 @@ fn source_tripwires() {
         2,
         "the head and the cycle's file"
     );
-    // Accepting is one write: from the decision literal on, the candidate round
-    // and the decision go through one `put_prepared_batch` and no `.put(`.
-    let tail = run
-        .split("let decided = Decision {")
-        .nth(1)
-        .and_then(|t| t.split("Ok(CycleOutcome::Decided(decided))").next())
-        .unwrap();
-    assert_eq!(tail.matches("put_prepared_batch(").count(), 1);
-    assert!(!tail.contains(".put("), "a second write after the batch");
     // An entry draft carries no id or revision field.
     let encode = read("encode.rs");
     let entry = encode

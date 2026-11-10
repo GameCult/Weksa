@@ -7,7 +7,7 @@ use std::fmt;
 use std::path::Path;
 
 use caseless::default_case_fold_str;
-use cultcache_rs::{CultCache, SingleFileMessagePackBackingStore};
+use cultcache_rs::{CacheBackingStore, CultCache, SingleFileMessagePackBackingStore};
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark, is_nfc};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -206,9 +206,16 @@ pub(crate) fn open_cache(
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
+    open_cache_over(SingleFileMessagePackBackingStore::new(path), register)
+}
+
+pub(crate) fn open_cache_over(
+    store: impl CacheBackingStore + 'static,
+    register: impl FnOnce(&mut CultCache) -> anyhow::Result<()>,
+) -> anyhow::Result<CultCache> {
     let mut cache = CultCache::new();
     register(&mut cache)?;
-    cache.add_generic_backing_store(SingleFileMessagePackBackingStore::new(path))?;
+    cache.add_generic_backing_store(store)?;
     cache.pull_all_backing_stores()?;
     Ok(cache)
 }

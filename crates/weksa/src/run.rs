@@ -22,7 +22,9 @@ use std::fmt;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use cultcache_rs::{CultCache, DatabaseEntry};
+use cultcache_rs::{
+    CacheBackingStore, CultCache, DatabaseEntry, SingleFileMessagePackBackingStore,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -34,7 +36,7 @@ use crate::lower::lower;
 use crate::model::{ModelPort, PortError};
 use crate::score::{CHRF_VERSION, Embedder, ItemScore, ScoreInput, Scorer, SplitMean, aggregate};
 use crate::split::{Split, SplitScheme, fnv1a64, hex16};
-use crate::store::{CorpusStore, EntityStore, InventoryStore, PacketStore, open_cache};
+use crate::store::{CorpusStore, EntityStore, InventoryStore, PacketStore, open_cache_over};
 
 /// The digest of the prompt builder's source. Any edit to `context.rs`,
 /// comments included, ends a run; code outside that file is not covered.
@@ -402,7 +404,13 @@ fn canonical(path: &Path) -> Result<String, RunError> {
 }
 
 fn run_cache(root: &Path) -> Result<CultCache, RunError> {
-    open_cache(&root.join("run.cc"), |c| {
+    std::fs::create_dir_all(root).map_err(|_| RunError::Store)?;
+    run_cache_over(SingleFileMessagePackBackingStore::new(root.join("run.cc")))
+}
+
+/// The run's cache over `store`; a test passes one that fails a chosen write.
+fn run_cache_over(store: impl CacheBackingStore + 'static) -> Result<CultCache, RunError> {
+    open_cache_over(store, |c| {
         c.register_entry_type::<RunRecord>()?;
         c.register_entry_type::<RoundRecord>()?;
         c.register_entry_type::<Decision>()
@@ -1578,5 +1586,182 @@ mod tests {
             floor_of(&rounds[..3], &record).err(),
             Some(RunError::NoFloor)
         );
+    }
+
+    // ---- accepting is one write, held by behaviour ----
+
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use cultcache_rs::{CultCacheEnvelope, PushAllOptions};
+
+    /// The single-file store, but the write numbered `fail_at` (counting from 1;
+    /// `push`, `push_all` and `delete` are each one write) is refused.
+    struct FailsAt {
+        inner: SingleFileMessagePackBackingStore,
+        armed: Arc<AtomicUsize>,
+        fail_at: usize,
+    }
+
+    impl FailsAt {
+        fn write(&self) -> anyhow::Result<()> {
+            let n = self.armed.fetch_add(1, Ordering::SeqCst) + 1;
+            if n == self.fail_at {
+                anyhow::bail!("write {n} refused");
+            }
+            Ok(())
+        }
+    }
+
+    impl CacheBackingStore for FailsAt {
+        fn pull_all(&self) -> anyhow::Result<Vec<CultCacheEnvelope>> {
+            self.inner.pull_all()
+        }
+        fn push(&mut self, entry: &CultCacheEnvelope) -> anyhow::Result<()> {
+            self.write()?;
+            self.inner.push(entry)
+        }
+        fn delete(&mut self, entry: &CultCacheEnvelope) -> anyhow::Result<()> {
+            self.write()?;
+            self.inner.delete(entry)
+        }
+        fn push_all(
+            &mut self,
+            entries: &[CultCacheEnvelope],
+            options: PushAllOptions,
+        ) -> anyhow::Result<()> {
+            self.write()?;
+            self.inner.push_all(entries, options)
+        }
+    }
+
+    /// Answers the Dao encode prompts from `answers` by item, the candidate
+    /// inventory's (rev 4) from the good drafts, and the editor with one concept.
+    struct Fake {
+        degraded: HashMap<String, String>,
+        good: HashMap<String, String>,
+    }
+
+    impl ModelPort for Fake {
+        fn model(&self) -> &str {
+            "fake-model"
+        }
+        fn answer(&mut self, prompt: &Prompt) -> Result<String, PortError> {
+            if prompt.text().starts_with(crate::context::MINT_INSTRUCTIONS) {
+                return Ok(
+                    r#"{"add":[{"family":"Concept","gloss":"a general meaning the Dao names"}]}"#
+                        .to_string(),
+                );
+            }
+            let answers = if prompt.text().contains("\n\ninventory rev:4\n") {
+                &self.good
+            } else {
+                &self.degraded
+            };
+            Ok(answers[&prompt.item_keys()[0]].clone())
+        }
+    }
+
+    struct Bag;
+
+    impl Embedder for Bag {
+        fn model(&self) -> &str {
+            "bag"
+        }
+        fn embed(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+            Ok(texts
+                .iter()
+                .map(|t| {
+                    let mut v = vec![0.0; 27];
+                    v[26] = 1.0;
+                    for c in t.chars().filter(char::is_ascii_alphabetic) {
+                        v[(c.to_ascii_lowercase() as u8 - b'a') as usize] += 1.0;
+                    }
+                    v
+                })
+                .collect())
+        }
+    }
+
+    fn fake() -> Fake {
+        let drafts = |degrade: bool| -> HashMap<String, String> {
+            crate::daodejing::packets()
+                .iter()
+                .take(3)
+                .enumerate()
+                .map(|(i, p)| {
+                    let mut d = PacketDraft::of(p);
+                    if degrade && i == 1 {
+                        d.referents[0].concept = "concept:999".parse().unwrap();
+                    }
+                    (
+                        format!("item:daodejing:{}", i + 1),
+                        serde_json::to_string(&d).unwrap(),
+                    )
+                })
+                .collect()
+        };
+        Fake {
+            degraded: drafts(true),
+            good: drafts(false),
+        }
+    }
+
+    /// Accepting a cycle writes the candidate round and the decision to `run.cc`
+    /// as one write: a store that refuses its first or its second write after the
+    /// cycle starts leaves both or neither, never the round alone.
+    #[test]
+    fn accepting_is_one_write_the_round_and_the_decision_land_together() {
+        for fail_at in [1, 2] {
+            use std::fs;
+            let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/daodejing");
+            let dir = tempfile::tempdir().unwrap();
+            let copy = |from: &str, to: &str| {
+                fs::copy(src.join(from), dir.path().join(to)).unwrap();
+                dir.path().join(to)
+            };
+            let (corpus, inventory, entities) = (
+                copy("corpus.cc", "c.cc"),
+                copy("inventory.cc", "i.cc"),
+                copy("entity.cc", "e.cc"),
+            );
+            let root = dir.path().join("run");
+            let mut run = RunStores::create(
+                &root,
+                "dao",
+                RunPaths {
+                    corpus: &corpus,
+                    inventory: &inventory,
+                    entities: &entities,
+                },
+                "fake-model",
+                "bag",
+            )
+            .unwrap();
+            let mut model = fake();
+            for _ in 0..2 {
+                let out = round(&mut run, &mut model, &Scorer::new(Bag)).unwrap();
+                assert!(matches!(out, RoundOutcome::Recorded(_)));
+            }
+            run.cache = run_cache_over(FailsAt {
+                inner: SingleFileMessagePackBackingStore::new(root.join("run.cc")),
+                armed: Arc::new(AtomicUsize::new(0)),
+                fail_at,
+            })
+            .unwrap();
+
+            let out = cycle(&mut run, &mut model, &Scorer::new(Bag));
+
+            let reloaded = run_cache(&root).unwrap();
+            let rounds = reloaded.get_all::<RoundRecord>().unwrap().len();
+            let decisions = reloaded.get_all::<Decision>().unwrap().len();
+            assert_eq!(
+                (rounds, decisions),
+                if fail_at == 1 { (2, 0) } else { (3, 1) },
+                "write {fail_at} refused"
+            );
+            assert_eq!(out.is_ok(), fail_at == 2);
+        }
     }
 }
