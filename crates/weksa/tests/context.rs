@@ -630,6 +630,7 @@ mod lowering {
         for needed in [
             "en-US",
             "all of its meaning and nothing it does not carry",
+            "a grade is permille, 0 to 1000",
             "felt affect and restraint",
             "shapes how the utterance is said, not what it says",
             "forms on the entities line",
@@ -640,6 +641,61 @@ mod lowering {
         // The one call it makes is its item; the key is in no text.
         assert_eq!(prompt.item_keys(), [item.as_str()]);
         assert!(!prompt.text().contains(item.as_str()));
+        // The view's speaker and group are private: the item's speaker entity
+        // id and its group are in no text.
+        let held = CorpusStore::open(&data("daodejing/corpus.cc"))
+            .unwrap()
+            .get(item.as_str())
+            .unwrap()
+            .unwrap();
+        assert!(!held.group.is_empty());
+        for private in [held.speaker.as_str(), held.group.as_str()] {
+            assert!(!prompt.text().contains(private), "{private}");
+        }
+    }
+
+    #[test]
+    fn lower_prompt_moves_with_the_stance_alone() {
+        use weksa::packet::{FeatValue, FeatureValue, Grade, Stance};
+        let (_, inv, entities, item) = dao(2);
+        let store = InventoryStore::open(&data("daodejing/inventory.cc")).unwrap();
+        let own = packets().remove(2).stance;
+        let grade = |feature: &str, v: u16| FeatureValue {
+            feature: feature.parse().unwrap(),
+            value: FeatValue::Grade(Grade::new(v).unwrap()),
+        };
+        let angry = Stance {
+            features: vec![grade("feature:9", 800), grade("feature:18", 900)],
+        };
+        let prompt_of = |stance: Stance| {
+            let mut packet = packets().remove(2);
+            packet.stance = stance.clone();
+            let view = admitted(packet, &store, "daodejing/corpus.cc", &entities);
+            let prompt = Prompt::lower(&view, &item, &inv, &entities).unwrap();
+            (stance, prompt)
+        };
+        let three = [prompt_of(own), prompt_of(angry), prompt_of(Stance::default())];
+
+        // Three stances, three prompts.
+        let digests: std::collections::BTreeSet<String> =
+            three.iter().map(|(_, p)| p.digest()).collect();
+        assert_eq!(digests.len(), 3);
+        // Each packet line ends with exactly that stance's JSON, and the prompt
+        // with the packet line taken out is the same text for all three.
+        let without_packet_line = |text: &str| -> String {
+            text.lines().filter(|l| !l.starts_with("packet: ")).collect::<Vec<_>>().join("\n")
+        };
+        let bare = without_packet_line(three[0].1.text());
+        for (stance, prompt) in &three {
+            let line = prompt.text().lines().find(|l| l.starts_with("packet: ")).unwrap();
+            let json = serde_json::to_string(stance).unwrap();
+            assert!(line.ends_with(&format!(r#","stance":{json}}}"#)), "{line}");
+            assert_eq!(without_packet_line(prompt.text()), bare);
+        }
+        // The stance's feature ids are glossed in the one inventory listing.
+        let text = three[1].1.text();
+        assert!(text.contains("\nfeature:9: anger [grade; slots Stance]\n"));
+        assert!(text.contains("\nfeature:18: restraint [grade; slots Stance]\n"));
     }
 
     #[test]

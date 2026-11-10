@@ -1633,3 +1633,90 @@ fn loop_open_requires_the_lowerer_reach_and_pins_it() {
         weksa::run::LowererReach::BriefedSubagent
     );
 }
+
+/// Answers the Dao encode prompts with the Dao packets and every lowering with
+/// one sentence.
+struct DaoModel;
+
+impl weksa::model::ModelPort for DaoModel {
+    fn model(&self) -> &str {
+        "fake-model"
+    }
+    fn answer(&mut self, prompt: &weksa::context::Prompt) -> Result<String, weksa::model::PortError> {
+        if prompt.text().starts_with(weksa::context::LOWER_INSTRUCTIONS) {
+            return Ok(r#"{"text":"The highest excellence is like the water."}"#.into());
+        }
+        let n: usize = prompt.item_keys()[0].rsplit(':').next().unwrap().parse().unwrap();
+        Ok(serde_json::to_string(&weksa::PacketDraft::of(&weksa::daodejing::packets()[n - 1])).unwrap())
+    }
+}
+
+#[test]
+fn loop_ablate_waits_then_prints_one_line_per_split() {
+    let d = tempfile::tempdir().unwrap();
+    open_dao_run(d.path());
+    let url = fake_embedder();
+    let root = d.path().join("canaryroot");
+
+    // Record round 1 the way `loop round` does, then put its lowering answers
+    // where the relay would have.
+    let mut run = weksa::run::RunStores::open(&root).unwrap();
+    let scorer = weksa::Scorer::new(weksa::OllamaEmbedder::new(&url, &run.record().embedder));
+    let weksa::run::RoundOutcome::Recorded(r) = weksa::run::round(&mut run, &mut DaoModel, &scorer).unwrap()
+    else {
+        panic!("answered")
+    };
+    for call in &r.calls()[3..] {
+        std::fs::write(
+            root.join(format!("round-1/{}.answer", call.prompt)),
+            r#"{"text":"The highest excellence is like the water."}"#,
+        )
+        .unwrap();
+    }
+
+    let ablate = || weksa(d.path(), &["loop", "ablate", "canaryroot", "--round", "1", "--ollama-url", &url]);
+    let first = ablate();
+    assert_eq!(first.status.code(), Some(3), "{}", out(&first));
+    let text = out(&first);
+    let digests: Vec<&str> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("unanswered "))
+        .filter(|d| d.len() == 16)
+        .collect();
+    // Three replays, three drops and the Validation permutes (2 items).
+    assert_eq!(digests.len(), 3 + 3 + 2, "{text}");
+    for digest in &digests {
+        assert!(root.join(format!("ablation-1/{digest}.prompt")).is_file());
+        std::fs::write(
+            root.join(format!("ablation-1/{digest}.answer")),
+            r#"{"text":"The highest excellence is like the water."}"#,
+        )
+        .unwrap();
+    }
+    let second = ablate();
+    assert!(second.status.success(), "{}", out(&second));
+    let text = out(&second);
+    assert_eq!(
+        text,
+        "train ablation n=1 unusable=0 replay chrf=100.00 meaning=1.000 | drop n=1 chrf=100.00 meaning=1.000 moved=0 ref_gain_chrf=0.00 ref_gain_meaning=0.000 | permute n=0 chrf=none meaning=none moved=0 ref_gain_chrf=none ref_gain_meaning=none\nvalidation ablation n=2 unusable=0 replay chrf=100.00 meaning=1.000 | drop n=2 chrf=100.00 meaning=1.000 moved=0 ref_gain_chrf=0.00 ref_gain_meaning=0.000 | permute n=2 chrf=100.00 meaning=1.000 moved=0 ref_gain_chrf=0.00 ref_gain_meaning=0.000\n"
+    );
+    for leaked in ["item:", "packet:", "highest excellence", "canaryroot"] {
+        assert!(!text.contains(leaked), "{text}");
+    }
+}
+
+#[test]
+fn loop_ablate_without_the_rounds_answers_says_so() {
+    let d = tempfile::tempdir().unwrap();
+    open_dao_run(d.path());
+    let url = fake_embedder();
+    let root = d.path().join("canaryroot");
+    let mut run = weksa::run::RunStores::open(&root).unwrap();
+    let scorer = weksa::Scorer::new(weksa::OllamaEmbedder::new(&url, &run.record().embedder));
+    weksa::run::round(&mut run, &mut DaoModel, &scorer).unwrap();
+    let o = weksa(d.path(), &["loop", "ablate", "canaryroot", "--round", "1", "--ollama-url", &url]);
+    assert!(!o.status.success());
+    let text = out(&o);
+    assert!(text.contains("holds no answer") && text.contains("head inventory"), "{text}");
+    assert!(!text.contains("would not read"), "{text}");
+}

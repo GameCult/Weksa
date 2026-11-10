@@ -66,7 +66,7 @@ A feature is {feature, value}; value is {\"Grade\": 0 to 1000}, {\"Option\": lab
 /// Fixed per run by `PROMPT_SOURCE_DIGEST`.
 pub const LOWER_INSTRUCTIONS: &str = "\
 Say the packet below in English (en-US), as one utterance of its speaker: all of its meaning and nothing it does not carry.
-Every id is the inventory's listed below and every feature value is as listed. The stance is the speaker's felt affect and restraint: it shapes how the utterance is said, not what it says.
+Every id is the inventory's listed below and every feature value is as listed; a grade is permille, 0 to 1000. The stance is the speaker's felt affect and restraint: it shapes how the utterance is said, not what it says.
 A referent with an entity is named by one of that entity's forms on the entities line.
 Answer with one JSON object and nothing else: {\"text\": \"...\"}. No code fence, no commentary.";
 

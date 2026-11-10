@@ -48,6 +48,37 @@ impl AnswerFiles {
     }
 }
 
+/// Answers read from one directory and nothing else: `<digest>.answer` is the
+/// reply to the prompt whose digest is `<digest>`. A prompt with no file is
+/// [`PortError::Unanswered`]; this port never creates or writes anything. The
+/// one reader of answer files: [`AnswerFiles`] reads through it.
+pub struct RecordedAnswers {
+    dir: PathBuf,
+    model: String,
+}
+
+impl RecordedAnswers {
+    pub fn new(dir: PathBuf, model: String) -> Self {
+        Self { dir, model }
+    }
+}
+
+impl ModelPort for RecordedAnswers {
+    fn model(&self) -> &str {
+        &self.model
+    }
+
+    fn answer(&mut self, prompt: &Prompt) -> Result<String, PortError> {
+        match std::fs::read(self.dir.join(format!("{}.answer", prompt.digest()))) {
+            Ok(bytes) => {
+                String::from_utf8(bytes).map_err(|_| PortError::Io(ErrorKind::InvalidData))
+            }
+            Err(e) if e.kind() == ErrorKind::NotFound => Err(PortError::Unanswered),
+            Err(e) => Err(PortError::Io(e.kind())),
+        }
+    }
+}
+
 impl ModelPort for AnswerFiles {
     fn model(&self) -> &str {
         &self.model
@@ -56,12 +87,9 @@ impl ModelPort for AnswerFiles {
     fn answer(&mut self, prompt: &Prompt) -> Result<String, PortError> {
         let io = |e: std::io::Error| PortError::Io(e.kind());
         let digest = prompt.digest();
-        match std::fs::read(self.dir.join(format!("{digest}.answer"))) {
-            Ok(bytes) => {
-                return String::from_utf8(bytes).map_err(|_| PortError::Io(ErrorKind::InvalidData));
-            }
-            Err(e) if e.kind() == ErrorKind::NotFound => {}
-            Err(e) => return Err(io(e)),
+        match RecordedAnswers::new(self.dir.clone(), self.model.clone()).answer(prompt) {
+            Err(PortError::Unanswered) => {}
+            read => return read,
         }
         std::fs::create_dir_all(&self.dir).map_err(io)?;
         let path = self.dir.join(format!("{digest}.prompt"));
