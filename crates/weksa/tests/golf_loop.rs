@@ -1540,6 +1540,35 @@ fn cycle_rejects_no_gain_and_keeps_the_head() {
 }
 
 #[test]
+fn distinct_replicates_set_the_floor_and_a_gain_inside_it_is_no_gain() {
+    let mut dao = dao();
+    // Replicate 1 is degraded, replicate 2 is good: the two readings differ.
+    for answers in [degraded_answers(), good_answers()] {
+        let mut m = fake(&answers);
+        recorded(round(&mut dao.run, &mut m, &Scorer::new(Bag)).unwrap());
+    }
+    let rounds = dao.run.rounds().unwrap();
+    let (a, b) = (validation(&rounds[0]), validation(&rounds[1]));
+    let want = Reading {
+        chrf: (a.chrf - b.chrf).abs(),
+        meaning: (a.meaning - b.meaning).abs(),
+        composite: (a.composite - b.composite).abs(),
+    };
+    assert!(want.chrf > 0.0 && want.meaning > 0.0 && want.composite > LADDER_STEP);
+
+    // The candidate reads exactly as the good replicate: its gain over the head
+    // (round 1) is the floor, which is past a step and inside the noise.
+    let mut model = cycle_fake(ONE_CONCEPT);
+    let d = run_cycle(&mut dao, &mut model);
+    assert_eq!(*d.floor(), want);
+    assert_eq!(d.threshold(), want.composite);
+    assert_eq!(d.candidate(), Some(&b));
+    assert!(d.candidate().unwrap().composite - d.base().composite > LADDER_STEP);
+    assert_eq!(d.verdict(), Verdict::Rejected(Why::NoGain));
+    assert_eq!(head_rev(&dao.root), 3);
+}
+
+#[test]
 fn unanswered_cycle_writes_nothing() {
     let mut dao = dao();
     two_rounds(&mut dao);

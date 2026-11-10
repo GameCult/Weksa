@@ -1429,4 +1429,83 @@ mod tests {
         assert_eq!(decide(&base, &gain(0.7501), &floor), Verdict::Accepted);
         assert_eq!(decide(&base, &gain(0.506), &floor), rejected(Why::NoGain));
     }
+    fn replicate(n: u32, digest: &str, chrf: f64, meaning: f64) -> RoundRecord {
+        RoundRecord {
+            n,
+            inventory_rev: 1,
+            prompt_digest: String::new(),
+            lowerer_digest: String::new(),
+            corpus_digest: String::new(),
+            entity_digest: String::new(),
+            model: String::new(),
+            embedder: String::new(),
+            chrf_version: String::new(),
+            calls: vec![],
+            train: vec![],
+            train_mean: SplitMean::default(),
+            train_scored: 0,
+            validation_mean: SplitMean {
+                count: 2,
+                chrf: Some(chrf),
+                meaning: Some(meaning),
+            },
+            validation_scored: 2,
+            validation_refused: RefusalCounts::default(),
+            inventory_digest: digest.to_string(),
+            cycle: None,
+        }
+    }
+
+    fn record_of(digest: &str) -> RunRecord {
+        RunRecord {
+            label: "t".into(),
+            corpus: String::new(),
+            inventory: String::new(),
+            entities: String::new(),
+            corpus_digest: String::new(),
+            entity_digest: String::new(),
+            prompt_digest: String::new(),
+            lowerer_digest: String::new(),
+            model: String::new(),
+            embedder: String::new(),
+            chrf_version: String::new(),
+            inventory_digest: digest.to_string(),
+        }
+    }
+
+    /// The floor is the spread of each field of the two replicates, the composite
+    /// as the spread of the composites: with chrF up and meaning down it is not
+    /// a function of the other two spreads' magnitudes.
+    #[test]
+    fn the_floor_is_the_spread_of_each_field_of_the_two_replicates() {
+        let record = record_of("d1");
+        let rounds = [
+            replicate(1, "d1", 60.0, 0.5),
+            replicate(2, "d1", 50.0, 0.7),
+        ];
+        let floor = floor_of(&rounds, &record).unwrap();
+        // composites 0.55 and 0.6.
+        assert_eq!(floor.chrf, 10.0);
+        assert!((floor.meaning - 0.2).abs() < 1e-12);
+        assert!((floor.composite - 0.05).abs() < 1e-12, "{}", floor.composite);
+
+        // The order of the replicates does not matter, and a third round, or a
+        // round under another inventory or from a cycle, is not a replicate.
+        let mut other = replicate(2, "d2", 0.0, 0.0);
+        let mut cycle = replicate(2, "d1", 0.0, 0.0);
+        cycle.cycle = Some(1);
+        other.n = 2;
+        let rounds = [
+            replicate(3, "d1", 0.0, 0.0),
+            other,
+            cycle,
+            replicate(2, "d1", 50.0, 0.7),
+            replicate(1, "d1", 60.0, 0.5),
+        ];
+        assert_eq!(floor_of(&rounds, &record).unwrap(), floor);
+        assert_eq!(
+            floor_of(&rounds[..3], &record).err(),
+            Some(RunError::NoFloor)
+        );
+    }
 }
