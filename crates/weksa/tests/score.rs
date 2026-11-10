@@ -822,3 +822,56 @@ fn an_unspaced_script_ends_a_word_beside_any_other_script() {
     assert_eq!(read(&["\u{4e00}\u{301}\u{200d}", "ab"], &items)[0], (2, 2));
     assert_eq!(read(&["\u{4e00}"], &items)[0], (2, 0));
 }
+
+#[test]
+fn round_path_reads_no_test() {
+    let train = item_in("item:a:1", "t", &group_in_bucket(10), cast());
+    let validation = item_in("item:b:1", "v", &group_in_bucket(50), cast());
+    let mut withdrawn = item_in("item:b:2", "w", &group_in_bucket(50), cast());
+    withdrawn.withdrawn = true;
+    let test = item_in("item:c:1", "x", &group_in_bucket(90), cast());
+    let test_two = item_in("item:c:2", "y", &group_in_bucket(90), cast());
+    let reading = |test_score: f64, extra: bool| {
+        let mut scored = vec![
+            (&train, score(10.0, Some(0.5))),
+            (&validation, score(40.0, Some(0.8))),
+            (&withdrawn, score(99.0, Some(0.99))),
+            (&test, score(test_score, Some(0.1))),
+        ];
+        if extra {
+            scored.push((&test_two, score(100.0, Some(1.0))));
+        }
+        aggregate(&scored)
+    };
+    let base = reading(60.0, false);
+    assert_eq!(
+        (base.validation.count, base.validation.chrf),
+        (1, Some(40.0))
+    );
+    assert_eq!(base.validation.meaning, Some(0.8));
+    assert_eq!((base.train.count, base.train.chrf), (1, Some(10.0)));
+    assert_eq!(reading(5.0, false), base, "a Test score moves nothing");
+    assert_eq!(reading(5.0, true), base, "a Test item adds nothing");
+}
+
+#[test]
+fn leak_diagnostic_reads_validation_only() {
+    let test = item_in("item:t:9", HELD_OUT, &group_in_bucket(90), cast());
+    let val = validation("item:v:1", "gardening is quiet work");
+    let mut gone = validation("item:v:2", HELD_OUT);
+    gone.withdrawn = true;
+    let train_item = train("item:t:1", UNRELATED);
+    let items = [test, val.clone(), gone, train_item.clone()];
+
+    let d = leak_diagnostic(&[HELD_OUT], &items);
+    assert_eq!(d.items, 1, "Validation only, withdrawn dropped");
+    assert_ne!(d.max_chrf.as_ref().unwrap().item, "item:t:9");
+    assert_eq!(d.max_chrf.as_ref().unwrap().item, "item:v:1");
+    assert!(d.max_chrf.as_ref().unwrap().chrf < 50.0);
+    assert_eq!(d.worst, None);
+    let without_test = leak_diagnostic(&[HELD_OUT], &[val.clone(), train_item.clone()]);
+    assert_eq!(d, without_test, "removing the Test item changes nothing");
+
+    let on_validation = leak_diagnostic(&["gardening is quiet work"], &items);
+    assert!(on_validation.max_chrf.unwrap().chrf > 99.0);
+}

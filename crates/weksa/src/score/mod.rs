@@ -2,7 +2,9 @@
 //! output against the whole reference. Nothing is deleted, hidden or replaced
 //! before either is read, and the scorer takes no input from a packet, so no
 //! text the output carries can raise a score except by resembling the
-//! reference. No door judges text; the diagnostics report.
+//! reference. No door judges text; the diagnostics report. The round path
+//! (`aggregate`, `leak_diagnostic`) reads Train and Validation; Test is read
+//! only through `TestReadings::at_checkpoint` (convergence-test).
 
 mod chrf;
 mod diagnostics;
@@ -109,32 +111,46 @@ pub struct SplitMean {
     pub meaning: Option<f64>,
 }
 
+/// The round readings a round record may hold. The scorer decides when Test
+/// can be read, by type: `Aggregate` has no Test field.
+///
+/// ```
+/// let agg = weksa::score::aggregate(&[]);
+/// let _ = agg.validation;
+/// ```
+///
+/// ```compile_fail
+/// let agg = weksa::score::aggregate(&[]);
+/// let _ = agg.test;
+/// ```
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Aggregate {
     pub train: SplitMean,
     pub validation: SplitMean,
 }
 
-/// Groups scores by the item's derived split. Items in no split are counted
-/// nowhere. The scorer only groups: the loop decides when Test is read.
-pub fn aggregate(scored: &[(&CorpusItem, ItemScore)]) -> Aggregate {
-    let mean = |want: Split| {
-        let of: Vec<&ItemScore> = scored
-            .iter()
-            .filter(|(item, _)| SplitScheme::V1.split(item) == Some(want))
-            .map(|(_, score)| score)
-            .collect();
-        let average = |values: Vec<f64>| {
-            (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64)
-        };
-        SplitMean {
-            count: of.len(),
-            chrf: average(of.iter().map(|s| s.chrf).collect()),
-            meaning: average(of.iter().filter_map(|s| s.meaning).collect()),
-        }
+/// The mean of the scores of the items read in split `want`.
+fn split_mean(scored: &[(&CorpusItem, ItemScore)], want: Split) -> SplitMean {
+    let of: Vec<&ItemScore> = scored
+        .iter()
+        .filter(|(item, _)| SplitScheme::V1.live(item) == Some(want))
+        .map(|(_, score)| score)
+        .collect();
+    let average = |values: Vec<f64>| {
+        (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64)
     };
+    SplitMean {
+        count: of.len(),
+        chrf: average(of.iter().map(|s| s.chrf).collect()),
+        meaning: average(of.iter().filter_map(|s| s.meaning).collect()),
+    }
+}
+
+/// Groups scores by the split each item is read in. Items read in no split
+/// (withdrawn, or model-written in a Test group) are counted nowhere.
+pub fn aggregate(scored: &[(&CorpusItem, ItemScore)]) -> Aggregate {
     Aggregate {
-        train: mean(Split::Train),
-        validation: mean(Split::Validation),
+        train: split_mean(scored, Split::Train),
+        validation: split_mean(scored, Split::Validation),
     }
 }

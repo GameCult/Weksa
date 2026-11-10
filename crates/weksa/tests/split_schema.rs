@@ -151,3 +151,32 @@ fn published_schemas_match() {
         assert_eq!(held, json, "{name} drifted; run `weksa schema`");
     }
 }
+
+#[test]
+fn live_is_the_split_of_an_item_that_is_not_withdrawn() {
+    for (bucket, want) in [
+        (10, Split::Train),
+        (50, Split::Validation),
+        (90, Split::Test),
+    ] {
+        let group = group_in_bucket(bucket);
+        let live = item(&group, cast());
+        assert_eq!(SplitScheme::V1.live(&live), Some(want));
+        let mut gone = live.clone();
+        gone.withdrawn = true;
+        assert_eq!(
+            SplitScheme::V1.live(&gone),
+            None,
+            "withdrawn: no live split"
+        );
+        assert_eq!(
+            SplitScheme::V1.split(&gone),
+            Some(want),
+            "split still names the group's split"
+        );
+    }
+    let mut model_test = item(&group_in_bucket(90), model());
+    assert_eq!(SplitScheme::V1.live(&model_test), None);
+    model_test.withdrawn = true;
+    assert_eq!(SplitScheme::V1.live(&model_test), None);
+}

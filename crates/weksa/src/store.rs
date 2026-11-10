@@ -958,9 +958,7 @@ impl PacketStore {
                 }
                 .into());
             }
-            let on_item = item.names.iter().any(|n| &n.entity == entity)
-                || &item.speaker == entity
-                || item.prior_turns.iter().any(|t| &t.speaker == entity);
+            let on_item = item.cited_entities().any(|e| e == entity);
             if !on_item {
                 return Err(StoreRefusal::EntityNotOnItem {
                     entity: entity.clone(),

@@ -1,5 +1,6 @@
 //! The train/validation/test split is derived from an item's group and nothing
-//! else. No stored assignment exists, so no writer can reassign one.
+//! else. No stored assignment exists, so no writer can reassign one. An item is
+//! read in its live split; Test is read only under a Checkpoint.
 
 use crate::corpus::{CorpusItem, Source};
 
@@ -49,6 +50,15 @@ impl SplitScheme {
         match self.of_bucket(self.bucket(&item.group)) {
             Split::Test if matches!(item.source, Source::ModelWritten { .. }) => None,
             split => Some(split),
+        }
+    }
+
+    /// The split an item is read in; a withdrawn item is read in none.
+    pub fn live(self, item: &CorpusItem) -> Option<Split> {
+        if item.withdrawn {
+            None
+        } else {
+            self.split(item)
         }
     }
 }
