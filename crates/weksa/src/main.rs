@@ -92,6 +92,10 @@ enum LoopCommand {
         /// rounds only) or tool-less-relay. Pinned in the run's record.
         #[arg(long)]
         lowerer_reach: LowererReach,
+        /// The family of the answering model; rounds count the corpus items
+        /// that family wrote. Defaults to unrecorded.
+        #[arg(long, default_value = "unrecorded")]
+        answerer_family: ModelFamilyArg,
     },
     /// Run one round of the run at ROOT. The stores are read only from the
     /// run's record: the global --corpus, --inventory and --entities are not
@@ -744,6 +748,7 @@ fn main() -> Result<()> {
             answerer,
             embed_model,
             lowerer_reach,
+            answerer_family,
         }) => {
             let run = RunStores::create(
                 &root,
@@ -756,6 +761,7 @@ fn main() -> Result<()> {
                 &answerer,
                 &embed_model,
                 lowerer_reach,
+                answerer_family.into(),
             )?;
             println!("opened run:{}", run.record().label);
         }

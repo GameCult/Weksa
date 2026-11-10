@@ -99,7 +99,7 @@ fn the_recall_probe_covers_all_six_original_items_and_names_no_work() {
         },
         "m",
         "bag",
-        weksa::run::LowererReach::BriefedSubagent,
+        weksa::run::LowererReach::BriefedSubagent, ModelFamily::Unrecorded
     )
     .unwrap();
     let mut model = Unrelated(vec![]);
@@ -111,4 +111,80 @@ fn the_recall_probe_covers_all_six_original_items_and_names_no_work() {
     assert_eq!(model.0.len(), 6);
     assert!(model.0.iter().all(|t| t.contains("work: not published")));
     assert!(model.0.iter().all(|t| !t.contains("translator:")));
+}
+
+/// Answers every prompt with text that is not a draft: nothing is admitted, so
+/// the round measures only what is counted before admission.
+struct Nope;
+
+impl weksa::model::ModelPort for Nope {
+    fn model(&self) -> &str {
+        "nope"
+    }
+    fn answer(
+        &mut self,
+        _: &weksa::context::Prompt,
+    ) -> Result<String, weksa::model::PortError> {
+        Ok("not a draft".to_string())
+    }
+}
+
+struct Bag;
+
+impl weksa::score::Embedder for Bag {
+    fn model(&self) -> &str {
+        "bag"
+    }
+    fn embed(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+        Ok(texts.iter().map(|_| vec![1.0]).collect())
+    }
+}
+
+fn original_round(family: ModelFamily) -> (weksa::run::RunStores, weksa::run::RoundRecord) {
+    use weksa::run::{LowererReach, RoundOutcome, RunPaths, RunStores, round};
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/original");
+    let tmp = tempfile::tempdir().unwrap().keep();
+    for f in ["corpus.cc", "entity.cc", "inventory.cc"] {
+        std::fs::copy(src.join(f), tmp.join(f)).unwrap();
+    }
+    let mut run = RunStores::create(
+        &tmp.join("run"),
+        "orig",
+        RunPaths {
+            corpus: &tmp.join("corpus.cc"),
+            inventory: &tmp.join("inventory.cc"),
+            entities: &tmp.join("entity.cc"),
+        },
+        "nope",
+        "bag",
+        LowererReach::ToolLessRelay,
+        family,
+    )
+    .unwrap();
+    let scorer = weksa::score::Scorer::new(Bag);
+    match round(&mut run, &mut Nope, &scorer).unwrap() {
+        RoundOutcome::Recorded(r) => (run, r),
+        RoundOutcome::Unanswered { .. } => panic!("answered"),
+    }
+}
+
+#[test]
+fn own_family_counts_and_labels() {
+    // The original corpus is six Anthropic-written items, all offered.
+    let (run, r) = original_round(ModelFamily::Anthropic);
+    assert_eq!(r.own_family(), 6);
+    assert_eq!(
+        r.parse_reasons().iter().map(|c| c.count).sum::<u32>(),
+        6,
+        "every item was refused at Parse and says why"
+    );
+    let line = run.round_line(&r);
+    assert!(line.contains(" own-family 6"), "{line}");
+
+    // A different answerer family, or none recorded, labels nothing.
+    for family in [ModelFamily::OpenAi, ModelFamily::Unrecorded] {
+        let (run, r) = original_round(family);
+        assert_eq!(r.own_family(), 0);
+        assert!(!run.round_line(&r).contains("own-family"));
+    }
 }

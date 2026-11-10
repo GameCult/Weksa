@@ -86,7 +86,7 @@ Answer with one JSON object and nothing else: {\"text\": \"...\"}, the continuat
 /// # let p = |n: &str| dir.path().join(n);
 /// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
 /// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
-/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay).unwrap();
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded).unwrap();
 /// let t = run.train().unwrap();
 /// assert!(t.is_empty());
 /// ```
@@ -100,7 +100,7 @@ Answer with one JSON object and nothing else: {\"text\": \"...\"}, the continuat
 /// # let p = |n: &str| dir.path().join(n);
 /// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
 /// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
-/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay).unwrap();
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded).unwrap();
 /// let t = run.train().unwrap();
 /// let _u = t.clone();
 /// ```
@@ -111,7 +111,7 @@ Answer with one JSON object and nothing else: {\"text\": \"...\"}, the continuat
 /// # let p = |n: &str| dir.path().join(n);
 /// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
 /// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
-/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay).unwrap();
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded).unwrap();
 /// let t = run.train().unwrap();
 /// s(&t);
 /// ```
@@ -317,7 +317,7 @@ impl EditFeedback {
 /// # let p = |n: &str| dir.path().join(n);
 /// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
 /// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
-/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay).unwrap();
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded).unwrap();
 /// let t = run.train().unwrap();
 /// let inv = run.inventory().inventory().unwrap();
 /// let feedback = weksa::context::EditFeedback::none();
@@ -335,7 +335,7 @@ impl EditFeedback {
 /// # let p = |n: &str| dir.path().join(n);
 /// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
 /// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
-/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay).unwrap();
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded).unwrap();
 /// let t = run.train().unwrap();
 /// let inv = run.inventory().inventory().unwrap();
 /// let feedback = weksa::context::EditFeedback::none();
@@ -348,7 +348,7 @@ impl EditFeedback {
 /// # let p = |n: &str| dir.path().join(n);
 /// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
 /// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
-/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay).unwrap();
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded).unwrap();
 /// let t = run.train().unwrap();
 /// let inv = run.inventory().inventory().unwrap();
 /// let feedback = weksa::context::EditFeedback::none();

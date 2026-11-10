@@ -218,7 +218,7 @@
           ]
         },
         {
-          "description": "Labelled model output; never in the test split, never judged by its own family.\n`family` is `Unrecorded` when nothing records one. `generator` is the\nstring the fixture or run wrote, kept verbatim.",
+          "description": "Labelled model output; never in the test split. The rule that it is\nnever judged by its own family binds model judges and the split; a\ndeterministic scorer refuses nothing, so the loop labels (the round\ncounts items of the answerer's family) and does not forbid.\n`family` is `Unrecorded` when nothing records one. `generator` is the\nstring the fixture or run wrote, kept verbatim.",
           "type": "object",
           "properties": {
             "ModelWritten": {

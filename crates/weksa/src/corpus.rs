@@ -43,7 +43,10 @@ pub enum Source {
         translator: String,
         edition_year: u16,
     },
-    /// Labelled model output; never in the test split, never judged by its own family.
+    /// Labelled model output; never in the test split. The rule that it is
+    /// never judged by its own family binds model judges and the split; a
+    /// deterministic scorer refuses nothing, so the loop labels (the round
+    /// counts items of the answerer's family) and does not forbid.
     /// `family` is `Unrecorded` when nothing records one. `generator` is the
     /// string the fixture or run wrote, kept verbatim.
     ModelWritten {
@@ -54,7 +57,7 @@ pub enum Source {
 }
 
 /// The family of the model that wrote a line.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum ModelFamily {
     Anthropic,
     OpenAi,
@@ -63,6 +66,7 @@ pub enum ModelFamily {
     Meta,
     Mistral,
     /// Nothing records which family wrote the line.
+    #[default]
     Unrecorded,
 }
 
