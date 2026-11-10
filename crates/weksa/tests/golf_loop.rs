@@ -257,6 +257,35 @@ fn create_refuses_a_root_that_holds_an_inventory_and_never_truncates_it() {
     assert_eq!(std::fs::read(&dao.inventory).unwrap(), bytes);
 }
 
+#[test]
+fn a_create_that_fails_leaves_no_inventory_and_the_retry_succeeds() {
+    let dao = dao();
+    let root = dao.root.join("retry");
+    std::fs::create_dir_all(&root).unwrap();
+    let create = |inventory: &Path, entities: &Path| {
+        RunStores::create(
+            &root,
+            "x",
+            RunPaths {
+                corpus: &dao.corpus,
+                inventory,
+                entities,
+            },
+            "fake-model",
+            "bag",
+        )
+    };
+    // A directory opens for reading and fails mid-copy, after the destination exists.
+    let dir = dao.root.join("a-directory");
+    std::fs::create_dir_all(&dir).unwrap();
+    assert!(create(&dir, &dao.entities).is_err());
+    assert!(!root.join("inventory.cc").exists());
+    // A directory as the entities store fails after the inventory was copied.
+    assert!(create(&dao.inventory, &dir).is_err());
+    assert!(!root.join("inventory.cc").exists());
+    assert!(create(&dao.inventory, &dao.entities).is_ok());
+}
+
 /// `weksa.loop_run` as it was before the run kept its own inventory copy: keys
 /// 0 to 10.
 #[derive(Clone, cultcache_rs::DatabaseEntry)]

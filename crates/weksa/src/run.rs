@@ -428,7 +428,11 @@ fn copy_new(from: &Path, to: &Path) -> Result<(), RunError> {
         .create_new(true)
         .open(to)
         .map_err(io)?;
-    std::io::copy(&mut source, &mut dest).map_err(io)?;
+    if let Err(e) = std::io::copy(&mut source, &mut dest) {
+        // The file is ours (create_new made it): a half copy must not block a retry.
+        let _ = std::fs::remove_file(to);
+        return Err(io(e));
+    }
     Ok(())
 }
 
@@ -472,16 +476,24 @@ impl RunStores {
         // The run works on its own copy; the caller's store is never opened again.
         let head = root.join(INVENTORY_FILE);
         copy_new(Path::new(&record.inventory), &head)?;
-        let record = RunRecord {
-            corpus_digest: file_digest(&record.corpus).ok_or(RunError::Store)?,
-            entity_digest: file_digest(&record.entities).ok_or(RunError::Store)?,
-            inventory_digest: file_digest_at(&head).ok_or(RunError::Store)?,
-            ..record
-        };
-        cache
-            .put(format!("run:{label}"), &record)
-            .map_err(|_| RunError::Store)?;
-        Self::with(root, cache, record)
+        // The copy is ours from here: any later failure takes it away again, or
+        // it would refuse every retry.
+        let pinned = (|| {
+            let record = RunRecord {
+                corpus_digest: file_digest(&record.corpus).ok_or(RunError::Store)?,
+                entity_digest: file_digest(&record.entities).ok_or(RunError::Store)?,
+                inventory_digest: file_digest_at(&head).ok_or(RunError::Store)?,
+                ..record
+            };
+            cache
+                .put(format!("run:{label}"), &record)
+                .map_err(|_| RunError::Store)?;
+            Self::with(root, cache, record)
+        })();
+        if pinned.is_err() {
+            let _ = std::fs::remove_file(&head);
+        }
+        pinned
     }
 
     /// Reopens the run at `root` from its record, refusing when a pinned store
