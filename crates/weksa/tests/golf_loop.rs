@@ -1642,15 +1642,23 @@ fn two_accepts_make_the_latest_the_head_and_a_reject_after_them_is_told_so() {
     assert_eq!(d3.verdict(), Verdict::Rejected(Why::NoGain));
     assert_eq!(head_rev(&dao.root), 5, "a reject moves nothing");
 
-    // The editor's last-edit word comes from the latest decision (see cycle 4).
+    // Cycle 4 is told by the latest decision alone: cycle 3's reject, not cycle
+    // 2's accept, and the composite at the head, which the reject did not move.
+    let d4 = step(&mut dao, 6, &good_answers());
+    assert_eq!((d4.k(), d4.base_round(), d4.base_rev()), (4, 4, 5));
     let rounds = dao.run.rounds().unwrap();
     let mints = mint_texts(&model);
-    assert_eq!(mints.len(), 3);
+    assert_eq!(mints.len(), 4);
     assert!(mints[0].contains(&feedback_line("none", &rounds[0])));
     assert!(mints[1].contains(&feedback_line("accepted", &rounds[2])));
     assert!(mints[2].contains(&feedback_line("accepted", &rounds[3])));
+    assert!(
+        mints[3].contains(&feedback_line("rejected", &rounds[3])),
+        "{}",
+        mints[3]
+    );
     assert!(mints[1].contains("\n\ninventory rev:4\n"));
-    assert!(mints[2].contains("\n\ninventory rev:5\n"));
+    assert!(mints[3].contains("\n\ninventory rev:5\n"));
 }
 
 #[test]
