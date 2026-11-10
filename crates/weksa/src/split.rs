@@ -93,8 +93,9 @@ impl SplitScheme {
 /// let _ = weksa::split::Checkpoint::declare(1);
 /// ```
 ///
-/// The test constructor is not exported (its name today; the door scan in
-/// `tests/checkpoint_door.rs` pins the shape under any name):
+/// The test constructor is not exported (this doctest names it today; the
+/// line-based tripwire in `tests/checkpoint_door.rs` catches only common
+/// single-line forms of a new public constructor):
 ///
 /// ```compile_fail
 /// let _ = weksa::split::Checkpoint::for_test(1);

@@ -1,7 +1,13 @@
-//! The Checkpoint door is pinned by source shape, not by a name: no public item
-//! of the lib can mint one, and nothing may derive, implement or default one.
-//! `Checkpoint::for_test` is `cfg(test)`; a doctest names it today, and this
-//! scan catches a rename.
+//! A line-based tripwire on the Checkpoint door, not a proof. The real defence
+//! is that `Checkpoint::for_test` is `cfg(test)`, pinned by the compile_fail
+//! doctest on its current name in `split.rs`. This scan reads `split.rs` line by
+//! line and catches the common single-line forms: a `pub fn` in `impl
+//! Checkpoint` whose signature line says `-> Self` or `-> Checkpoint` without
+//! `cfg(test)` above it, a trait impl for `Checkpoint`, a derive on it, a `pub`
+//! field in its braces, and a `-> Checkpoint` line in any other `src` file. It
+//! misses: signatures wrapped over several lines, `Option`, `Box`, `Result` or
+//! tuple returns from `split.rs`, tuple structs with `pub` fields, and
+//! constructors made by macros.
 
 /// Why `src` lets code outside the lib make a `Checkpoint`, if it does.
 fn door_leaks(split_rs: &str) -> Vec<String> {
