@@ -254,6 +254,10 @@ fn lower_error(e: &LowerError) -> Value {
         LowerError::NoForm { entity } => ("NoForm", format!("{entity} has no en-US form")),
         LowerError::NoPronunciation { entity } => ("NoPronunciation", format!("{entity} has no ruled en-US pronunciation")),
         LowerError::NoEntityReferent => ("NoEntityReferent", "the packet cites no entity".to_string()),
+        LowerError::UnknownPhone { entity, at, .. } => ("UnknownPhone", format!("the ruled pronunciation of {entity} holds a symbol at {at} with no listed phone")),
+        LowerError::DanglingStress { entity, at } => ("DanglingStress", format!("the ruled pronunciation of {entity} has a stress mark at {at} with no vowel after it")),
+        LowerError::ConsentMissing { predication } => ("ConsentMissing", format!("{predication} is a request the packet does not carry the addressee's consent to")),
+        LowerError::AskerNotAddressee { predication } => ("AskerNotAddressee", format!("the agent of {predication} is not the addressee")),
         LowerError::EntityRead { entity, why } => ("EntityRead", format!("reading {entity}: {why}")),
     };
     json!({ "variant": variant, "reason": reason, "debug": format!("{e:?}") })
