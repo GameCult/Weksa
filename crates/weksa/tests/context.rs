@@ -1,15 +1,14 @@
 mod common;
 
 use common::{cast, ent, entities_in, group_in_bucket, item_in, model, world};
-use weksa::context::{EncoderOffer, OfferRefusal, Prompt, TrainItems};
-use weksa::split::Checkpoint;
+use weksa::context::{
+    ENCODE_INSTRUCTIONS as ENCODE, EncoderOffer, MINT_INSTRUCTIONS as MINT, OfferRefusal, Prompt,
+    TrainItems,
+};
 use weksa::{
     CorpusItem, CorpusItemId, CorpusStore, NameSpan, PacketId, PacketStore, StoreError,
     StoreRefusal, Turn,
 };
-
-const MINT: &str = "Mint glosses from the lines below.";
-const ENCODE: &str = "Encode the line below.";
 
 struct Corpus {
     _dir: tempfile::TempDir,
@@ -109,15 +108,15 @@ fn train_items_are_in_key_order() {
     let none = CorpusStore::open(&dir.path().join("c.cc")).unwrap();
     let none = TrainItems::from_corpus(&none).unwrap();
     assert_eq!((none.len(), none.is_empty()), (0, true));
-    assert_eq!(Prompt::mint(MINT, &none).text(), MINT);
-    assert!(Prompt::mint(MINT, &none).item_keys().is_empty());
+    assert_eq!(Prompt::mint(&none).text(), MINT);
+    assert!(Prompt::mint(&none).item_keys().is_empty());
 }
 
 #[test]
 fn mint_prompt_holds_train_text_only() {
     let c = corpus();
     let t = TrainItems::from_corpus(&c.store).unwrap();
-    let p = Prompt::mint(MINT, &t);
+    let p = Prompt::mint(&t);
     assert!(p.text().starts_with(MINT));
     assert!(p.text().contains("alphamarker"));
     for other in ["betamarker", "gammamarker", "deltamarker", "epsilonmarker"] {
@@ -145,25 +144,24 @@ fn prompts_render_deterministically() {
         .unwrap();
     let t = TrainItems::from_corpus(&store).unwrap();
     assert_eq!(
-        Prompt::mint(MINT, &t).text(),
+        Prompt::mint(&t).text(),
         format!(
             "{MINT}\n\n[item:a:1] entity:nibu: Hello there.\n\n[item:a:2] entity:nibu: Second line."
         )
     );
-    assert_eq!(Prompt::mint(MINT, &t).item_keys(), ["item:a:1", "item:a:2"]);
+    assert_eq!(Prompt::mint(&t).item_keys(), ["item:a:1", "item:a:2"]);
 
     let offer = EncoderOffer::for_round(&store.get("item:a:2").unwrap().unwrap()).unwrap();
     assert_eq!(
-        Prompt::encode(ENCODE, &offer, &t).text(),
+        Prompt::encode(&offer, &t).text(),
         format!("{ENCODE}\n\n[item:a:2] entity:nibu: Second line.\n\nentities: entity:nibu")
     );
-    assert_eq!(Prompt::encode(ENCODE, &offer, &t).item_keys(), ["item:a:2"]);
+    assert_eq!(Prompt::encode(&offer, &t).item_keys(), ["item:a:2"]);
 }
 
 #[test]
 fn encoder_offer_split_gate() {
     let c = corpus();
-    let cp = Checkpoint::declare(1);
     let train = get(&c, "item:a:1");
     let validation = get(&c, "item:b:1");
     let test = get(&c, "item:c:1");
@@ -171,7 +169,6 @@ fn encoder_offer_split_gate() {
     let withdrawn = get(&c, "item:a:2");
     assert!(withdrawn.withdrawn);
     let round = |i: &CorpusItem| EncoderOffer::for_round(i).err();
-    let check = |i: &CorpusItem| EncoderOffer::for_checkpoint(i, &cp).err();
 
     assert_eq!(round(&train), None);
     assert_eq!(round(&validation), None);
@@ -179,17 +176,10 @@ fn encoder_offer_split_gate() {
     assert_eq!(round(&no_split), Some(OfferRefusal::NoSplit));
     assert_eq!(round(&withdrawn), Some(OfferRefusal::Withdrawn));
 
-    assert_eq!(check(&train), None);
-    assert_eq!(check(&validation), None);
-    assert_eq!(check(&test), None);
-    assert_eq!(check(&no_split), Some(OfferRefusal::NoSplit));
-    assert_eq!(check(&withdrawn), Some(OfferRefusal::Withdrawn));
-
     // Withdrawn wins over NoSplit.
     let mut both = no_split.clone();
     both.withdrawn = true;
     assert_eq!(round(&both), Some(OfferRefusal::Withdrawn));
-    assert_eq!(check(&both), Some(OfferRefusal::Withdrawn));
     // A withdrawn Test item is Withdrawn, not TestBeforeCheckpoint.
     let mut test_gone = test.clone();
     test_gone.withdrawn = true;
@@ -256,7 +246,7 @@ fn encoder_offer_entities_are_the_items_own() {
         "a sibling's entity is not the item's"
     );
     assert_eq!(offer.key(), "item:a:1");
-    let p = Prompt::encode(ENCODE, &offer, &t);
+    let p = Prompt::encode(&offer, &t);
     assert!(
         p.text()
             .ends_with("entities: entity:brokkr, entity:hero, entity:kay")
@@ -359,7 +349,7 @@ fn prior_turns_print_only_text_a_live_train_item_holds() {
     store.withdraw("item:a:1").unwrap();
 
     let t = TrainItems::from_corpus(&store).unwrap();
-    let mint = Prompt::mint(MINT, &t);
+    let mint = Prompt::mint(&t);
     for secret in ["withdrawnsecret", "testsecret", "validation reply"] {
         assert!(!mint.text().contains(secret), "mint printed {secret}");
     }
@@ -370,7 +360,7 @@ fn prior_turns_print_only_text_a_live_train_item_holds() {
 
     let encode = |key: &str| {
         let item = store.get(key).unwrap().unwrap();
-        Prompt::encode(ENCODE, &EncoderOffer::for_round(&item).unwrap(), &t)
+        Prompt::encode(&EncoderOffer::for_round(&item).unwrap(), &t)
             .text()
             .to_string()
     };
@@ -407,6 +397,6 @@ fn prior_turn_match_uses_the_stores_text_key() {
     }];
     store.add(reply.clone(), &entities).unwrap();
     let t = TrainItems::from_corpus(&store).unwrap();
-    let p = Prompt::encode(ENCODE, &EncoderOffer::for_round(&reply).unwrap(), &t);
+    let p = Prompt::encode(&EncoderOffer::for_round(&reply).unwrap(), &t);
     assert!(p.text().contains("entity:brokkr: context line"));
 }

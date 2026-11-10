@@ -1,6 +1,7 @@
 //! The train/validation/test split is derived from an item's group and nothing
 //! else. No stored assignment exists, so no writer can reassign one. An item is
-//! read in its live split; Test is read only under a Checkpoint.
+//! read in its live split; Test is read only under a Checkpoint, and only the
+//! lib can make one (convergence-freeze adds the door).
 
 use crate::corpus::{CorpusItem, Source};
 
@@ -63,44 +64,101 @@ impl SplitScheme {
     }
 }
 
-/// Permission to read Test once. The loop declares one at a convergence
-/// checkpoint (convergence-test); `TestReadings::at_checkpoint` consumes it, so
-/// one declaration buys one Test reading, and `EncoderOffer::for_checkpoint`
-/// borrows it first.
+/// Permission to read Test once. Only the weksa lib can make one: there is no
+/// public constructor, so nothing outside it (the binary, a driver crate, a
+/// doctest, an integration test) can read Test. The one door is added by
+/// convergence-freeze, which builds a `Checkpoint` from the convergence window
+/// over the run's persisted round records (convergence-test).
+/// `TestReadings::at_checkpoint` consumes it, so one `Checkpoint` buys one Test
+/// reading.
+///
+/// ```
+/// fn f(c: &weksa::split::Checkpoint) -> u32 { c.round() }
+/// ```
+///
+/// No public constructor:
+///
+/// ```compile_fail
+/// let _ = weksa::split::Checkpoint::declare(1);
+/// ```
+///
+/// One reading per checkpoint:
 ///
 /// ```
 /// use weksa::score::TestReadings;
 /// use weksa::split::Checkpoint;
-/// let c = Checkpoint::declare(3);
-/// assert_eq!(c.round(), 3);
-/// let _ = TestReadings::at_checkpoint(c, &[], &[], &[]);
+/// fn f(c: Checkpoint) { let _ = TestReadings::at_checkpoint(c, &[], &[], &[]); }
 /// ```
-///
-/// One declaration, one reading:
 ///
 /// ```compile_fail
 /// use weksa::score::TestReadings;
 /// use weksa::split::Checkpoint;
-/// let c = Checkpoint::declare(3);
-/// let _ = TestReadings::at_checkpoint(c, &[], &[], &[]);
-/// let _ = TestReadings::at_checkpoint(c, &[], &[], &[]);
+/// fn f(c: Checkpoint) {
+///     let _ = TestReadings::at_checkpoint(c, &[], &[], &[]);
+///     let _ = TestReadings::at_checkpoint(c, &[], &[], &[]);
+/// }
 /// ```
 ///
 /// ```compile_fail
-/// use weksa::split::Checkpoint;
-/// let c = Checkpoint::declare(3);
-/// let _again = c.clone();
+/// fn f(c: weksa::split::Checkpoint) { let _ = c.clone(); }
 /// ```
 pub struct Checkpoint {
     round: u32,
 }
 
 impl Checkpoint {
-    pub fn declare(round: u32) -> Self {
+    #[cfg(test)]
+    pub(crate) fn for_test(round: u32) -> Self {
         Self { round }
     }
 
     pub fn round(&self) -> u32 {
         self.round
+    }
+}
+
+/// Item builders for the unit tests that live in `src`: the twins of
+/// `tests/common`'s `group_in_bucket`, `item_in`, `cast` and `model`.
+#[cfg(test)]
+pub(crate) mod fixture {
+    use super::{Split, SplitScheme};
+    use crate::corpus::{CorpusItem, ModelFamily, Source};
+    use crate::packet::EntityId;
+
+    /// The first group `g<i>` whose V1 bucket is in `split`.
+    pub(crate) fn group_in(split: Split) -> String {
+        (0..100_000)
+            .map(|i| format!("g{i}"))
+            .find(|g| SplitScheme::V1.of_bucket(SplitScheme::V1.bucket(g)) == split)
+            .unwrap()
+    }
+
+    pub(crate) fn item(key: &str, text: &str, group: &str, model_written: bool) -> CorpusItem {
+        let source = if model_written {
+            Source::ModelWritten {
+                family: ModelFamily::Unrecorded,
+                generator: None,
+                prompt_digest: None,
+            }
+        } else {
+            Source::CastAuthored {
+                persona: "nibu".into(),
+                fixture: "f.yaml".into(),
+                author: "Ada Writer".into(),
+            }
+        };
+        CorpusItem {
+            id: key.into(),
+            text: text.into(),
+            language: "en-US".into(),
+            speaker: EntityId::parse("entity:nibu").unwrap(),
+            names: vec![],
+            group: group.into(),
+            prior_turns: vec![],
+            source,
+            admitted_on: "2026-10-29".into(),
+            supersedes: None,
+            withdrawn: false,
+        }
     }
 }

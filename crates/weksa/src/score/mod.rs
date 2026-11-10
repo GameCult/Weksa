@@ -158,37 +158,27 @@ pub fn aggregate(scored: &[(&CorpusItem, ItemScore)]) -> Aggregate {
 /// The Test split's readings, scalars only: no item key, no minted string, no
 /// pair. The checkpoint decision (convergence-test) needs numbers; a key beside
 /// a minted string is the handle an edit step would act on. The only producer
-/// is `at_checkpoint`, which consumes a `Checkpoint`.
+/// is `at_checkpoint`, which consumes a `Checkpoint`, which only the lib can make.
 ///
 /// ```
 /// use weksa::score::TestReadings;
-/// use weksa::split::Checkpoint;
+/// fn f(t: TestReadings) -> usize { t.count() }
+/// ```
+///
+/// ```compile_fail
+/// use weksa::score::TestReadings;
+/// fn f(t: TestReadings) { let _u = t.clone(); }
+/// ```
+///
+/// ```compile_fail
+/// use weksa::score::TestReadings;
+/// fn f(t: TestReadings) { let _ = format!("{t:?}"); }
+/// ```
+///
+/// ```compile_fail
+/// use weksa::score::TestReadings;
 /// fn s<T: serde::Serialize>(_: &T) {}
-/// let t = TestReadings::at_checkpoint(Checkpoint::declare(1), &[], &[], &[]);
-/// assert_eq!(t.count(), 0);
-/// s(&0u8);
-/// ```
-///
-/// ```compile_fail
-/// use weksa::score::TestReadings;
-/// use weksa::split::Checkpoint;
-/// let t = TestReadings::at_checkpoint(Checkpoint::declare(1), &[], &[], &[]);
-/// let _u = t.clone();
-/// ```
-///
-/// ```compile_fail
-/// use weksa::score::TestReadings;
-/// use weksa::split::Checkpoint;
-/// let t = TestReadings::at_checkpoint(Checkpoint::declare(1), &[], &[], &[]);
-/// let _ = format!("{t:?}");
-/// ```
-///
-/// ```compile_fail
-/// use weksa::score::TestReadings;
-/// use weksa::split::Checkpoint;
-/// fn s<T: serde::Serialize>(_: &T) {}
-/// let t = TestReadings::at_checkpoint(Checkpoint::declare(1), &[], &[], &[]);
-/// s(&t);
+/// fn f(t: TestReadings) { s(&t); }
 /// ```
 pub struct TestReadings {
     mean: SplitMean,
@@ -238,5 +228,98 @@ impl TestReadings {
 
     pub fn coverage_by_n(&self) -> &[OrderCoverage] {
         &self.leak.coverage_by_n
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::split::fixture::{group_in, item};
+
+    const HELD_OUT: &str = "extraordinary lighthouse keepers whispered unforgettable stories throughout midnight thunderstorms before surrendering peacefully";
+    const UNRELATED: &str = "harbor ledgers record ordinary tides";
+
+    fn score(chrf: f64, meaning: Option<f64>) -> ItemScore {
+        ItemScore { chrf, meaning }
+    }
+
+    fn in_split(key: &str, text: &str, split: Split, model: bool) -> CorpusItem {
+        item(key, text, &group_in(split), model)
+    }
+
+    #[test]
+    fn test_readings_at_checkpoint() {
+        let train_item = in_split("item:t:1", UNRELATED, Split::Train, false);
+        let test = in_split("item:c:1", HELD_OUT, Split::Test, false);
+        let test_model = in_split("item:c:2", "model words here", Split::Test, true);
+        let mut gone = in_split("item:c:3", "withdrawn words", Split::Test, false);
+        gone.withdrawn = true;
+        let val = in_split(
+            "item:v:1",
+            "gardening is quiet work",
+            Split::Validation,
+            false,
+        );
+        let items = [
+            train_item.clone(),
+            test.clone(),
+            test_model.clone(),
+            gone.clone(),
+            val.clone(),
+        ];
+        let scored = [
+            (&train_item, score(10.0, Some(0.5))),
+            (&val, score(40.0, Some(0.8))),
+            (&test, score(60.0, Some(0.6))),
+            (&test_model, score(100.0, Some(1.0))),
+            (&gone, score(90.0, Some(0.9))),
+        ];
+        let t = TestReadings::at_checkpoint(Checkpoint::for_test(2), &scored, &[HELD_OUT], &items);
+        assert_eq!(
+            (t.count(), t.chrf(), t.meaning()),
+            (1, Some(60.0), Some(0.6))
+        );
+        assert_eq!(
+            t.items(),
+            1,
+            "model-written and withdrawn Test items are excluded"
+        );
+        assert!(t.max_chrf().unwrap() > 99.0);
+        assert_eq!(t.coverage_by_n()[2].share, Some(1.0));
+
+        // A minted string that is not the Test text reads low.
+        let t = TestReadings::at_checkpoint(Checkpoint::for_test(2), &scored, &["zzz"], &items);
+        assert!(t.max_chrf().unwrap() < 20.0);
+        assert_eq!(t.coverage_by_n()[2].share, Some(0.0));
+
+        let empty = TestReadings::at_checkpoint(Checkpoint::for_test(2), &[], &[HELD_OUT], &[]);
+        assert_eq!(
+            (empty.count(), empty.chrf(), empty.meaning()),
+            (0, None, None)
+        );
+        assert_eq!((empty.items(), empty.max_chrf()), (0, None));
+    }
+
+    #[test]
+    fn validation_and_test_leak_agree_in_method() {
+        // The same text and minted strings, once in Validation and once in
+        // Test, read the same numbers.
+        let words: Vec<&str> = HELD_OUT.split(' ').collect();
+        let chunks: Vec<String> = words.chunks(3).map(|c| c.join(" ")).collect();
+        let minted: Vec<&str> = chunks.iter().map(String::as_str).collect();
+        let train_item = in_split("item:t:1", UNRELATED, Split::Train, false);
+        let v = leak_diagnostic(
+            &minted,
+            &[
+                in_split("item:v:1", HELD_OUT, Split::Validation, false),
+                train_item.clone(),
+            ],
+        );
+        let test = in_split("item:c:1", HELD_OUT, Split::Test, false);
+        let t =
+            TestReadings::at_checkpoint(Checkpoint::for_test(1), &[], &minted, &[test, train_item]);
+        assert_eq!(t.items(), v.items);
+        assert_eq!(t.max_chrf(), v.max_chrf.as_ref().map(|p| p.chrf));
+        assert_eq!(t.coverage_by_n(), v.coverage_by_n.as_slice());
     }
 }

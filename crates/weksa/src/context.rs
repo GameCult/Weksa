@@ -2,14 +2,21 @@
 //! model call only as a [`Prompt`], and a `Prompt` is made only by minting from
 //! [`TrainItems`] or by encoding one item an [`EncoderOffer`] holds: Train-only
 //! minting and per-item encoding (leak-owned-by-flow-and-scorer-3,
-//! loop-context-builder-2). Instruction wording is not written here; a caller
-//! passes `&'static str`, so the templates are fixed at compile time and hence
-//! within a run.
+//! loop-context-builder-2). Instruction text is [`MINT_INSTRUCTIONS`] and
+//! [`ENCODE_INSTRUCTIONS`], consts in this module, and nothing else: `mint` and
+//! `encode` take none, so no run-time text can become instructions.
 
 use crate::corpus::CorpusItem;
 use crate::packet::EntityId;
 use crate::split::{Checkpoint, Split, SplitScheme};
 use crate::store::{CorpusStore, normalized};
+
+/// The instructions a mint prompt starts with. golf-loop-en edits the wording
+/// here.
+pub const MINT_INSTRUCTIONS: &str = "Mint glosses from the lines below.";
+
+/// The instructions an encode prompt starts with.
+pub const ENCODE_INSTRUCTIONS: &str = "Encode the line below.";
 
 /// The live Train items of a corpus, in key order. The only input minting
 /// reads; it cannot be built from a slice, and no accessor returns text or an
@@ -145,17 +152,17 @@ impl EncoderOffer {
 /// let dir = tempfile::tempdir().unwrap();
 /// let store = weksa::CorpusStore::open(&dir.path().join("c.cc")).unwrap();
 /// let t = weksa::context::TrainItems::from_corpus(&store).unwrap();
-/// let p = weksa::context::Prompt::mint("Mint.", &t);
-/// assert_eq!(p.text(), "Mint.");
+/// let p = weksa::context::Prompt::mint(&t);
+/// assert_eq!(p.text(), weksa::context::MINT_INSTRUCTIONS);
 /// ```
 ///
-/// Instructions are compile-time text:
+/// Instructions are not a parameter:
 ///
 /// ```compile_fail
 /// let dir = tempfile::tempdir().unwrap();
 /// let store = weksa::CorpusStore::open(&dir.path().join("c.cc")).unwrap();
 /// let t = weksa::context::TrainItems::from_corpus(&store).unwrap();
-/// let p = weksa::context::Prompt::mint(&String::from("x"), &t);
+/// let p = weksa::context::Prompt::mint("x", &t);
 /// ```
 ///
 /// ```compile_fail
@@ -163,7 +170,7 @@ impl EncoderOffer {
 /// let dir = tempfile::tempdir().unwrap();
 /// let store = weksa::CorpusStore::open(&dir.path().join("c.cc")).unwrap();
 /// let t = weksa::context::TrainItems::from_corpus(&store).unwrap();
-/// let p = weksa::context::Prompt::mint("x", &t);
+/// let p = weksa::context::Prompt::mint(&t);
 /// s(&p);
 /// ```
 pub struct Prompt {
@@ -197,9 +204,9 @@ fn block(item: &CorpusItem, prior: Option<&TrainItems>) -> String {
 const ELIDED: &str = "[elided]";
 
 impl Prompt {
-    /// Instructions, then every Train item in key order.
-    pub fn mint(instructions: &'static str, train: &TrainItems) -> Prompt {
-        let mut parts = vec![instructions.to_string()];
+    /// [`MINT_INSTRUCTIONS`], then every Train item in key order.
+    pub fn mint(train: &TrainItems) -> Prompt {
+        let mut parts = vec![MINT_INSTRUCTIONS.to_string()];
         parts.extend(train.items.iter().map(|item| block(item, None)));
         Prompt {
             text: parts.join("\n\n"),
@@ -207,13 +214,13 @@ impl Prompt {
         }
     }
 
-    /// Instructions, the one offered item with its prior turns resolved
+    /// [`ENCODE_INSTRUCTIONS`], the one offered item with its prior turns resolved
     /// against `train`, and the entities a packet for it may cite.
-    pub fn encode(instructions: &'static str, offer: &EncoderOffer, train: &TrainItems) -> Prompt {
+    pub fn encode(offer: &EncoderOffer, train: &TrainItems) -> Prompt {
         let ids: Vec<&str> = offer.entities.iter().map(EntityId::as_str).collect();
         Prompt {
             text: format!(
-                "{instructions}\n\n{}\n\nentities: {}",
+                "{ENCODE_INSTRUCTIONS}\n\n{}\n\nentities: {}",
                 block(&offer.item, Some(train)),
                 ids.join(", ")
             ),
@@ -228,5 +235,32 @@ impl Prompt {
     /// The keys of the items the text holds; what a round record lists.
     pub fn item_keys(&self) -> &[String] {
         &self.items
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::split::fixture::{group_in, item};
+
+    #[test]
+    fn checkpoint_offer_gate() {
+        let cp = Checkpoint::for_test(1);
+        let check = |i: &CorpusItem| EncoderOffer::for_checkpoint(i, &cp).err();
+        let train = item("item:a:1", "t", &group_in(Split::Train), false);
+        let validation = item("item:b:1", "v", &group_in(Split::Validation), false);
+        let test = item("item:c:1", "x", &group_in(Split::Test), false);
+        let no_split = item("item:c:2", "m", &group_in(Split::Test), true);
+        let mut withdrawn = item("item:a:2", "w", &group_in(Split::Train), false);
+        withdrawn.withdrawn = true;
+        assert_eq!(check(&train), None);
+        assert_eq!(check(&validation), None);
+        assert_eq!(check(&test), None);
+        assert_eq!(check(&no_split), Some(OfferRefusal::NoSplit));
+        assert_eq!(check(&withdrawn), Some(OfferRefusal::Withdrawn));
+        // Withdrawn wins over NoSplit.
+        let mut both = no_split.clone();
+        both.withdrawn = true;
+        assert_eq!(check(&both), Some(OfferRefusal::Withdrawn));
     }
 }
