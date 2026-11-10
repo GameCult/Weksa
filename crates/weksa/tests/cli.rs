@@ -308,7 +308,9 @@ fn schema_writes_the_published_files() {
             "weksa.entity.schema.json",
             "weksa.interlingua_packet.schema.json",
             "weksa.inventory_entry.schema.json",
-            "weksa.inventory_revision.schema.json"
+            "weksa.inventory_revision.schema.json",
+            "weksa.scene.schema.json",
+            "weksa.speaker.schema.json"
         ]
     );
 }

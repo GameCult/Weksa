@@ -117,12 +117,13 @@ fn refusal_display_names_the_rule_and_no_identifier() {
             count: 4242,
             max: 4242,
         },
-        Refusal::V13SceneWithoutAddressee,
         Refusal::V14ConsentWithoutAddressee,
         Refusal::V14ConsentNotAPredication { id: node() },
         Refusal::V15ConsentSource {
             source: ProvenanceSource::ImportedCorpus,
         },
+        Refusal::V16SpeakerNotInScene,
+        Refusal::V17AddresseeNotAReferent { id: node() },
     ];
     for r in &all {
         assert!(r.to_string().starts_with(r.rule()), "{r:?}");

@@ -1,12 +1,14 @@
 //! The validator owns the inventory and form rules a packet must meet. Every
 //! path that admits a packet applies them, but `validate` only judges: it
 //! returns `Ok(())` or the refusals. [`LoweringInput`], the only thing a
-//! lowerer sees, comes from `PacketStore::admit` alone, which builds it through
-//! the crate-private `admissible`. The stance is checked like every feature
-//! list, in slot `Stance`. The rules are V1..V8 and V10..V15: the shape of an id
-//! or a grade is its type's parse, not a rule, so V9 is retired and not
-//! renumbered. V13 guards the one other way features reach a lowering view:
-//! [`LoweringInput::with_scene`].
+//! lowerer sees, comes from `PacketStore::admit` alone, which builds it from
+//! the admitted packet and its corpus item through the crate-private
+//! `LoweringInput::of`. The stance is checked like every feature
+//! list, in slot `Stance`. The rules are V1..V8, V10..V12 and V14..V17: the
+//! shape of an id or a grade is its type's parse, not a rule, so V9 is retired
+//! and not renumbered; V13 is retired too. [`LoweringInput::with_scene`] reads the
+//! scene of the view's own item group from the speaker-state store, and
+//! `feature_refusals` is the one feature check it and that store share.
 //!
 //! `validate` owns form and capacity and makes no leak decision. A packet's one
 //! free text is its trace (`notes` and `rejected_readings`): `validate` does not
@@ -26,11 +28,13 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
+use crate::corpus::CorpusItem;
 use crate::inventory::{Family, InvId, Inventory, InventoryEntry, Slot, ValueKind};
 use crate::packet::{
-    Constraints, Context, Discourse, Extension, FeatValue, FeatureValue, NodeId, Packet,
+    Constraints, Context, Discourse, EntityId, Extension, FeatValue, FeatureValue, NodeId, Packet,
     PacketKind, Predication, ProvenanceSource, Referent, Relation, SCHEMA_VERSION, Stance,
 };
+use crate::store::{SpeakerStateStore, StoreError};
 
 /// A broken rule, named.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -95,10 +99,6 @@ pub enum Refusal {
         count: usize,
         max: usize,
     },
-    /// V13: scene features were given for a packet with no addressee. They
-    /// state the speaker's relation to the addressee, so with none they
-    /// describe nobody.
-    V13SceneWithoutAddressee,
     /// V14: an addressee consent that no addressee can have given, or that
     /// names a node that is not a predication. It is what the addressee asked
     /// for or agreed to, an act, so a referent cannot be its object.
@@ -111,6 +111,13 @@ pub enum Refusal {
     /// to" as words; only authoring or game telemetry saw the request.
     V15ConsentSource {
         source: ProvenanceSource,
+    },
+    /// V16: `with_scene` found the item's speaker absent from its group's scene.
+    V16SpeakerNotInScene,
+    /// V17: an addressee that names a predication. An act is not someone
+    /// spoken to, so the addressee names a referent.
+    V17AddresseeNotAReferent {
+        id: NodeId,
     },
 }
 
@@ -130,11 +137,12 @@ impl Refusal {
             | Refusal::V11DuplicateNodeRef { .. }
             | Refusal::V11DuplicateRole { .. } => "V11",
             Refusal::V12TooManyNodes { .. } => "V12",
-            Refusal::V13SceneWithoutAddressee => "V13",
             Refusal::V14ConsentWithoutAddressee | Refusal::V14ConsentNotAPredication { .. } => {
                 "V14"
             }
             Refusal::V15ConsentSource { .. } => "V15",
+            Refusal::V16SpeakerNotInScene => "V16",
+            Refusal::V17AddresseeNotAReferent { .. } => "V17",
         }
     }
 }
@@ -157,10 +165,11 @@ impl fmt::Display for Refusal {
             Refusal::V11DuplicateNodeRef { .. } => "a node id repeats in one list",
             Refusal::V11DuplicateRole { .. } => "a role id repeats in one predication",
             Refusal::V12TooManyNodes { .. } => "too many nodes",
-            Refusal::V13SceneWithoutAddressee => "scene features given without an addressee",
             Refusal::V14ConsentWithoutAddressee => "consent given without an addressee",
             Refusal::V14ConsentNotAPredication { .. } => "consent names no predication",
             Refusal::V15ConsentSource { .. } => "consent set by a source that only read wording",
+            Refusal::V16SpeakerNotInScene => "the speaker is not a participant of the scene",
+            Refusal::V17AddresseeNotAReferent { .. } => "the addressee names no referent",
         };
         write!(f, "{}: {what}", self.rule())
     }
@@ -180,28 +189,6 @@ impl fmt::Display for Refusal {
 /// fn lower(p: &Packet, i: &Inventory) -> Result<LoweringInput, Vec<Refusal>> { weksa::validate(p, i) }
 /// ```
 pub fn validate(packet: &Packet, inventory: &Inventory) -> Result<(), Vec<Refusal>> {
-    admissible(packet, inventory).map(|_| ())
-}
-
-/// The one implementation of the rules. Crate-private: `PacketStore::admit` is
-/// the only caller that keeps the view.
-///
-/// The first block is the same call through the public name, so the second
-/// fails for the private path and nothing else.
-///
-/// ```
-/// use weksa::{Inventory, packet::Packet};
-/// fn judge(p: &Packet, i: &Inventory) { let _ = weksa::validate::validate(p, i); }
-/// ```
-///
-/// ```compile_fail
-/// use weksa::{Inventory, packet::Packet};
-/// fn lower(p: &Packet, i: &Inventory) { let _ = weksa::validate::admissible(p, i); }
-/// ```
-pub(crate) fn admissible(
-    packet: &Packet,
-    inventory: &Inventory,
-) -> Result<LoweringInput, Vec<Refusal>> {
     let mut out = Vec::new();
     if packet.schema_version != SCHEMA_VERSION {
         out.push(Refusal::V1SchemaVersion {
@@ -221,6 +208,7 @@ pub(crate) fn admissible(
     }
     let nodes = check_nodes(packet, &mut out);
     check_refs(packet, &nodes, &mut out);
+    check_addressee(packet, &nodes, &mut out);
     check_repeats(packet, &mut out);
     check_consent(packet, &nodes, &mut out);
     if inventory.has_revision(packet.inventory_rev) {
@@ -235,11 +223,7 @@ pub(crate) fn admissible(
             rev: packet.inventory_rev,
         });
     }
-    if out.is_empty() {
-        Ok(LoweringInput::of(packet))
-    } else {
-        Err(out)
-    }
+    if out.is_empty() { Ok(()) } else { Err(out) }
 }
 
 fn check_nodes(packet: &Packet, out: &mut Vec<Refusal>) -> BTreeSet<NodeId> {
@@ -282,6 +266,17 @@ fn check_refs(packet: &Packet, nodes: &BTreeSet<NodeId>, out: &mut Vec<Refusal>)
         for id in list {
             need(id, at);
         }
+    }
+}
+
+/// V17: the addressee, when it names a node, names a referent. A dangling id
+/// is V4's.
+fn check_addressee(packet: &Packet, nodes: &BTreeSet<NodeId>, out: &mut Vec<Refusal>) {
+    if let Some(a) = &packet.discourse.addressee
+        && nodes.contains(a)
+        && !packet.referents.iter().any(|r| &r.id == a)
+    {
+        out.push(Refusal::V17AddresseeNotAReferent { id: a.clone() });
     }
 }
 
@@ -472,6 +467,29 @@ impl<'a> Inventoried<'a> {
     }
 }
 
+/// The one feature check of the speaker-state documents and `with_scene`: V10
+/// when `rev` has no record, else the rules the packet's own check applies to a
+/// feature list in `slot` (V5 to V8, V11).
+pub(crate) fn feature_refusals(
+    inventory: &Inventory,
+    rev: u32,
+    features: &[FeatureValue],
+    slot: Slot,
+) -> Vec<Refusal> {
+    let mut out = Vec::new();
+    if !inventory.has_revision(rev) {
+        out.push(Refusal::V10UnknownRevision { rev });
+    } else {
+        Inventoried {
+            inv: inventory,
+            rev,
+            out: &mut out,
+        }
+        .features(features, slot);
+    }
+    out
+}
+
 fn fits(kind: Option<&ValueKind>, value: &FeatValue) -> bool {
     match (kind, value) {
         (Some(ValueKind::Grade), FeatValue::Grade(_)) => true,
@@ -479,6 +497,28 @@ fn fits(kind: Option<&ValueKind>, value: &FeatValue) -> bool {
         (Some(ValueKind::Flag), FeatValue::Flag(_)) => true,
         _ => false,
     }
+}
+
+/// What `with_scene` found for a view: the scene revision `rev` it read, or why
+/// it selected no relation. Each case is distinct so a missing annotation or a
+/// store at the wrong path cannot look like a scene that held nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SceneRead {
+    /// `with_scene` has not run.
+    Unread,
+    /// The store holds no scene for the item's group.
+    NoScene,
+    /// The scene was read and the packet names no addressee.
+    NoAddressee { rev: u32 },
+    /// The addressee referent is the speaker themself.
+    SelfAddressed { rev: u32 },
+    /// The scene holds no relation from the speaker to this addressee.
+    NoRelation { rev: u32 },
+    /// The relation was found; its features may be none.
+    Selected {
+        rev: u32,
+        features: Vec<FeatureValue>,
+    },
 }
 
 /// What the lowerer sees: a validated packet's meaning, with no packet id, no
@@ -537,16 +577,45 @@ fn fits(kind: Option<&ValueKind>, value: &FeatValue) -> bool {
 /// fn read(l: weksa::LoweringInput) { let _ = l.scene; }
 /// ```
 ///
+/// Scene values come only from the store: the call names neither speaker nor
+/// scene. The first block is the call with the store; the second hands it a
+/// scene value and a speaker and fails for that alone.
+///
+/// ```
+/// fn pick(l: weksa::LoweringInput, i: &weksa::Inventory, s: &weksa::SpeakerStateStore) {
+///     let _ = l.with_scene(i, s);
+/// }
+/// ```
+///
+/// ```compile_fail
+/// fn pick(
+///     l: weksa::LoweringInput,
+///     i: &weksa::Inventory,
+///     s: &weksa::speaker::Scene,
+///     e: &weksa::EntityId,
+/// ) {
+///     let _ = l.with_scene(i, s, e);
+/// }
+/// ```
+///
+/// ```compile_fail
+/// fn pick(l: weksa::LoweringInput, i: &weksa::Inventory) {
+///     let _ = l.with_scene(i, vec![]);
+/// }
+/// ```
+///
 /// The constructor is private: a call from outside the crate compiles only if
 /// `LoweringInput::of` is `pub`. The first block is the same code without the
 /// call, so the second fails for that call and nothing else.
 ///
 /// ```
-/// fn build(p: &weksa::packet::Packet) { let _ = p; }
+/// fn build(p: &weksa::packet::Packet, item: &weksa::CorpusItem) { let _ = (p, item); }
 /// ```
 ///
 /// ```compile_fail
-/// fn build(p: &weksa::packet::Packet) { let _ = weksa::LoweringInput::of(p); }
+/// fn build(p: &weksa::packet::Packet, item: &weksa::CorpusItem) {
+///     let _ = weksa::LoweringInput::of(p, item);
+/// }
 /// ```
 ///
 /// A lowering view is never read from bytes: `Deserialize` would let a caller
@@ -574,11 +643,16 @@ pub struct LoweringInput {
     constraints: Constraints,
     extensions: Vec<Extension>,
     stance: Stance,
-    scene: Vec<FeatureValue>,
+    /// The item's speaker and group, as the corpus store holds them: the
+    /// only source of whose relation `with_scene` selects, and from which scene.
+    speaker: EntityId,
+    group: String,
+    scene: SceneRead,
 }
 
 impl LoweringInput {
-    fn of(p: &Packet) -> Self {
+    /// The view of an admitted packet and the corpus item it was minted for.
+    pub(crate) fn of(p: &Packet, item: &CorpusItem) -> Self {
         Self {
             inventory_rev: p.inventory_rev,
             kind: p.kind,
@@ -590,41 +664,63 @@ impl LoweringInput {
             constraints: p.constraints.clone(),
             extensions: p.extensions.clone(),
             stance: p.stance.clone(),
-            scene: Vec::new(),
+            speaker: item.speaker.clone(),
+            group: item.group.clone(),
+            scene: SceneRead::Unread,
         }
     }
 
-    /// Adds the speaker's relation to the addressee: feature values of slot
-    /// `Scene`, checked like every feature list (V5 to V8, V11) at this view's
-    /// inventory revision. They state a relation, so the packet must name an
-    /// addressee (V13). Typed ids and grades only, never wording, so a scene
-    /// carries no text to the lowerer. The scene is not part of the packet: a
-    /// scene document supplies it, and replacing it replaces the earlier one.
+    /// Reads the speaker's relation to the addressee, the only path for scene
+    /// values into a view. The speaker is the item's speaker and the scene is
+    /// the latest the store holds for the item's group; the caller names
+    /// neither. A scene that does not list the item's speaker is V16, with or
+    /// without an addressee. What the read found is recorded on the view as a
+    /// [`SceneRead`], never an empty feature list standing for five cases:
+    /// no scene for the group, no addressee, an addressee who is the speaker,
+    /// no such relation, or the relation from the speaker to the addressee
+    /// referent's entity (to `Unnamed` when the referent has none), whose
+    /// features are checked like every feature list in slot `Scene` at this
+    /// view's inventory revision. A read replaces any earlier one. The English
+    /// lowerer ignores it.
     pub fn with_scene(
         mut self,
         inventory: &Inventory,
-        scene: Vec<FeatureValue>,
-    ) -> Result<Self, Vec<Refusal>> {
-        let mut out = Vec::new();
-        if !inventory.has_revision(self.inventory_rev) {
-            out.push(Refusal::V10UnknownRevision {
-                rev: self.inventory_rev,
-            });
-        } else {
-            Inventoried {
-                inv: inventory,
-                rev: self.inventory_rev,
-                out: &mut out,
-            }
-            .features(&scene, Slot::Scene);
+        state: &SpeakerStateStore,
+    ) -> Result<Self, StoreError> {
+        self.scene = SceneRead::Unread;
+        let Some(scene) = state.scene(&self.group)? else {
+            self.scene = SceneRead::NoScene;
+            return Ok(self);
+        };
+        let rev = scene.n;
+        if !scene.participants.contains(&self.speaker) {
+            return Err(StoreError::Invalid(vec![Refusal::V16SpeakerNotInScene]));
         }
-        if !scene.is_empty() && self.discourse.addressee.is_none() {
-            out.push(Refusal::V13SceneWithoutAddressee);
+        let Some(addressee) = self.discourse.addressee.as_ref() else {
+            self.scene = SceneRead::NoAddressee { rev };
+            return Ok(self);
+        };
+        let entity = self
+            .referents
+            .iter()
+            .find(|r| &r.id == addressee)
+            .and_then(|r| r.entity.as_ref());
+        if entity == Some(&self.speaker) {
+            self.scene = SceneRead::SelfAddressed { rev };
+            return Ok(self);
         }
+        let Some(features) = scene.relation(&self.speaker, entity) else {
+            self.scene = SceneRead::NoRelation { rev };
+            return Ok(self);
+        };
+        let out = feature_refusals(inventory, self.inventory_rev, features, Slot::Scene);
         if !out.is_empty() {
-            return Err(out);
+            return Err(StoreError::Invalid(out));
         }
-        self.scene = scene;
+        self.scene = SceneRead::Selected {
+            rev,
+            features: features.to_vec(),
+        };
         Ok(self)
     }
 
@@ -658,8 +754,17 @@ impl LoweringInput {
     pub fn stance(&self) -> &Stance {
         &self.stance
     }
-    /// The speaker's relation to the addressee; empty until `with_scene`.
+    /// The features of the scene relation from the speaker to the addressee.
+    /// Empty for every [`SceneRead`] but `Selected` (and for a selected
+    /// relation that has no features): ask [`scene_read`](Self::scene_read) which.
     pub fn scene(&self) -> &[FeatureValue] {
+        match &self.scene {
+            SceneRead::Selected { features, .. } => features,
+            _ => &[],
+        }
+    }
+    /// What `with_scene` read; `Unread` until it ran.
+    pub fn scene_read(&self) -> &SceneRead {
         &self.scene
     }
 }

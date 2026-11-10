@@ -5,6 +5,7 @@ use crate::corpus::CorpusItem;
 use crate::entity::Entity;
 use crate::inventory::{InventoryEntry, InventoryRevision};
 use crate::packet::Packet;
+use crate::speaker::{Scene, Speaker};
 use cultcache_rs::DatabaseEntry;
 use schemars::{JsonSchema, schema_for};
 
@@ -21,5 +22,7 @@ pub fn published() -> Vec<(String, String)> {
         published_for::<InventoryRevision>(),
         published_for::<CorpusItem>(),
         published_for::<Entity>(),
+        published_for::<Speaker>(),
+        published_for::<Scene>(),
     ]
 }

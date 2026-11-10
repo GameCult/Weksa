@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Speaker",
+  "description": "The speaker's stable axes. Key `speaker:<entity slug>@<n>`; a revision\nappends and never edits.",
+  "type": "object",
+  "properties": {
+    "annotator": {
+      "$ref": "#/$defs/Annotator"
+    },
+    "entity": {
+      "$ref": "#/$defs/EntityId"
+    },
+    "features": {
+      "description": "Feature values of slot `Speaker`.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/FeatureValue"
+      }
+    },
+    "inventory_rev": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "n": {
+      "description": "The revision, from 1.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "entity",
+    "n",
+    "inventory_rev",
+    "features",
+    "annotator"
+  ],
+  "$defs": {
+    "Annotator": {
+      "description": "Who annotated a document. A model's generator is an attestation string, held\nto the same form as every provenance string.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "Operator"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "Model": {
+              "type": "object",
+              "properties": {
+                "family": {
+                  "$ref": "#/$defs/ModelFamily"
+                },
+                "generator": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "family",
+                "generator"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Model"
+          ]
+        }
+      ]
+    },
+    "EntityId": {
+      "type": "string",
+      "pattern": "^entity:[a-z0-9]([a-z0-9-]{0,46}[a-z0-9])?$"
+    },
+    "FeatValue": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "Grade": {
+              "$ref": "#/$defs/Grade"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Grade"
+          ]
+        },
+        {
+          "description": "A label the feature's inventory entry declares.",
+          "type": "object",
+          "properties": {
+            "Option": {
+              "$ref": "#/$defs/OptionLabel"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Option"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "Flag": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Flag"
+          ]
+        }
+      ]
+    },
+    "FeatureValue": {
+      "type": "object",
+      "properties": {
+        "feature": {
+          "description": "Feature id.",
+          "$ref": "#/$defs/InvId"
+        },
+        "value": {
+          "$ref": "#/$defs/FeatValue"
+        }
+      },
+      "required": [
+        "feature",
+        "value"
+      ]
+    },
+    "Grade": {
+      "type": "integer",
+      "maximum": 1000,
+      "minimum": 0
+    },
+    "InvId": {
+      "type": "string",
+      "pattern": "^(concept|frame|role|relation|speech_act|feature|referent_kind|extension):[1-9][0-9]*$"
+    },
+    "ModelFamily": {
+      "description": "The family of the model that wrote a line.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "Anthropic",
+            "OpenAi",
+            "Google",
+            "Alibaba",
+            "Meta",
+            "Mistral"
+          ]
+        },
+        {
+          "description": "Nothing records which family wrote the line.",
+          "type": "string",
+          "const": "Unrecorded"
+        }
+      ]
+    },
+    "OptionLabel": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,23}$"
+    }
+  }
+}

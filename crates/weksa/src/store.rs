@@ -14,11 +14,14 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::corpus::{CorpusItem, CorpusItemId, Source, item_key, key_slug};
 use crate::entity::{Entity, EntityOrigin, Pronunciation};
 use crate::form::{
-    is_attestation, is_calendar_date, is_joining_only, is_language_tag, is_refused_format,
+    is_attestation, is_calendar_date, is_joining_only, is_language_tag, is_refused_format, is_slug,
 };
-use crate::inventory::{Change, InvId, Inventory, InventoryEntry, InventoryRevision, revision_key};
+use crate::inventory::{
+    Change, InvId, Inventory, InventoryEntry, InventoryRevision, Slot, revision_key,
+};
 use crate::packet::{EntityId, Packet};
-use crate::validate::{LoweringInput, Refusal, admissible};
+use crate::speaker::{Annotator, MAX_PARTICIPANTS, Party, Scene, Speaker, scene_key, speaker_key};
+use crate::validate::{LoweringInput, Refusal, feature_refusals, validate};
 
 /// A broken store rule, named.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -79,6 +82,15 @@ pub enum StoreRefusal {
     /// A new packet names a corpus item already withdrawn. Packets admitted
     /// before the withdrawal stay stored and readable.
     WithdrawnCorpusItem { key: String },
+    /// A speaker or scene revision that is not the entity's or group's latest
+    /// plus one (1 when none).
+    RevisionNotNext {
+        key: String,
+        expected: u32,
+        got: u32,
+    },
+    /// A scene that omits the speaker of a live item of its group.
+    SceneSpeakerMissing { group: String, entity: EntityId },
     /// Any other malformed document or change.
     Malformed { key: String, why: &'static str },
 }
@@ -116,6 +128,10 @@ impl fmt::Display for StoreRefusal {
             EntityNotAppendOnly { .. } => f.write_str("EntityNotAppendOnly"),
             EntityNotOnItem { .. } => f.write_str("EntityNotOnItem"),
             WithdrawnCorpusItem { .. } => f.write_str("WithdrawnCorpusItem"),
+            RevisionNotNext { expected, got, .. } => {
+                write!(f, "RevisionNotNext expected {expected} got {got}")
+            }
+            SceneSpeakerMissing { .. } => f.write_str("SceneSpeakerMissing"),
             Malformed { why, .. } => write!(f, "Malformed: {why}"),
         }
     }
@@ -943,7 +959,7 @@ impl PacketStore {
         corpus: &CorpusStore,
         entities: &EntityStore,
     ) -> Result<LoweringInput, StoreError> {
-        let view = admissible(&packet, &inventory.inventory()?).map_err(StoreError::Invalid)?;
+        validate(&packet, &inventory.inventory()?).map_err(StoreError::Invalid)?;
         let item = corpus.resolve(&packet.provenance.corpus_item)?;
         if item.withdrawn {
             return Err(StoreRefusal::WithdrawnCorpusItem {
@@ -967,6 +983,7 @@ impl PacketStore {
                 .into());
             }
         }
+        let view = LoweringInput::of(&packet, &item);
         let key = packet.id.to_string();
         if let Some(existing) = self.get(&key)? {
             if existing == packet {
@@ -977,4 +994,211 @@ impl PacketStore {
         self.cache.put(key, &packet)?;
         Ok(view)
     }
+}
+
+/// The speaker and scene documents: append-only revisions, one key each. The
+/// only writer of `weksa.speaker` and `weksa.scene`.
+pub struct SpeakerStateStore {
+    cache: CultCache,
+}
+
+impl SpeakerStateStore {
+    pub fn open(path: &Path) -> anyhow::Result<Self> {
+        Ok(Self {
+            cache: open_cache(path, |c| {
+                c.register_entry_type::<Speaker>()?;
+                c.register_entry_type::<Scene>()
+            })?,
+        })
+    }
+
+    /// Admits the next revision of a speaker, or an identical replay. The key
+    /// derives from the document. Revision `n` is the entity's latest plus one
+    /// (1 when none). The entity is in the entity store, the features pass
+    /// `feature_refusals` in slot `Speaker` at the document's inventory
+    /// revision, and a model annotator's generator is an attestation.
+    pub fn put_speaker(
+        &mut self,
+        s: Speaker,
+        inventory: &InventoryStore,
+        entities: &EntityStore,
+    ) -> Result<AddOutcome, StoreError> {
+        let key = speaker_key(&s.entity, s.n);
+        if self.get_speaker(&key)?.is_some_and(|old| old == s) {
+            return Ok(AddOutcome::Unchanged);
+        }
+        check_annotator(&key, &s.annotator)?;
+        known_entity(entities, &s.entity)?;
+        let out = feature_refusals(
+            &inventory.inventory()?,
+            s.inventory_rev,
+            &s.features,
+            Slot::Speaker,
+        );
+        if !out.is_empty() {
+            return Err(StoreError::Invalid(out));
+        }
+        let latest = self.speaker(&s.entity)?.map_or(0, |l| l.n);
+        check_next(&key, latest, s.n)?;
+        self.cache.put(key, &s)?;
+        Ok(AddOutcome::Added)
+    }
+
+    /// Admits the next revision of a scene, or an identical replay. The group
+    /// is a slug some corpus item (live or withdrawn) holds; there are 1 to
+    /// `MAX_PARTICIPANTS` participants, each named once and in the entity
+    /// store; a relation's `from` is a participant, a named `to` is another
+    /// participant, and an ordered pair has at most one relation; every speaker
+    /// of a live item of the group is a participant. Features pass
+    /// `feature_refusals` in slot `Scene` for every relation.
+    pub fn put_scene(
+        &mut self,
+        s: Scene,
+        inventory: &InventoryStore,
+        corpus: &CorpusStore,
+        entities: &EntityStore,
+    ) -> Result<AddOutcome, StoreError> {
+        let key = scene_key(&s.group, s.n);
+        if self.get_scene(&key)?.is_some_and(|old| old == s) {
+            return Ok(AddOutcome::Unchanged);
+        }
+        let bad = |why| malformed(&key, why);
+        if !is_slug(&s.group) {
+            return Err(bad("a scene group is a slug"));
+        }
+        check_annotator(&key, &s.annotator)?;
+        let items: Vec<CorpusItem> = corpus
+            .all()?
+            .into_iter()
+            .filter(|i| i.group == s.group)
+            .collect();
+        if items.is_empty() {
+            return Err(bad("no corpus item holds the scene's group"));
+        }
+        if s.participants.is_empty() || s.participants.len() > MAX_PARTICIPANTS {
+            return Err(bad("a scene has 1 to 64 participants"));
+        }
+        let mut seen = BTreeSet::new();
+        for p in &s.participants {
+            if !seen.insert(p) {
+                return Err(bad("a participant is named once"));
+            }
+            known_entity(entities, p)?;
+        }
+        let mut pairs = BTreeSet::new();
+        for r in &s.relations {
+            if !seen.contains(&r.from) {
+                return Err(bad("a relation's from is a participant"));
+            }
+            if let Party::Named(to) = &r.to
+                && (!seen.contains(to) || to == &r.from)
+            {
+                return Err(bad("a relation's named to is another participant"));
+            }
+            if !pairs.insert((&r.from, &r.to)) {
+                return Err(bad("an ordered pair has one relation"));
+            }
+        }
+        if let Some(i) = items
+            .iter()
+            .find(|i| !i.withdrawn && !seen.contains(&i.speaker))
+        {
+            return Err(StoreRefusal::SceneSpeakerMissing {
+                group: s.group,
+                entity: i.speaker.clone(),
+            }
+            .into());
+        }
+        let inv = inventory.inventory()?;
+        let mut out = Vec::new();
+        if s.relations.is_empty() {
+            out = feature_refusals(&inv, s.inventory_rev, &[], Slot::Scene);
+        }
+        for r in &s.relations {
+            out.extend(feature_refusals(
+                &inv,
+                s.inventory_rev,
+                &r.features,
+                Slot::Scene,
+            ));
+        }
+        if !out.is_empty() {
+            return Err(StoreError::Invalid(out));
+        }
+        let latest = self.scene(&s.group)?.map_or(0, |l| l.n);
+        check_next(&key, latest, s.n)?;
+        self.cache.put(key, &s)?;
+        Ok(AddOutcome::Added)
+    }
+
+    /// The latest revision (highest `n`) of the entity's speaker document.
+    pub fn speaker(&self, entity: &EntityId) -> anyhow::Result<Option<Speaker>> {
+        Ok(self
+            .all_speakers()?
+            .into_iter()
+            .filter(|s| &s.entity == entity)
+            .max_by_key(|s| s.n))
+    }
+
+    /// The latest revision (highest `n`) of the group's scene document.
+    pub fn scene(&self, group: &str) -> anyhow::Result<Option<Scene>> {
+        Ok(self
+            .all_scenes()?
+            .into_iter()
+            .filter(|s| s.group == group)
+            .max_by_key(|s| s.n))
+    }
+
+    pub fn get_speaker(&self, key: &str) -> anyhow::Result<Option<Speaker>> {
+        self.cache.get::<Speaker>(key)
+    }
+
+    pub fn get_scene(&self, key: &str) -> anyhow::Result<Option<Scene>> {
+        self.cache.get::<Scene>(key)
+    }
+
+    /// Every speaker revision, by entity then revision number.
+    pub fn all_speakers(&self) -> anyhow::Result<Vec<Speaker>> {
+        let mut all = self.cache.get_all::<Speaker>()?;
+        all.sort_by(|a, b| (&a.entity, a.n).cmp(&(&b.entity, b.n)));
+        Ok(all)
+    }
+
+    /// Every scene revision, by group then revision number.
+    pub fn all_scenes(&self) -> anyhow::Result<Vec<Scene>> {
+        let mut all = self.cache.get_all::<Scene>()?;
+        all.sort_by(|a, b| (&a.group, a.n).cmp(&(&b.group, b.n)));
+        Ok(all)
+    }
+}
+
+fn known_entity(entities: &EntityStore, id: &EntityId) -> Result<(), StoreError> {
+    match entities.get(id)? {
+        Some(_) => Ok(()),
+        None => Err(StoreRefusal::UnknownEntity { entity: id.clone() }.into()),
+    }
+}
+
+fn check_annotator(key: &str, a: &Annotator) -> Result<(), StoreError> {
+    match a {
+        Annotator::Model { generator, .. } if !is_attestation(generator) => {
+            Err(malformed(key, "a model annotator attests its generator"))
+        }
+        _ => Ok(()),
+    }
+}
+
+fn check_next(key: &str, latest: u32, got: u32) -> Result<(), StoreError> {
+    let expected = latest
+        .checked_add(1)
+        .ok_or_else(|| malformed(key, "no revision follows the latest"))?;
+    if got != expected {
+        return Err(StoreRefusal::RevisionNotNext {
+            key: key.to_string(),
+            expected,
+            got,
+        }
+        .into());
+    }
+    Ok(())
 }

@@ -520,9 +520,6 @@ fn v11_duplicate_feature_each_slot() {
         refusals(&relation),
         vec![v11(Some(Slot::Relation), FEAT_ALL)]
     );
-    let mut stance = good();
-    stance.stance.features = vec![grade_feature(1), grade_feature(2)];
-    assert_eq!(refusals(&stance), vec![v11(Some(Slot::Stance), FEAT_ALL)]);
     let mut felt = good();
     felt.stance
         .features
@@ -741,4 +738,27 @@ fn a_source_that_only_read_wording_cannot_set_consent() {
         p.provenance.source = source;
         assert_eq!(refusals(&p), vec![Refusal::V15ConsentSource { source }]);
     }
+}
+
+// V17: the addressee is someone spoken to, a referent.
+
+#[test]
+fn the_addressee_names_a_referent_not_a_predication() {
+    let mut p = good();
+    p.discourse.addressee = Some(nd("n2"));
+    assert_eq!(
+        refusals(&p),
+        vec![Refusal::V17AddresseeNotAReferent { id: nd("n2") }]
+    );
+    // A referent passes, and a dangling id is V4's alone.
+    p.discourse.addressee = Some(nd("n1"));
+    assert_eq!(refusals(&p), vec![]);
+    p.discourse.addressee = Some(nd("n99"));
+    assert_eq!(
+        refusals(&p),
+        vec![Refusal::V4DanglingRef {
+            id: nd("n99"),
+            at: "addressee"
+        }]
+    );
 }
