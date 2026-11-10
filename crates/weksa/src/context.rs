@@ -3,8 +3,14 @@
 //! [`TrainItems`] or by encoding one item an [`EncoderOffer`] holds: Train-only
 //! minting and per-item encoding (leak-owned-by-flow-and-scorer-3,
 //! loop-context-builder-2). Instruction text is [`MINT_INSTRUCTIONS`] and
-//! [`ENCODE_INSTRUCTIONS`], consts in this module, and nothing else: `mint` and
-//! `encode` take none, so no run-time text can become instructions.
+//! [`ENCODE_INSTRUCTIONS`], consts in this module; an encode prompt also lists
+//! the inventory at the run's revision.
+//!
+//! Item blocks are data from the run's pinned corpus, reached only through
+//! `RunStores`, the one public producer of `TrainItems` and `EncoderOffer`
+//! (forged-item-text-in-prompt). A forged item in a scratch store is a different
+//! run with a different corpus digest, visible in its record; nothing inside a
+//! process its forger controls can stop it.
 
 use std::marker::PhantomData;
 
@@ -25,9 +31,12 @@ pub const ENCODE_INSTRUCTIONS: &str = "Encode the line below.";
 /// item.
 ///
 /// ```
-/// let dir = tempfile::tempdir().unwrap();
-/// let store = weksa::CorpusStore::open(&dir.path().join("c.cc")).unwrap();
-/// let t = weksa::context::TrainItems::from_corpus(&store).unwrap();
+/// # let dir = tempfile::tempdir().unwrap();
+/// # let p = |n: &str| dir.path().join(n);
+/// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
+/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e").unwrap();
+/// let t = run.train().unwrap();
 /// assert!(t.is_empty());
 /// ```
 ///
@@ -36,17 +45,23 @@ pub const ENCODE_INSTRUCTIONS: &str = "Encode the line below.";
 /// ```
 ///
 /// ```compile_fail
-/// let dir = tempfile::tempdir().unwrap();
-/// let store = weksa::CorpusStore::open(&dir.path().join("c.cc")).unwrap();
-/// let t = weksa::context::TrainItems::from_corpus(&store).unwrap();
+/// # let dir = tempfile::tempdir().unwrap();
+/// # let p = |n: &str| dir.path().join(n);
+/// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
+/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e").unwrap();
+/// let t = run.train().unwrap();
 /// let _u = t.clone();
 /// ```
 ///
 /// ```compile_fail
 /// fn s<T: serde::Serialize>(_: &T) {}
-/// let dir = tempfile::tempdir().unwrap();
-/// let store = weksa::CorpusStore::open(&dir.path().join("c.cc")).unwrap();
-/// let t = weksa::context::TrainItems::from_corpus(&store).unwrap();
+/// # let dir = tempfile::tempdir().unwrap();
+/// # let p = |n: &str| dir.path().join(n);
+/// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
+/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e").unwrap();
+/// let t = run.train().unwrap();
 /// s(&t);
 /// ```
 pub struct TrainItems {
@@ -54,7 +69,7 @@ pub struct TrainItems {
 }
 
 impl TrainItems {
-    pub fn from_corpus(corpus: &CorpusStore) -> anyhow::Result<Self> {
+    pub(crate) fn from_corpus(corpus: &CorpusStore) -> anyhow::Result<Self> {
         let items = corpus
             .all()?
             .into_iter()
@@ -134,8 +149,9 @@ pub struct EncoderOffer<'cp> {
 }
 
 impl<'cp> EncoderOffer<'cp> {
-    /// A round offers Train and Validation items.
-    pub fn for_round(item: &CorpusItem) -> Result<EncoderOffer<'static>, OfferRefusal> {
+    /// A round offers Train and Validation items. `RunStores::offer` and
+    /// `RunStores::offers` are the public producers.
+    pub(crate) fn for_round(item: &CorpusItem) -> Result<EncoderOffer<'static>, OfferRefusal> {
         match Self::gate(item)? {
             Split::Test => Err(OfferRefusal::TestBeforeCheckpoint),
             _ => Ok(Self::of(item)),
@@ -188,9 +204,12 @@ impl<'cp> EncoderOffer<'cp> {
 /// constructors are [`Prompt::mint`] and [`Prompt::encode`].
 ///
 /// ```
-/// let dir = tempfile::tempdir().unwrap();
-/// let store = weksa::CorpusStore::open(&dir.path().join("c.cc")).unwrap();
-/// let t = weksa::context::TrainItems::from_corpus(&store).unwrap();
+/// # let dir = tempfile::tempdir().unwrap();
+/// # let p = |n: &str| dir.path().join(n);
+/// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
+/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e").unwrap();
+/// let t = run.train().unwrap();
 /// let p = weksa::context::Prompt::mint(&t);
 /// assert_eq!(p.text(), weksa::context::MINT_INSTRUCTIONS);
 /// ```
@@ -198,17 +217,23 @@ impl<'cp> EncoderOffer<'cp> {
 /// Instructions are not a parameter:
 ///
 /// ```compile_fail
-/// let dir = tempfile::tempdir().unwrap();
-/// let store = weksa::CorpusStore::open(&dir.path().join("c.cc")).unwrap();
-/// let t = weksa::context::TrainItems::from_corpus(&store).unwrap();
+/// # let dir = tempfile::tempdir().unwrap();
+/// # let p = |n: &str| dir.path().join(n);
+/// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
+/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e").unwrap();
+/// let t = run.train().unwrap();
 /// let p = weksa::context::Prompt::mint("x", &t);
 /// ```
 ///
 /// ```compile_fail
 /// fn s<T: serde::Serialize>(_: &T) {}
-/// let dir = tempfile::tempdir().unwrap();
-/// let store = weksa::CorpusStore::open(&dir.path().join("c.cc")).unwrap();
-/// let t = weksa::context::TrainItems::from_corpus(&store).unwrap();
+/// # let dir = tempfile::tempdir().unwrap();
+/// # let p = |n: &str| dir.path().join(n);
+/// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
+/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e").unwrap();
+/// let t = run.train().unwrap();
 /// let p = weksa::context::Prompt::mint(&t);
 /// s(&p);
 /// ```
@@ -301,6 +326,20 @@ mod tests {
         let mut both = no_split.clone();
         both.withdrawn = true;
         assert_eq!(check(&both), Some(OfferRefusal::Withdrawn));
+    }
+
+    #[test]
+    fn round_offer_gate_precedence() {
+        let round = |i: &CorpusItem| EncoderOffer::for_round(i).err();
+        let mut no_split = item("item:c:2", "m", &group_in(Split::Test), true);
+        no_split.withdrawn = true;
+        // Withdrawn wins over NoSplit.
+        assert_eq!(round(&no_split), Some(OfferRefusal::Withdrawn));
+        // A withdrawn Test item is Withdrawn, not TestBeforeCheckpoint.
+        let mut test = item("item:c:1", "x", &group_in(Split::Test), false);
+        assert_eq!(round(&test), Some(OfferRefusal::TestBeforeCheckpoint));
+        test.withdrawn = true;
+        assert_eq!(round(&test), Some(OfferRefusal::Withdrawn));
     }
 
     #[test]

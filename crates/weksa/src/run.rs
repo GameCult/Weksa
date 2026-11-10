@@ -1,0 +1,433 @@
+//! One golf-loop run: the stores it pinned at open, the rounds it has recorded,
+//! and the one writer of both (`RunStores::create` and, for rounds, `round`).
+//!
+//! A run pins its corpus and entity store files by canonical path and FNV-1a 64
+//! digest of their bytes. Every round reopens them only from that record and
+//! refuses on drift, and every round record carries the digests. Nothing inside
+//! a process whose writer controls the code can stop an item faked into a
+//! scratch store; what this makes true is that a run over a scratch store is a
+//! different run with a different corpus digest, visible in its record, and a
+//! later reader compares the rounds of one run only. `RunStores` is the one
+//! public producer of [`TrainItems`] and [`EncoderOffer`]: the CLI paths that
+//! take caller stores (`validate`, `packet proof|dao`, `lower`) are unchanged.
+
+use std::fmt;
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
+
+use cultcache_rs::{CultCache, DatabaseEntry};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+use crate::context::{EncoderOffer, TrainItems};
+use crate::form::{is_attestation, is_slug};
+use crate::score::{CHRF_VERSION, SplitMean};
+use crate::split::{fnv1a64, hex16};
+use crate::store::{CorpusStore, EntityStore, InventoryStore, open_cache};
+
+/// The digest of the prompt builder's source. Any edit to `context.rs`,
+/// comments included, ends a run; code outside that file is not covered.
+pub const PROMPT_SOURCE_DIGEST: u64 = fnv1a64(include_bytes!("context.rs"));
+
+/// The digest of the lowerer's source. Any edit to `lower.rs`, comments
+/// included, ends a run; code outside that file is not covered.
+pub const LOWERER_SOURCE_DIGEST: u64 = fnv1a64(include_bytes!("lower.rs"));
+
+/// What a run pinned at open. Key `run:<label>`.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, DatabaseEntry)]
+#[cultcache(type = "weksa.loop_run")]
+pub struct RunRecord {
+    #[cultcache(key = 0)]
+    pub label: String,
+    /// Canonical absolute path of the corpus store.
+    #[cultcache(key = 1)]
+    pub corpus: String,
+    #[cultcache(key = 2)]
+    pub inventory: String,
+    #[cultcache(key = 3)]
+    pub entities: String,
+    /// 16 hex of the corpus file's bytes.
+    #[cultcache(key = 4)]
+    pub corpus_digest: String,
+    #[cultcache(key = 5)]
+    pub entity_digest: String,
+    #[cultcache(key = 6)]
+    pub prompt_digest: String,
+    #[cultcache(key = 7)]
+    pub lowerer_digest: String,
+    /// The answering model.
+    #[cultcache(key = 8)]
+    pub model: String,
+    /// The embedder's model.
+    #[cultcache(key = 9)]
+    pub embedder: String,
+    #[cultcache(key = 10)]
+    pub chrf_version: String,
+}
+
+/// Where a round refused: the first stage that did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum Stage {
+    Parse,
+    Admit,
+    Lower,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub enum Outcome {
+    Scored { chrf: f64, meaning: Option<f64> },
+    Refused(Stage),
+}
+
+/// One model call: the prompt's digest and the item keys it held.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Call {
+    pub prompt: String,
+    pub items: Vec<String>,
+}
+
+/// A Train item's row. Validation has no rows.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct TrainRow {
+    pub item: String,
+    pub packet: Option<String>,
+    pub outcome: Outcome,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RefusalCounts {
+    pub parse: u32,
+    pub admit: u32,
+    pub lower: u32,
+}
+
+/// One scored round. It holds no text and no Test reading: per-item rows for
+/// Train only, Validation only as means and refusal counts by stage. Only
+/// `run::round` builds one.
+///
+/// ```
+/// fn f(r: &weksa::run::RoundRecord) -> u32 { r.n() }
+/// ```
+///
+/// ```compile_fail
+/// fn f() -> weksa::run::RoundRecord {
+///     weksa::run::RoundRecord { n: 1 }
+/// }
+/// ```
+#[derive(Clone, Debug, PartialEq, JsonSchema, DatabaseEntry)]
+#[cultcache(type = "weksa.loop_round")]
+pub struct RoundRecord {
+    #[cultcache(key = 0)]
+    n: u32,
+    #[cultcache(key = 1)]
+    inventory_rev: u32,
+    #[cultcache(key = 2)]
+    prompt_digest: String,
+    #[cultcache(key = 3)]
+    lowerer_digest: String,
+    #[cultcache(key = 4)]
+    corpus_digest: String,
+    #[cultcache(key = 5)]
+    entity_digest: String,
+    #[cultcache(key = 6)]
+    model: String,
+    #[cultcache(key = 7)]
+    embedder: String,
+    #[cultcache(key = 8)]
+    chrf_version: String,
+    #[cultcache(key = 9)]
+    calls: Vec<Call>,
+    #[cultcache(key = 10)]
+    train: Vec<TrainRow>,
+    #[cultcache(key = 11)]
+    train_mean: SplitMean,
+    #[cultcache(key = 12)]
+    validation_mean: SplitMean,
+    #[cultcache(key = 13)]
+    validation_refused: RefusalCounts,
+}
+
+impl RoundRecord {
+    pub fn n(&self) -> u32 {
+        self.n
+    }
+    pub fn inventory_rev(&self) -> u32 {
+        self.inventory_rev
+    }
+    pub fn prompt_digest(&self) -> &str {
+        &self.prompt_digest
+    }
+    pub fn lowerer_digest(&self) -> &str {
+        &self.lowerer_digest
+    }
+    pub fn corpus_digest(&self) -> &str {
+        &self.corpus_digest
+    }
+    pub fn entity_digest(&self) -> &str {
+        &self.entity_digest
+    }
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+    pub fn embedder(&self) -> &str {
+        &self.embedder
+    }
+    pub fn chrf_version(&self) -> &str {
+        &self.chrf_version
+    }
+    pub fn calls(&self) -> &[Call] {
+        &self.calls
+    }
+    pub fn train(&self) -> &[TrainRow] {
+        &self.train
+    }
+    pub fn train_mean(&self) -> &SplitMean {
+        &self.train_mean
+    }
+    pub fn validation_mean(&self) -> &SplitMean {
+        &self.validation_mean
+    }
+    pub fn validation_refused(&self) -> RefusalCounts {
+        self.validation_refused
+    }
+}
+
+/// What a pinned store or id drifted from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DriftOf {
+    Corpus,
+    Entities,
+    Prompts,
+    Lowerer,
+    Model,
+    Embedder,
+}
+
+/// A run's failure. Display and Debug name a kind, never a path, key, label or
+/// any other value the caller supplied.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum RunError {
+    /// `run.cc` already holds a run.
+    Exists,
+    /// `run.cc` holds no run.
+    NoRun,
+    /// A field that cannot be a run's: `label`, `model`, `embedder`, `path`.
+    Malformed(&'static str),
+    Drift(DriftOf),
+    /// The inventory store holds no revision.
+    NoInventory,
+    Io(ErrorKind),
+    /// A store or the run file would not read or write.
+    Store,
+    /// The embedder failed.
+    Embed,
+}
+
+impl fmt::Display for RunError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RunError::Exists => f.write_str("the root already holds a run"),
+            RunError::NoRun => f.write_str("the root holds no run"),
+            RunError::Malformed(what) => write!(f, "malformed {what}"),
+            RunError::Drift(of) => write!(f, "drift in {of:?}"),
+            RunError::NoInventory => f.write_str("the inventory holds no revision"),
+            RunError::Io(kind) => write!(f, "io error {kind:?}"),
+            RunError::Store => f.write_str("a store would not read or write"),
+            RunError::Embed => f.write_str("the embedder failed"),
+        }
+    }
+}
+
+impl fmt::Debug for RunError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
+impl std::error::Error for RunError {}
+
+/// The three stores a run pins.
+#[derive(Clone, Copy)]
+pub struct RunPaths<'a> {
+    pub corpus: &'a Path,
+    pub inventory: &'a Path,
+    pub entities: &'a Path,
+}
+
+/// A run's open stores, reopened only from its record. The one public producer
+/// of [`TrainItems`] and [`EncoderOffer`], and the only writer of `run.cc`.
+pub struct RunStores {
+    root: PathBuf,
+    cache: CultCache,
+    record: RunRecord,
+    corpus: CorpusStore,
+    inventory: InventoryStore,
+    entities: EntityStore,
+}
+
+fn file_digest(path: &str) -> Option<String> {
+    std::fs::read(path).ok().map(|b| hex16(fnv1a64(&b)))
+}
+
+fn canonical(path: &Path) -> Result<String, RunError> {
+    std::fs::canonicalize(path)
+        .map_err(|e| RunError::Io(e.kind()))?
+        .into_os_string()
+        .into_string()
+        .map_err(|_| RunError::Malformed("path"))
+}
+
+fn run_cache(root: &Path) -> Result<CultCache, RunError> {
+    open_cache(&root.join("run.cc"), |c| {
+        c.register_entry_type::<RunRecord>()?;
+        c.register_entry_type::<RoundRecord>()
+    })
+    .map_err(|_| RunError::Store)
+}
+
+fn one_run(cache: &CultCache) -> Result<Option<RunRecord>, RunError> {
+    Ok(cache
+        .get_all::<RunRecord>()
+        .map_err(|_| RunError::Store)?
+        .into_iter()
+        .next())
+}
+
+impl RunStores {
+    /// Pins the three stores at `root`, which must hold no run. A store file
+    /// that does not exist is `Io(NotFound)`.
+    pub fn create(
+        root: &Path,
+        label: &str,
+        paths: RunPaths<'_>,
+        model: &str,
+        embedder: &str,
+    ) -> Result<Self, RunError> {
+        if !is_slug(label) {
+            return Err(RunError::Malformed("label"));
+        }
+        if !is_attestation(model) {
+            return Err(RunError::Malformed("model"));
+        }
+        if !is_attestation(embedder) {
+            return Err(RunError::Malformed("embedder"));
+        }
+        let mut cache = run_cache(root)?;
+        if one_run(&cache)?.is_some() {
+            return Err(RunError::Exists);
+        }
+        let record = RunRecord {
+            label: label.to_string(),
+            corpus: canonical(paths.corpus)?,
+            inventory: canonical(paths.inventory)?,
+            entities: canonical(paths.entities)?,
+            corpus_digest: String::new(),
+            entity_digest: String::new(),
+            prompt_digest: hex16(PROMPT_SOURCE_DIGEST),
+            lowerer_digest: hex16(LOWERER_SOURCE_DIGEST),
+            model: model.to_string(),
+            embedder: embedder.to_string(),
+            chrf_version: CHRF_VERSION.to_string(),
+        };
+        let record = RunRecord {
+            corpus_digest: file_digest(&record.corpus).ok_or(RunError::Store)?,
+            entity_digest: file_digest(&record.entities).ok_or(RunError::Store)?,
+            ..record
+        };
+        cache
+            .put(format!("run:{label}"), &record)
+            .map_err(|_| RunError::Store)?;
+        Self::with(root, cache, record)
+    }
+
+    /// Reopens the run at `root` from its record, refusing when a pinned store
+    /// or the prompt or lowerer source no longer matches.
+    pub fn open(root: &Path) -> Result<Self, RunError> {
+        if !root.join("run.cc").is_file() {
+            return Err(RunError::NoRun);
+        }
+        let cache = run_cache(root)?;
+        let record = one_run(&cache)?.ok_or(RunError::NoRun)?;
+        if record.prompt_digest != hex16(PROMPT_SOURCE_DIGEST) {
+            return Err(RunError::Drift(DriftOf::Prompts));
+        }
+        if record.lowerer_digest != hex16(LOWERER_SOURCE_DIGEST) {
+            return Err(RunError::Drift(DriftOf::Lowerer));
+        }
+        if file_digest(&record.corpus).as_ref() != Some(&record.corpus_digest) {
+            return Err(RunError::Drift(DriftOf::Corpus));
+        }
+        if file_digest(&record.entities).as_ref() != Some(&record.entity_digest) {
+            return Err(RunError::Drift(DriftOf::Entities));
+        }
+        Self::with(root, cache, record)
+    }
+
+    fn with(root: &Path, cache: CultCache, record: RunRecord) -> Result<Self, RunError> {
+        let store = |_| RunError::Store;
+        Ok(Self {
+            root: root.to_path_buf(),
+            corpus: CorpusStore::open(Path::new(&record.corpus)).map_err(store)?,
+            inventory: InventoryStore::open(Path::new(&record.inventory)).map_err(store)?,
+            entities: EntityStore::open(Path::new(&record.entities)).map_err(store)?,
+            cache,
+            record,
+        })
+    }
+
+    pub fn record(&self) -> &RunRecord {
+        &self.record
+    }
+
+    pub fn inventory(&self) -> &InventoryStore {
+        &self.inventory
+    }
+
+    /// The pinned entity store, for lowering and admission.
+    pub fn entities(&self) -> &EntityStore {
+        &self.entities
+    }
+
+    /// The live Train items of the pinned corpus.
+    pub fn train(&self) -> anyhow::Result<TrainItems> {
+        TrainItems::from_corpus(&self.corpus)
+    }
+
+    /// The offer for `key`; the inner error is the gate's refusal. An absent
+    /// key is an error that names no key.
+    pub fn offer(
+        &self,
+        key: &str,
+    ) -> anyhow::Result<Result<EncoderOffer<'static>, crate::context::OfferRefusal>> {
+        let item = self
+            .corpus
+            .get(key)?
+            .ok_or_else(|| anyhow::anyhow!("no such item"))?;
+        Ok(EncoderOffer::for_round(&item))
+    }
+
+    /// The live Train and Validation offers, in key order. Items the gate
+    /// refuses are skipped and read no further.
+    pub fn offers(&self) -> anyhow::Result<Vec<EncoderOffer<'static>>> {
+        Ok(self
+            .corpus
+            .all()?
+            .iter()
+            .filter_map(|item| EncoderOffer::for_round(item).ok())
+            .collect())
+    }
+
+    /// The recorded rounds, in order.
+    pub fn rounds(&self) -> anyhow::Result<Vec<RoundRecord>> {
+        let mut rounds = self.cache.get_all::<RoundRecord>()?;
+        rounds.sort_by_key(RoundRecord::n);
+        Ok(rounds)
+    }
+
+    /// `<root>/round-<n>` for the next unrecorded round `n`.
+    pub fn next_round_dir(&self) -> anyhow::Result<PathBuf> {
+        Ok(self
+            .root
+            .join(format!("round-{}", self.rounds()?.len() + 1)))
+    }
+}

@@ -199,7 +199,7 @@ fn malformed(key: &str, why: &'static str) -> StoreError {
     .into()
 }
 
-fn open_cache(
+pub(crate) fn open_cache(
     path: &Path,
     register: impl FnOnce(&mut CultCache) -> anyhow::Result<()>,
 ) -> anyhow::Result<CultCache> {

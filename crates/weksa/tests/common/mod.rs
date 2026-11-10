@@ -114,6 +114,28 @@ pub fn entities_in(dir: &std::path::Path) -> EntityStore {
     store
 }
 
+/// A run over the stores `world()` and `corpus()` keep in `dir`: `c.cc`,
+/// `i.cc` and `entities.cc`. Read at the call, so create it after the items.
+pub fn run_over(dir: &std::path::Path) -> weksa::run::RunStores {
+    for name in ["c.cc", "i.cc", "entities.cc"] {
+        if !dir.join(name).exists() {
+            std::fs::write(dir.join(name), [0x90]).unwrap();
+        }
+    }
+    weksa::run::RunStores::create(
+        &dir.join("run"),
+        "t",
+        weksa::run::RunPaths {
+            corpus: &dir.join("c.cc"),
+            inventory: &dir.join("i.cc"),
+            entities: &dir.join("entities.cc"),
+        },
+        "fake-model",
+        "bag",
+    )
+    .unwrap()
+}
+
 pub fn item_in(key: &str, text: &str, group: &str, source: Source) -> CorpusItem {
     CorpusItem {
         id: key.into(),

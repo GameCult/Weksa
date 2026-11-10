@@ -12,6 +12,8 @@ mod embed;
 mod words;
 
 use anyhow::{Result, ensure};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 pub use chrf::{CHRF_VERSION, chrf};
 pub use diagnostics::{OrderCoverage, PairChrf, SplitLeak, WorstItem, leak_diagnostic};
@@ -102,7 +104,7 @@ impl<E: Embedder> Scorer<E> {
 }
 
 /// Mean scores of one derived split.
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
 pub struct SplitMean {
     pub count: usize,
     /// `None` when the split has no items.

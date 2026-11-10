@@ -12,6 +12,7 @@ pub mod inventory;
 pub mod lower;
 pub mod packet;
 pub mod phones;
+pub mod run;
 pub mod schema;
 pub mod score;
 pub mod speaker;
