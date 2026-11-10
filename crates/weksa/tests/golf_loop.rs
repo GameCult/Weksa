@@ -1539,6 +1539,15 @@ fn cycle_rejects_no_gain_and_keeps_the_head() {
     assert!(mints[1].contains(&feedback_line("rejected", &round1)));
 }
 
+/// Item 2 and item 3 both refused at Admit: the weakest reading.
+fn worst_answers() -> Vec<(usize, String)> {
+    vec![
+        (1, json(&draft_of(1))),
+        (2, edited(2, unknown_concept)),
+        (3, edited(3, unknown_concept)),
+    ]
+}
+
 #[test]
 fn distinct_replicates_set_the_floor_and_a_gain_inside_it_is_no_gain() {
     let mut dao = dao();
@@ -1566,6 +1575,33 @@ fn distinct_replicates_set_the_floor_and_a_gain_inside_it_is_no_gain() {
     assert!(d.candidate().unwrap().composite - d.base().composite > LADDER_STEP);
     assert_eq!(d.verdict(), Verdict::Rejected(Why::NoGain));
     assert_eq!(head_rev(&dao.root), 3);
+}
+
+#[test]
+fn a_rejected_candidates_score_never_reaches_the_editor() {
+    let mut dao = dao();
+    two_rounds(&mut dao);
+    let mut model = fake(&degraded_answers());
+    model.candidate = Some((4, keyed(&worst_answers())));
+    model.edit = Some(Ok(ONE_CONCEPT.to_string()));
+    let d = run_cycle(&mut dao, &mut model);
+    assert!(matches!(d.verdict(), Verdict::Rejected(Why::Regressed(_))));
+    let rounds = dao.run.rounds().unwrap();
+    let (head, candidate) = (&rounds[0], &rounds[2]);
+    let ladder = |r: &RoundRecord| feedback_line("rejected", r);
+    assert_ne!(
+        ladder(head),
+        ladder(candidate),
+        "the candidate reads differently on the ladder"
+    );
+
+    let d2 = run_cycle(&mut dao, &mut model);
+    assert_eq!(d2.base_round(), 1);
+    let mints = mint_texts(&model);
+    assert!(mints[1].contains(&ladder(head)), "{}", mints[1]);
+    assert!(!mints[1].contains(&ladder(candidate)), "{}", mints[1]);
+    let rounds = dao.run.rounds().unwrap();
+    assert!(!mints[1].contains(&ladder(&rounds[3])), "{}", mints[1]);
 }
 
 #[test]
