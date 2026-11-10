@@ -630,6 +630,7 @@ mod lowering {
         for needed in [
             "en-US",
             "all of its meaning and nothing it does not carry",
+            "a grade is permille, 0 to 1000",
             "felt affect and restraint",
             "shapes how the utterance is said, not what it says",
             "forms on the entities line",
@@ -640,6 +641,17 @@ mod lowering {
         // The one call it makes is its item; the key is in no text.
         assert_eq!(prompt.item_keys(), [item.as_str()]);
         assert!(!prompt.text().contains(item.as_str()));
+        // The view's speaker and group are private: the item's speaker entity
+        // id and its group are in no text.
+        let held = CorpusStore::open(&data("daodejing/corpus.cc"))
+            .unwrap()
+            .get(item.as_str())
+            .unwrap()
+            .unwrap();
+        assert!(!held.group.is_empty());
+        for private in [held.speaker.as_str(), held.group.as_str()] {
+            assert!(!prompt.text().contains(private), "{private}");
+        }
     }
 
     #[test]
