@@ -11,7 +11,7 @@ by Imagination for the Eureka-area Self, 2026-10-29.
 The interlingua spec has two layers. The **schema** is Rust types: packet
 families, node ids, role slots, value kinds. It changes rarely and by commit.
 The **inventory** is data in CultCache: the concepts, frames, roles, relation
-types, speech acts and nuance features (hedge, certainty, warmth, irony and
+types, speech acts and nuance features (hedge, certainty, irony, stance affects and restraint, and
 whatever the loop finds missing) that the schema's slots name by id. Every open slot in a packet is an inventory id; a referent names an entity by id
 from the entity store, and a packet's only free text is the trace. No door judges text for leakage:
 what each model call may see, and what a score may count, own that
@@ -133,8 +133,9 @@ standing.** `gamecult.persona_state.v0` (Body facts) carries open trait maps
 So a `PersonaSnapshot` projects mood-like and relation-like values, and the
 stable axes the standard lacks are annotated. Whether the standard gains a
 typed speech-community reference or Weksa keeps the persona-to-community
-binding (`data/cultural-ontology/persona-stacks/`) is decided when
-`live-lowering` is mapped (follow-up `persona-state-speech-community`); the
+binding (`data/cultural-ontology/persona-stacks/`) is question `persona-speech-community-home` (recommended: a Weksa-owned
+binding; follow-up `persona-state-speech-community`), decided when
+`live-lowering` is mapped; the
 corpus path needs neither. Putting Weksa feature ids into the open
 `voiceStyle` trait map is rejected: it would make an extension field portable
 authority, which the standard forbids.
@@ -259,10 +260,10 @@ operator-attested annotations alone. Who annotates is question
   with the same text and a different source returns `Unchanged` and writes
   nothing, so a relabel through `add` silently does nothing. `key_slug`
   parses `n` with `u32::parse`, which accepts `01` and `+1`.
-- Inventory rev 1 (seed): features 6-11 are hedge, certainty, warmth,
-  formality, intensity (Grade) and irony (Flag), slots Discourse and
-  Predication. Nothing outside the seed and `docs/interlingua-standard.md:179-180`
-  names warmth, formality or intensity; no committed packet store exists.
+- Seed inventory (2026-11-10, base `5e10d7c`): features 6-8 are hedge, certainty
+  and irony; 9-18 are the stance affects and restraint (slot Stance). The
+  committed inventory holds revisions 1-2 only. Nothing calls `with_scene`
+  except tests, and the proof packet's addressee carries no entity.
 - Yggdrasil's Ollama (`127.0.0.1:11434`) is the Docker container `ollama-cpu`,
   Huginn's embedder (runbook `gamecult-ops/runbooks/huginn-yggdrasil.md`,
   ruling `eureka-body:ruling:huginn-embedder-yggdrasil-primary`). `/api/embed`
@@ -398,7 +399,7 @@ One line per cut; specs exist for the cuts about to run (2d and 4, siblings on `
 3b. `lowerer-first-cut` (follow-up `golf-loop-lowerer-cut`): the section above. `lower`, `weksa lower`, `weksa score`, `weksa packet proof`, inventory rev 2 for `nibu-proof-001`.
 4. `speaker-state`: packet `stance` (felt affect and restraint, slot `Stance`, packet schema v4); formality, warmth and intensity out of the seed and the standard; only `PacketStore::admit` yields a `LoweringInput`, and it refuses packets for withdrawn items (follow-up `lowering-input-from-packet-store`). (spec r1)
 4a. `speaker-relation-input`: slot `Scene` and its first seed features (`relative_status`, `intimacy`, `in_group`; inventory revision 3, `scene_revision`); `LoweringInput::with_scene` takes the speaker's relation to the addressee as typed `Scene` feature values, validated like every feature list, refused without an addressee (V13). The English lowerer does not render it. 4b's `weksa.scene` document is its future supplier; no store, document or CLI yet. (PR for follow-up `chat-s3352-3352`)
-4b. `speaker-scene`: slots `Speaker` and `Scene` with their seed features; `weksa.speaker` (`speaker:<entity-slug>@<n>`) and `weksa.scene` (`scene:<group>@<n>`, participants and ordered-pair relations) documents with `Annotator` `Operator` and `Model { family, generator }`, validated by the packet's shared feature check, append-only per key; their stores, `weksa speaker` and `weksa scene` commands, published schemas; Model-annotated cast speakers and scenes for the committed items. Waits on 2d and 4; `pd-speaker-annotation` blocks only the public-domain annotator.
+4b. `speaker-scene` (spec r1; `speaker-scene-seeds` is its cut 4c: CLI, inventory revision 3, cast speakers and scenes; `Party::Unnamed` covers an addressee with no entity; Speaker and Scene share one `SpeakerStateStore`): slots `Speaker` and `Scene` with their seed features; `weksa.speaker` (`speaker:<entity-slug>@<n>`) and `weksa.scene` (`scene:<group>@<n>`, participants and ordered-pair relations) documents with `Annotator` `Operator` and `Model { family, generator }`, validated by the packet's shared feature check, append-only per key; their stores, `weksa speaker` and `weksa scene` commands, published schemas; Model-annotated cast speakers and scenes for the committed items. Waits on 2d and 4; `pd-speaker-annotation` blocks only the public-domain annotator.
 5. `language-ontology`: `weksa.community` from `data/cultural-ontology/` (owns follow-up `edda-referent-yaml-parse`), `weksa.ontology_entry` for en-US and ja-JP from `data/target-language-ontology/` (YAML deleted), speaker communities, deterministic `select`, the lowering view (packet without trace, speaker, scene, selected entries). Waits on 4.
 6. `pd-importer`: public-domain play and fiction dialogue into the corpus with speaker, scene group, edition provenance, and Speaker and Scene annotations by the ruled annotator. Waits on 4, follow-up `gutenberg-terms` and question `pd-speaker-annotation`.
 7a. `loop-context-builder`: `context.rs` (`TrainItems`, `EncoderOffer`, `Prompt`: corpus text reaches a model call only through `Prompt::mint` over live Train items or `Prompt::encode` over one offered item; instructions are `&'static str`), `SplitScheme::live`, `CorpusItem::cited_entities` (one owner of the id set `PacketStore::admit` and the offer share), and checkpoint-only Test readings (`Checkpoint`, `TestReadings`; `Aggregate` and `leak_diagnostic` carry no Test). Library only. Merges follow-ups `loop-context-builder-2` and `scorer-test-readings-type`. (spec r1)
