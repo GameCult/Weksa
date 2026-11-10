@@ -36,9 +36,6 @@
     "label": {
       "type": "string"
     },
-    "lowerer_digest": {
-      "type": "string"
-    },
     "model": {
       "description": "The answering model.",
       "type": "string"
@@ -55,7 +52,6 @@
     "corpus_digest",
     "entity_digest",
     "prompt_digest",
-    "lowerer_digest",
     "model",
     "embedder",
     "chrf_version",

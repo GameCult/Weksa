@@ -109,10 +109,6 @@ fn open_checks_each_pin_by_name() {
         Some(RunError::Drift(DriftOf::Prompts))
     );
     assert_eq!(
-        drift(&|r| r.lowerer_digest = "0".repeat(16)),
-        Some(RunError::Drift(DriftOf::Lowerer))
-    );
-    assert_eq!(
         drift(&|r| r.corpus_digest = "0".repeat(16)),
         Some(RunError::Drift(DriftOf::Corpus))
     );
@@ -339,7 +335,7 @@ fn a_run_from_before_the_copy_does_not_open() {
                 corpus_digest: current.corpus_digest,
                 entity_digest: current.entity_digest,
                 prompt_digest: current.prompt_digest,
-                lowerer_digest: current.lowerer_digest,
+                lowerer_digest: String::new(),
                 model: current.model,
                 embedder: current.embedder,
                 chrf_version: current.chrf_version,
@@ -459,24 +455,26 @@ fn a_head_inventory_changed_between_its_digest_and_its_open_is_drift() {
 #[test]
 fn source_digests_cover_their_files() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let digest = |name: &str| fnv1a64(&std::fs::read(src.join(name)).unwrap());
-    // The prompt's partition and names come from split.rs: it is covered too.
-    let (context, split) = (
-        std::fs::read(src.join("context.rs")).unwrap(),
-        std::fs::read(src.join("split.rs")).unwrap(),
-    );
-    // Each file enters behind its length, so the pair has one framing.
+    let read = |name: &str| std::fs::read(src.join(name)).unwrap();
+    let digest = |name: &str| fnv1a64(&read(name));
+    // The prompt's partition and names come from split.rs, and the lowering
+    // prompt reads lower.rs's target language and entity port: all three are
+    // covered.
+    let (context, split, lower) = (read("context.rs"), read("split.rs"), read("lower.rs"));
+    // Each file enters behind its length, so the parts have one framing.
     let framed = [
         (context.len() as u64).to_le_bytes().as_slice(),
         &context,
         (split.len() as u64).to_le_bytes().as_slice(),
         &split,
+        (lower.len() as u64).to_le_bytes().as_slice(),
+        &lower,
     ]
     .concat();
     assert_eq!(weksa::run::PROMPT_SOURCE_DIGEST, fnv1a64(&framed));
     assert_ne!(
         weksa::run::PROMPT_SOURCE_DIGEST,
-        fnv1a64(&[context.clone(), split.clone()].concat()),
+        fnv1a64(&[context.clone(), split.clone(), lower.clone()].concat()),
         "bare concatenation is not the digest"
     );
     // Moving the boundary between the parts moves the digest.
@@ -485,11 +483,6 @@ fn source_digests_cover_their_files() {
         weksa::split::fnv1a64_of(&[b"a", b"bc"])
     );
     assert_ne!(weksa::run::PROMPT_SOURCE_DIGEST, digest("context.rs"));
-    assert_eq!(weksa::run::LOWERER_SOURCE_DIGEST, digest("lower.rs"));
-    assert_ne!(
-        weksa::run::PROMPT_SOURCE_DIGEST,
-        weksa::run::LOWERER_SOURCE_DIGEST
-    );
 }
 
 /// The encode prompt of `item:nibu:1` over `world()` at revision 4.
@@ -860,7 +853,6 @@ fn round_over_the_dao_stores_scores_train_and_validation() {
 
     // The record carries the run's pins.
     assert_eq!(r.prompt_digest(), pinned.prompt_digest);
-    assert_eq!(r.lowerer_digest(), pinned.lowerer_digest);
     assert_eq!(r.corpus_digest(), pinned.corpus_digest);
     assert_eq!(r.entity_digest(), pinned.entity_digest);
     assert_eq!(r.model(), "fake-model");

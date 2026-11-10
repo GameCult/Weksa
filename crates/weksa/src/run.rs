@@ -40,16 +40,16 @@ use crate::store::{CorpusStore, EntityStore, InventoryStore, PacketStore, open_c
 
 /// The digest of the prompt builder's source: `context.rs`, then `split.rs`,
 /// whose scheme and digest function decide which lines the prompt holds as
-/// Train and name every prompt. Each file enters the digest behind its length,
-/// so the pair cannot be re-cut into another pair with the same digest. Any
-/// edit to either, comments included, ends a run; code outside those files is
-/// not covered.
-pub const PROMPT_SOURCE_DIGEST: u64 =
-    fnv1a64_of(&[include_bytes!("context.rs"), include_bytes!("split.rs")]);
-
-/// The digest of the lowerer's source. Any edit to `lower.rs`, comments
-/// included, ends a run; code outside that file is not covered.
-pub const LOWERER_SOURCE_DIGEST: u64 = fnv1a64(include_bytes!("lower.rs"));
+/// Train and name every prompt, then `lower.rs`, whose `TARGET_LANGUAGE` and
+/// `EntityForms` port the lowering prompt reads. Each file enters the digest
+/// behind its length, so the parts cannot be re-cut into other parts with the
+/// same digest. Any edit to any of them, comments included, ends a run; code
+/// outside those files is not covered.
+pub const PROMPT_SOURCE_DIGEST: u64 = fnv1a64_of(&[
+    include_bytes!("context.rs"),
+    include_bytes!("split.rs"),
+    include_bytes!("lower.rs"),
+]);
 
 /// The least composite gain an edit must show over item noise to be kept, and
 /// the grid the editor's one held-out number is rounded to. A run releases at
@@ -81,8 +81,8 @@ pub struct RunRecord {
     pub entity_digest: String,
     #[cultcache(key = 6)]
     pub prompt_digest: String,
-    #[cultcache(key = 7)]
-    pub lowerer_digest: String,
+    // Key 7 is retired and never reused: a run.cc from before is a scratch run
+    // off git and does not open.
     /// The answering model.
     #[cultcache(key = 8)]
     pub model: String,
@@ -151,7 +151,6 @@ pub struct RefusalCounts {
 ///         n: 1,
 ///         inventory_rev: 1,
 ///         prompt_digest: String::new(),
-///         lowerer_digest: String::new(),
 ///         corpus_digest: String::new(),
 ///         entity_digest: String::new(),
 ///         model: String::new(),
@@ -178,8 +177,7 @@ pub struct RoundRecord {
     inventory_rev: u32,
     #[cultcache(key = 2)]
     prompt_digest: String,
-    #[cultcache(key = 3)]
-    lowerer_digest: String,
+    // Key 3 is retired and never reused.
     #[cultcache(key = 4)]
     corpus_digest: String,
     #[cultcache(key = 5)]
@@ -226,9 +224,6 @@ impl RoundRecord {
     }
     pub fn prompt_digest(&self) -> &str {
         &self.prompt_digest
-    }
-    pub fn lowerer_digest(&self) -> &str {
-        &self.lowerer_digest
     }
     pub fn corpus_digest(&self) -> &str {
         &self.corpus_digest
@@ -314,7 +309,6 @@ pub enum DriftOf {
     Corpus,
     Entities,
     Prompts,
-    Lowerer,
     Model,
     Embedder,
     /// The run's own head inventory file.
@@ -512,7 +506,6 @@ impl RunStores {
             corpus_digest: String::new(),
             entity_digest: String::new(),
             prompt_digest: hex16(PROMPT_SOURCE_DIGEST),
-            lowerer_digest: hex16(LOWERER_SOURCE_DIGEST),
             model: model.to_string(),
             embedder: embedder.to_string(),
             chrf_version: CHRF_VERSION.to_string(),
@@ -564,9 +557,6 @@ impl RunStores {
         let record = one_run(&cache)?.ok_or(RunError::NoRun)?;
         if record.prompt_digest != hex16(PROMPT_SOURCE_DIGEST) {
             return Err(RunError::Drift(DriftOf::Prompts));
-        }
-        if record.lowerer_digest != hex16(LOWERER_SOURCE_DIGEST) {
-            return Err(RunError::Drift(DriftOf::Lowerer));
         }
         check_pins(&cache, root, &record)?;
         between();
@@ -913,7 +903,6 @@ fn score_round<M: ModelPort, E: Embedder>(
         n,
         inventory_rev: rev,
         prompt_digest: run.record.prompt_digest.clone(),
-        lowerer_digest: run.record.lowerer_digest.clone(),
         corpus_digest: run.record.corpus_digest.clone(),
         entity_digest: run.record.entity_digest.clone(),
         model: run.record.model.clone(),
@@ -1346,7 +1335,6 @@ mod tests {
             n: 1,
             inventory_rev: 1,
             prompt_digest: String::new(),
-            lowerer_digest: String::new(),
             corpus_digest: String::new(),
             entity_digest: String::new(),
             model: String::new(),
@@ -1558,7 +1546,6 @@ mod tests {
             n,
             inventory_rev: 1,
             prompt_digest: String::new(),
-            lowerer_digest: String::new(),
             corpus_digest: String::new(),
             entity_digest: String::new(),
             model: String::new(),
@@ -1589,7 +1576,6 @@ mod tests {
             corpus_digest: String::new(),
             entity_digest: String::new(),
             prompt_digest: String::new(),
-            lowerer_digest: String::new(),
             model: String::new(),
             embedder: String::new(),
             chrf_version: String::new(),
