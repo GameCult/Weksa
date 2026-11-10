@@ -221,6 +221,8 @@ mod tests {
     fn a_draft_error_is_a_position_and_echoes_no_token() {
         let err = PacketDraft::parse("{\n  \"confidence\": CANARYTOKEN").unwrap_err();
         assert_eq!((err.line, err.column), (2, 17));
+        assert_eq!(err.to_string(), "not a packet draft at line 2 column 17");
+        assert_eq!(format!("{err:?}"), err.to_string());
         let err = PacketDraft::parse(r#"{"confidence":500,"CANARYKEY":1}"#).unwrap_err();
         for text in [err.to_string(), format!("{err:?}")] {
             assert!(!text.contains("CANARY"), "{text}");

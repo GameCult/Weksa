@@ -289,6 +289,30 @@ fn answer_files_write_the_prompt_and_read_the_answer() {
     let mut blocked = AnswerFiles::new(dir.path().join("file").join("round"), "m".into());
     assert!(matches!(blocked.answer(&p), Err(PortError::Io(_))));
 
+    // A reply or prompt file that cannot be read is an io error, never "unanswered".
+    use std::os::unix::fs::PermissionsExt;
+    let unreadable = |path: &Path| {
+        std::fs::write(path, "x").unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o200)).unwrap();
+    };
+    unreadable(&answer);
+    assert_eq!(
+        files.answer(&p),
+        Err(PortError::Io(ErrorKind::PermissionDenied))
+    );
+    std::fs::remove_file(&answer).unwrap();
+    unreadable(&prompt_file);
+    assert_eq!(
+        files.answer(&p),
+        Err(PortError::Io(ErrorKind::PermissionDenied))
+    );
+    std::fs::set_permissions(&prompt_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&prompt_file).unwrap(),
+        "x",
+        "an unreadable prompt file is not rewritten"
+    );
+
     assert_eq!(
         PortError::Unanswered.to_string(),
         "the prompt is unanswered"
@@ -605,6 +629,22 @@ fn unanswered_round_writes_nothing() {
         3
     );
     assert_eq!(dao.run.rounds().unwrap().len(), 1);
+
+    // Answered, round 2 is recorded as round 2, after round 1.
+    for (key, p) in &expected {
+        std::fs::write(
+            dao.root.join(format!("round-2/{}.answer", p.digest())),
+            &answers[key],
+        )
+        .unwrap();
+    }
+    let mut files = AnswerFiles::new(dao.run.next_round_dir().unwrap(), "fake-model".into());
+    let second = recorded(round(&mut dao.run, &mut files, &Scorer::new(Bag)).unwrap());
+    assert_eq!(second.n(), 2);
+    let ns: Vec<u32> = dao.run.rounds().unwrap().iter().map(|r| r.n()).collect();
+    assert_eq!(ns, [1, 2]);
+    assert!(dao.root.join("round-2/packets.cc").is_file());
+    assert_eq!(dao.run.next_round_dir().unwrap(), dao.root.join("round-3"));
 }
 
 struct OtherEmbedder;
@@ -790,6 +830,12 @@ fn errors_echo_no_input() {
         assert!(!text.to_uppercase().contains("CANARY"), "{text}");
     }
     assert!(all.len() >= 12);
+    // Debug names the same kind Display does.
+    assert_eq!(format!("{:?}", RunError::NoRun), "the root holds no run");
+    assert_eq!(
+        format!("{:?}", RunError::Drift(DriftOf::Model)),
+        "drift in Model"
+    );
 }
 
 #[test]
