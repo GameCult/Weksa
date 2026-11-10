@@ -2,7 +2,7 @@ mod common;
 
 use common::{cast, ent, entities_in, group_in_bucket, item_in, model, run_over, world};
 use weksa::context::{
-    ENCODE_INSTRUCTIONS as ENCODE, MINT_INSTRUCTIONS as MINT, OfferRefusal, Prompt,
+    ENCODE_INSTRUCTIONS as ENCODE, EditFeedback, MINT_INSTRUCTIONS as MINT, OfferRefusal, Prompt,
 };
 use weksa::run::RunStores;
 use weksa::{
@@ -111,17 +111,23 @@ fn train_items_are_in_key_order() {
     );
     assert_eq!((t.len(), t.is_empty()), (3, false));
     let dir = tempfile::tempdir().unwrap();
-    let none = run_over(dir.path()).train().unwrap();
+    let empty = run_over(dir.path());
+    let none = empty.train().unwrap();
     assert_eq!((none.len(), none.is_empty()), (0, true));
-    assert_eq!(Prompt::mint(&none).text(), MINT);
-    assert!(Prompt::mint(&none).item_keys().is_empty());
+    let (inv, fb) = (empty.inventory().inventory().unwrap(), EditFeedback::none());
+    assert_eq!(
+        Prompt::mint(&none, &inv, 0, &fb).text(),
+        format!("{MINT}\n\nlast edit: none; validation composite at head: none\n\ninventory rev:0")
+    );
+    assert!(Prompt::mint(&none, &inv, 0, &fb).item_keys().is_empty());
 }
 
 #[test]
 fn mint_prompt_holds_train_text_only() {
     let c = corpus();
     let t = c.run.train().unwrap();
-    let p = Prompt::mint(&t);
+    let inv = c.run.inventory().inventory().unwrap();
+    let p = Prompt::mint(&t, &inv, 4, &EditFeedback::none());
     assert!(p.text().starts_with(MINT));
     assert!(p.text().contains("alphamarker"));
     for other in ["betamarker", "gammamarker", "deltamarker", "epsilonmarker"] {
@@ -149,16 +155,20 @@ fn prompts_render_deterministically() {
         .unwrap();
     let run = run_over(dir.path());
     let t = run.train().unwrap();
+    let inv = run.inventory().inventory().unwrap();
+    let fb = EditFeedback::none();
     assert_eq!(
-        Prompt::mint(&t).text(),
+        Prompt::mint(&t, &inv, 0, &fb).text(),
         format!(
-            "{MINT}\n\n[item:a:1] entity:nibu: Hello there.\n\n[item:a:2] entity:nibu: Second line."
+            "{MINT}\n\nlast edit: none; validation composite at head: none\n\ninventory rev:0\n\n[item:a:1] entity:nibu: Hello there.\n\n[item:a:2] entity:nibu: Second line."
         )
     );
-    assert_eq!(Prompt::mint(&t).item_keys(), ["item:a:1", "item:a:2"]);
+    assert_eq!(
+        Prompt::mint(&t, &inv, 0, &fb).item_keys(),
+        ["item:a:1", "item:a:2"]
+    );
 
     let offer = run.offer("item:a:2").unwrap().unwrap();
-    let inv = run.inventory().inventory().unwrap();
     assert_eq!(
         Prompt::encode(&offer, &t, &inv, 0).text(),
         format!(
@@ -375,7 +385,8 @@ fn prior_turns_print_only_text_a_live_train_item_holds() {
 
     let run = run_over(dir.path());
     let t = run.train().unwrap();
-    let mint = Prompt::mint(&t);
+    let inv = run.inventory().inventory().unwrap();
+    let mint = Prompt::mint(&t, &inv, 0, &EditFeedback::none());
     for secret in ["withdrawnsecret", "testsecret", "validation reply"] {
         assert!(!mint.text().contains(secret), "mint printed {secret}");
     }
@@ -384,7 +395,6 @@ fn prior_turns_print_only_text_a_live_train_item_holds() {
         "mint prints no prior turns"
     );
 
-    let inv = run.inventory().inventory().unwrap();
     let encode = |key: &str| {
         Prompt::encode(&run.offer(key).unwrap().unwrap(), &t, &inv, 0)
             .text()
@@ -504,3 +514,28 @@ fn prior_turn_fold_matches_the_store() {
 }
 
 const ELIDED_MARK: &str = "[elided]";
+
+#[test]
+fn mint_and_encode_list_the_same_inventory() {
+    let w = world();
+    let run = run_over(w.dir.path());
+    let inv = run.inventory().inventory().unwrap();
+    let t = run.train().unwrap();
+    let offer = run.offer("item:nibu:1").unwrap().unwrap();
+    let fb = EditFeedback::none();
+    for rev in [2, 4] {
+        let header = format!("inventory rev:{rev}\n");
+        let mint = Prompt::mint(&t, &inv, rev, &fb);
+        let encode = Prompt::encode(&offer, &t, &inv, rev);
+        let from_mint = mint.text().split_once(&header).unwrap().1;
+        let from_mint = from_mint.split("\n\n").next().unwrap();
+        let from_encode = encode.text().split_once(&header).unwrap().1;
+        assert!(!from_mint.is_empty());
+        assert_eq!(from_mint, from_encode, "rev {rev}");
+    }
+    let at = |rev| {
+        let text = Prompt::mint(&t, &inv, rev, &fb).text().to_string();
+        text.split_once("inventory rev:").unwrap().1.to_string()
+    };
+    assert_ne!(at(2), at(4), "the revision selects the entries");
+}

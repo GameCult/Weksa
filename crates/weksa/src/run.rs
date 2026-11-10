@@ -41,6 +41,13 @@ pub const PROMPT_SOURCE_DIGEST: u64 = fnv1a64(include_bytes!("context.rs"));
 /// included, ends a run; code outside that file is not covered.
 pub const LOWERER_SOURCE_DIGEST: u64 = fnv1a64(include_bytes!("lower.rs"));
 
+/// The least composite gain an edit must show over item noise to be kept, and
+/// the grid the editor's one held-out number is rounded to. A run releases at
+/// most `1 / LADDER_STEP` = 200 distinct head composites (the Ladder, Blum and
+/// Hardt 2015), because the head changes only on an accept and an accept needs
+/// a gain above one step.
+pub const LADDER_STEP: f64 = 0.005;
+
 /// What a run pinned at open. Key `run:<label>`.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, DatabaseEntry)]
 #[cultcache(type = "weksa.loop_run")]

@@ -3,8 +3,10 @@
 //! [`TrainItems`] or by encoding one item an [`EncoderOffer`] holds: Train-only
 //! minting and per-item encoding (leak-owned-by-flow-and-scorer-3,
 //! loop-context-builder-2). Instruction text is [`MINT_INSTRUCTIONS`] and
-//! [`ENCODE_INSTRUCTIONS`], consts in this module; an encode prompt also lists
-//! the inventory at the run's revision.
+//! [`ENCODE_INSTRUCTIONS`], consts in this module; both prompts also list the
+//! inventory at the run's revision. A mint prompt is the editor's: it reads
+//! [`TrainItems`], an [`Inventory`] and an [`EditFeedback`] and nothing else, so
+//! no held-out text, key or per-item score can reach it.
 //!
 //! Item blocks are data from the run's pinned corpus, reached only through
 //! `RunStores`, the one public producer of `TrainItems` and `EncoderOffer`
@@ -17,12 +19,21 @@ use std::marker::PhantomData;
 use crate::corpus::CorpusItem;
 use crate::inventory::{Inventory, InventoryEntry, OptionLabel, ValueKind};
 use crate::packet::EntityId;
+use crate::run::LADDER_STEP;
 use crate::split::{Checkpoint, Split, SplitScheme, fnv1a64, hex16};
 use crate::store::{CorpusStore, normalized};
 
-/// The instructions a mint prompt starts with. golf-loop-en edits the wording
-/// here.
-pub const MINT_INSTRUCTIONS: &str = "Mint glosses from the lines below.";
+/// The instructions a mint prompt starts with: the editor's whole brief. Fixed
+/// per run by `PROMPT_SOURCE_DIGEST`.
+pub const MINT_INSTRUCTIONS: &str = "\
+Propose one edit to the inventory below, so that the lines below can be encoded and lowered to English more faithfully.
+Answer with one JSON object and nothing else: no code fence, no commentary.
+Shape: {\"add\": [{\"family\", \"gloss\", \"value_kind\", \"applies_to\"}], \"retire\": [ids]}; 1 to 8 changes in all, adds and retires together.
+- family: one of Concept, Frame, Role, Relation, SpeechAct, Feature, ReferentKind, Extension.
+- gloss: 1 to 120 bytes naming a general meaning, never a quoted line.
+- value_kind and applies_to only on a Feature; value_kind only on an Extension. value_kind is \"Grade\", \"Flag\" or {\"Options\": [labels]}; applies_to is a list of slots.
+- ids and revision numbers are the store's: write an id only to retire a live entry, by the id the inventory lists.
+The line after this brief says whether your last edit was kept and the held-out composite score at the current inventory.";
 
 /// The instructions an encode prompt starts with: the encoder's whole brief.
 /// Fixed per run by `PROMPT_SOURCE_DIGEST`.
@@ -214,6 +225,66 @@ impl<'cp> EncoderOffer<'cp> {
     }
 }
 
+/// What the editor is told of how its last edit fared: whether it was kept, and
+/// the held-out composite at the current inventory, rounded to the nearest
+/// [`LADDER_STEP`]. The head composite changes only when an edit is accepted and
+/// an accept needs a gain above one step, so a run releases at most
+/// `1 / LADDER_STEP` distinct values (Blum and Hardt 2015, the Ladder). Nothing
+/// else about the held-out split is a field.
+///
+/// ```
+/// let f = weksa::context::EditFeedback::none();
+/// # let _ = f;
+/// ```
+///
+/// Its fields are private:
+///
+/// ```compile_fail,E0451
+/// let _ = weksa::context::EditFeedback { last: None, head: None };
+/// ```
+///
+/// and only the run builds one with a reading:
+///
+/// ```compile_fail,E0624
+/// let _ = weksa::context::EditFeedback::new(Some(true), Some(0.5));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EditFeedback {
+    last: Option<bool>,
+    head: Option<f64>,
+}
+
+impl EditFeedback {
+    /// No edit yet and no reading.
+    pub fn none() -> Self {
+        Self {
+            last: None,
+            head: None,
+        }
+    }
+
+    // Called by run::cycle (cut commit 5 of golf-loop-edit-accept).
+    #[allow(dead_code)]
+    /// `last`: whether the previous edit was accepted; `head`: the composite at
+    /// the current inventory, rounded here to the nearest [`LADDER_STEP`].
+    pub(crate) fn new(last: Option<bool>, head: Option<f64>) -> Self {
+        Self {
+            last,
+            head: head.map(|x| (x / LADDER_STEP).round() * LADDER_STEP),
+        }
+    }
+
+    fn line(&self) -> String {
+        let last = match self.last {
+            Some(true) => "accepted",
+            Some(false) => "rejected",
+            None => "none",
+        };
+        let head = self.head.map_or("none".to_string(), |x| format!("{x:.3}"));
+        format!("last edit: {last}; validation composite at head: {head}")
+    }
+}
+
 /// Text for a model call, and the keys of the items it holds. The only
 /// constructors are [`Prompt::mint`] and [`Prompt::encode`].
 ///
@@ -224,23 +295,30 @@ impl<'cp> EncoderOffer<'cp> {
 /// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
 /// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e").unwrap();
 /// let t = run.train().unwrap();
-/// let p = weksa::context::Prompt::mint(&t);
-/// assert_eq!(p.text(), weksa::context::MINT_INSTRUCTIONS);
+/// let inv = run.inventory().inventory().unwrap();
+/// let feedback = weksa::context::EditFeedback::none();
+/// let p = weksa::context::Prompt::mint(&t, &inv, 0, &feedback);
+/// assert!(p.text().starts_with(weksa::context::MINT_INSTRUCTIONS));
+/// assert!(p.text().contains("last edit: none; validation composite at head: none"));
+/// assert!(p.text().contains("inventory rev:0"));
 /// ```
 ///
-/// Instructions are not a parameter:
+/// Instructions are not a parameter; the same call with a fifth argument fails
+/// on arity alone:
 ///
-/// ```compile_fail
+/// ```compile_fail,E0061
 /// # let dir = tempfile::tempdir().unwrap();
 /// # let p = |n: &str| dir.path().join(n);
 /// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
 /// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
 /// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e").unwrap();
 /// let t = run.train().unwrap();
-/// let p = weksa::context::Prompt::mint("x", &t);
+/// let inv = run.inventory().inventory().unwrap();
+/// let feedback = weksa::context::EditFeedback::none();
+/// let p = weksa::context::Prompt::mint(&t, &inv, 0, &feedback, "x");
 /// ```
 ///
-/// ```compile_fail
+/// ```compile_fail,E0277
 /// fn s<T: serde::Serialize>(_: &T) {}
 /// # let dir = tempfile::tempdir().unwrap();
 /// # let p = |n: &str| dir.path().join(n);
@@ -248,7 +326,9 @@ impl<'cp> EncoderOffer<'cp> {
 /// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
 /// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e").unwrap();
 /// let t = run.train().unwrap();
-/// let p = weksa::context::Prompt::mint(&t);
+/// let inv = run.inventory().inventory().unwrap();
+/// let feedback = weksa::context::EditFeedback::none();
+/// let p = weksa::context::Prompt::mint(&t, &inv, 0, &feedback);
 /// s(&p);
 /// ```
 pub struct Prompt {
@@ -303,13 +383,33 @@ fn entry_line(entry: &InventoryEntry) -> String {
     line
 }
 
+/// Each entry of `inventory` live at `rev`, one `\n` and one line apiece: the
+/// listing both prompts print under `inventory rev:<rev>`.
+fn inventory_lines(inventory: &Inventory, rev: u32) -> String {
+    inventory
+        .entries()
+        .filter(|e| e.live_at(rev))
+        .map(|e| format!("\n{}", entry_line(e)))
+        .collect()
+}
+
 /// Printed in place of a prior turn whose text no live Train item holds.
 const ELIDED: &str = "[elided]";
 
 impl Prompt {
-    /// [`MINT_INSTRUCTIONS`], then every Train item in key order.
-    pub fn mint(train: &TrainItems) -> Prompt {
-        let mut parts = vec![MINT_INSTRUCTIONS.to_string()];
+    /// [`MINT_INSTRUCTIONS`], the feedback line, the entries of `inventory` live
+    /// at `rev`, then every Train item in key order without prior turns.
+    pub fn mint(
+        train: &TrainItems,
+        inventory: &Inventory,
+        rev: u32,
+        feedback: &EditFeedback,
+    ) -> Prompt {
+        let mut parts = vec![
+            MINT_INSTRUCTIONS.to_string(),
+            feedback.line(),
+            format!("inventory rev:{rev}{}", inventory_lines(inventory, rev)),
+        ];
         parts.extend(train.items.iter().map(|item| block(item, None)));
         Prompt {
             text: parts.join("\n\n"),
@@ -327,15 +427,12 @@ impl Prompt {
         rev: u32,
     ) -> Prompt {
         let ids: Vec<&str> = offer.entities.iter().map(EntityId::as_str).collect();
-        let mut text = format!(
-            "{ENCODE_INSTRUCTIONS}\n\n{}\n\nentities: {}\n\ninventory rev:{rev}",
+        let text = format!(
+            "{ENCODE_INSTRUCTIONS}\n\n{}\n\nentities: {}\n\ninventory rev:{rev}{}",
             block(&offer.item, Some(train)),
-            ids.join(", ")
+            ids.join(", "),
+            inventory_lines(inventory, rev)
         );
-        for entry in inventory.entries().filter(|e| e.live_at(rev)) {
-            text.push('\n');
-            text.push_str(&entry_line(entry));
-        }
         Prompt {
             text,
             items: vec![offer.item.id.clone()],
@@ -362,6 +459,38 @@ impl Prompt {
 mod tests {
     use super::*;
     use crate::split::fixture::{group_in, item};
+
+    #[test]
+    fn the_feedback_line_prints_exact_values() {
+        let line = |last, head| EditFeedback::new(last, head).line();
+        assert_eq!(
+            EditFeedback::none().line(),
+            "last edit: none; validation composite at head: none"
+        );
+        assert_eq!(
+            line(Some(true), Some(0.5)),
+            "last edit: accepted; validation composite at head: 0.500"
+        );
+        assert_eq!(
+            line(Some(false), Some(0.0)),
+            "last edit: rejected; validation composite at head: 0.000"
+        );
+        assert_eq!(line(None, None), EditFeedback::none().line());
+        // The head is rounded to the nearest step before it is printed.
+        assert_eq!(
+            line(None, Some(0.5012)),
+            "last edit: none; validation composite at head: 0.500"
+        );
+        assert_eq!(
+            line(None, Some(0.5026)),
+            "last edit: none; validation composite at head: 0.505"
+        );
+        assert_eq!(
+            line(None, Some(0.9999)),
+            "last edit: none; validation composite at head: 1.000"
+        );
+        assert_eq!(EditFeedback::new(None, Some(0.5026)).head, Some(0.505));
+    }
 
     #[test]
     fn checkpoint_offer_gate() {
