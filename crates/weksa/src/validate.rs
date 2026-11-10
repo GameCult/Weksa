@@ -112,7 +112,8 @@ pub enum Refusal {
     V15ConsentSource {
         source: ProvenanceSource,
     },
-    /// V16: `with_scene` found the item's speaker absent from its group's scene.
+    /// V16: `with_scene` found its group's scene not covering the item's speaker
+    /// or the speaker of some live item of the group.
     V16SpeakerNotInScene,
     /// V17: an addressee that names a predication. An act is not someone
     /// spoken to, so the addressee names a referent.
@@ -168,7 +169,9 @@ impl fmt::Display for Refusal {
             Refusal::V14ConsentWithoutAddressee => "consent given without an addressee",
             Refusal::V14ConsentNotAPredication { .. } => "consent names no predication",
             Refusal::V15ConsentSource { .. } => "consent set by a source that only read wording",
-            Refusal::V16SpeakerNotInScene => "the speaker is not a participant of the scene",
+            Refusal::V16SpeakerNotInScene => {
+                "the scene does not cover the speaker of every live item of its group"
+            }
             Refusal::V17AddresseeNotAReferent { .. } => "the addressee names no referent",
         };
         write!(f, "{}: {what}", self.rule())

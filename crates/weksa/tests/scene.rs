@@ -381,3 +381,30 @@ fn read_refuses_a_scene_that_stopped_covering_a_live_speaker_of_its_group() {
         SceneRead::NoAddressee { rev: 2 }
     );
 }
+
+#[test]
+fn only_live_speakers_of_the_views_group_and_the_views_own_speaker_must_be_covered() {
+    let mut w = world();
+    put(&mut w, scene("g", 1, &["nibu"], vec![]));
+    let ok = SceneRead::NoAddressee { rev: 1 };
+    // A withdrawn speaker the scene lacks does not count.
+    let mut gone = item_in("item:brokkr:1", "Hello.", "g", cast());
+    gone.speaker = eid("brokkr");
+    w.corpus.add(gone, &w.entities).unwrap();
+    w.corpus.withdraw("item:brokkr:1").unwrap();
+    assert_eq!(read(&w, view_of(&w, 3, None)), ok);
+    // Nor does a live speaker the scene lacks in another group.
+    let mut other = item_in("item:brokkr:2", "Hello you.", "h", cast());
+    other.speaker = eid("brokkr");
+    w.corpus.add(other, &w.entities).unwrap();
+    assert_eq!(read(&w, view_of(&w, 3, None)), ok);
+    // The view's own speaker must be listed even when its item was withdrawn
+    // after the view was built: scene g@2 lists Brokkr alone.
+    let view = view_of(&w, 3, None);
+    w.corpus.withdraw("item:nibu:1").unwrap();
+    put(&mut w, scene("g", 2, &["brokkr"], vec![]));
+    assert_eq!(
+        rules(view.with_scene(&inv(&w), &w.state, &w.corpus)),
+        ["V16"]
+    );
+}
