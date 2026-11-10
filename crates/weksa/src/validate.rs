@@ -34,7 +34,7 @@ use crate::packet::{
     Constraints, Context, Discourse, EntityId, Extension, FeatValue, FeatureValue, NodeId, Packet,
     PacketKind, Predication, ProvenanceSource, Referent, Relation, SCHEMA_VERSION, Stance,
 };
-use crate::store::{SpeakerStateStore, StoreError};
+use crate::store::{CorpusStore, SpeakerStateStore, StoreError};
 
 /// A broken rule, named.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -582,8 +582,13 @@ pub enum SceneRead {
 /// scene value and a speaker and fails for that alone.
 ///
 /// ```
-/// fn pick(l: weksa::LoweringInput, i: &weksa::Inventory, s: &weksa::SpeakerStateStore) {
-///     let _ = l.with_scene(i, s);
+/// fn pick(
+///     l: weksa::LoweringInput,
+///     i: &weksa::Inventory,
+///     s: &weksa::SpeakerStateStore,
+///     c: &weksa::CorpusStore,
+/// ) {
+///     let _ = l.with_scene(i, s, c);
 /// }
 /// ```
 ///
@@ -673,8 +678,9 @@ impl LoweringInput {
     /// Reads the speaker's relation to the addressee, the only path for scene
     /// values into a view. The speaker is the item's speaker and the scene is
     /// the latest the store holds for the item's group; the caller names
-    /// neither. A scene that does not list the item's speaker is V16, with or
-    /// without an addressee. What the read found is recorded on the view as a
+    /// neither. A scene that does not list the item's speaker, or the speaker of
+    /// any live item of the group (the rule `put_scene` applies), is V16, with
+    /// or without an addressee. What the read found is recorded on the view as a
     /// [`SceneRead`], never an empty feature list standing for five cases:
     /// no scene for the group, no addressee, an addressee who is the speaker,
     /// no such relation, or the relation from the speaker to the addressee
@@ -686,6 +692,7 @@ impl LoweringInput {
         mut self,
         inventory: &Inventory,
         state: &SpeakerStateStore,
+        corpus: &CorpusStore,
     ) -> Result<Self, StoreError> {
         self.scene = SceneRead::Unread;
         let Some(scene) = state.scene(&self.group)? else {
@@ -693,7 +700,15 @@ impl LoweringInput {
             return Ok(self);
         };
         let rev = scene.n;
-        if !scene.participants.contains(&self.speaker) {
+        let live = corpus.all()?;
+        let live = live
+            .iter()
+            .filter(|i| i.group == self.group && !i.withdrawn)
+            .map(|i| &i.speaker);
+        if scene
+            .uncovered(live.chain(std::iter::once(&self.speaker)))
+            .is_some()
+        {
             return Err(StoreError::Invalid(vec![Refusal::V16SpeakerNotInScene]));
         }
         let Some(addressee) = self.discourse.addressee.as_ref() else {

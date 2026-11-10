@@ -82,6 +82,18 @@ pub struct Scene {
 }
 
 impl Scene {
+    /// The first of `speakers` the scene does not list as a participant: the
+    /// one rule of scene coverage, applied where a scene is put and where it is
+    /// read.
+    pub fn uncovered<'a>(
+        &self,
+        speakers: impl IntoIterator<Item = &'a EntityId>,
+    ) -> Option<&'a EntityId> {
+        speakers
+            .into_iter()
+            .find(|s| !self.participants.contains(s))
+    }
+
     /// The features of the relation from `speaker` to the named `addressee`, or
     /// to `Unnamed` when there is none; `None` when the scene holds no such
     /// relation (a relation with no features is `Some(&[])`). A named

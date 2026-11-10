@@ -147,7 +147,7 @@ fn rules(r: Result<LoweringInput, StoreError>) -> Vec<&'static str> {
 }
 
 fn read(w: &W, view: LoweringInput) -> SceneRead {
-    view.with_scene(&inv(w), &w.state)
+    view.with_scene(&inv(w), &w.state, &w.corpus)
         .unwrap()
         .scene_read()
         .clone()
@@ -164,7 +164,10 @@ fn a_scene_relation_reaches_the_lowering_view_and_changes_no_english() {
     let plain = view_of(&w, 3, Some("n3"));
     assert_eq!(plain.scene_read(), &SceneRead::Unread);
     assert!(plain.scene().is_empty());
-    let with = plain.clone().with_scene(&inv(&w), &w.state).unwrap();
+    let with = plain
+        .clone()
+        .with_scene(&inv(&w), &w.state, &w.corpus)
+        .unwrap();
     assert_eq!(with.scene(), status().as_slice());
     assert_eq!(with.scene_read(), &selected(1, status()));
     assert_eq!(
@@ -300,13 +303,13 @@ fn the_scene_is_the_items_group_and_its_latest_revision() {
     second.relations[0].features = intimacy(5);
     put(&mut w, second);
     let got = view_of(&w, 3, Some("n3"))
-        .with_scene(&inv(&w), &w.state)
+        .with_scene(&inv(&w), &w.state, &w.corpus)
         .unwrap();
     assert_eq!(got.scene_read(), &selected(2, intimacy(5)));
     assert_eq!(got.scene(), intimacy(5).as_slice());
     // A read replaces the earlier one: a store without the scene says so.
     let empty = SpeakerStateStore::open(&w.dir.path().join("empty.cc")).unwrap();
-    let cleared = got.with_scene(&inv(&w), &empty).unwrap();
+    let cleared = got.with_scene(&inv(&w), &empty, &w.corpus).unwrap();
     assert_eq!(cleared.scene_read(), &SceneRead::NoScene);
     assert!(cleared.scene().is_empty());
 }
@@ -318,7 +321,7 @@ fn with_scene_refusals() {
     // The scene was admitted at revision 3; a view of revision 2 predates the
     // Scene features, so the selected relation's ids do not resolve there.
     assert_eq!(
-        rules(view_of(&w, 2, Some("n3")).with_scene(&inv(&w), &w.state)),
+        rules(view_of(&w, 2, Some("n3")).with_scene(&inv(&w), &w.state, &w.corpus)),
         ["V5", "V5", "V5"]
     );
     // A scene that does not list the item's speaker: group k admitted while
@@ -345,9 +348,36 @@ fn with_scene_refusals() {
             .admit(p, &w.inventory, &w.corpus, &w.entities)
             .unwrap();
         assert_eq!(
-            rules(view.with_scene(&inv(&w), &w.state)),
+            rules(view.with_scene(&inv(&w), &w.state, &w.corpus)),
             ["V16"],
             "{addressee:?}"
         );
     }
+}
+
+#[test]
+fn read_refuses_a_scene_that_stopped_covering_a_live_speaker_of_its_group() {
+    // Group g's scene covers Nibu alone, and Nibu's is the only item: admitted.
+    let mut w = world();
+    put(&mut w, scene("g", 1, &["nibu"], vec![]));
+    assert_eq!(
+        read(&w, view_of(&w, 3, None)),
+        SceneRead::NoAddressee { rev: 1 }
+    );
+    // Brokkr then speaks in g. The corpus door lets him in; the view of Nibu's
+    // own line, whose speaker the scene still lists, reads the stale scene no more.
+    let mut item = item_in("item:brokkr:1", "Hello.", "g", cast());
+    item.speaker = eid("brokkr");
+    w.corpus.add(item, &w.entities).unwrap();
+    assert_eq!(
+        rules(view_of(&w, 3, None).with_scene(&inv(&w), &w.state, &w.corpus)),
+        ["V16"]
+    );
+    // The put door applies the same rule, so the repair is a revision that
+    // covers him.
+    put(&mut w, scene("g", 2, &["nibu", "brokkr"], vec![]));
+    assert_eq!(
+        read(&w, view_of(&w, 3, None)),
+        SceneRead::NoAddressee { rev: 2 }
+    );
 }
