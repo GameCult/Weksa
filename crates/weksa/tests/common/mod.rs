@@ -353,3 +353,25 @@ pub fn good() -> Packet {
         },
     }
 }
+
+/// A deterministic bag-of-letters embedder, so cosine differs with the text.
+pub struct Bag;
+
+impl weksa::Embedder for Bag {
+    fn model(&self) -> &str {
+        "bag"
+    }
+    fn embed(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+        Ok(texts
+            .iter()
+            .map(|t| {
+                let mut v = vec![0.0; 27];
+                v[26] = 1.0;
+                for c in t.chars().filter(char::is_ascii_alphabetic) {
+                    v[(c.to_ascii_lowercase() as u8 - b'a') as usize] += 1.0;
+                }
+                v
+            })
+            .collect())
+    }
+}

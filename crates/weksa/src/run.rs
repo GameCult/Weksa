@@ -19,11 +19,15 @@ use cultcache_rs::{CultCache, DatabaseEntry};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::context::{EncoderOffer, TrainItems};
+use crate::context::{EncoderOffer, Prompt, TrainItems};
+use crate::corpus::{CorpusItem, CorpusItemId};
+use crate::encode::{PacketDraft, encoder_id};
 use crate::form::{is_attestation, is_slug};
-use crate::score::{CHRF_VERSION, SplitMean};
-use crate::split::{fnv1a64, hex16};
-use crate::store::{CorpusStore, EntityStore, InventoryStore, open_cache};
+use crate::lower::lower;
+use crate::model::{ModelPort, PortError};
+use crate::score::{CHRF_VERSION, Embedder, ItemScore, ScoreInput, Scorer, SplitMean, aggregate};
+use crate::split::{Split, SplitScheme, fnv1a64, hex16};
+use crate::store::{CorpusStore, EntityStore, InventoryStore, PacketStore, open_cache};
 
 /// The digest of the prompt builder's source. Any edit to `context.rs`,
 /// comments included, ends a run; code outside that file is not covered.
@@ -430,4 +434,173 @@ impl RunStores {
             .root
             .join(format!("round-{}", self.rounds()?.len() + 1)))
     }
+}
+
+/// What a round came to.
+#[derive(Debug)]
+pub enum RoundOutcome {
+    /// Prompts nobody has answered; nothing was written to the run or admitted.
+    Unanswered {
+        prompts: Vec<String>,
+    },
+    Recorded(RoundRecord),
+}
+
+/// How one item fared: where it was refused, or the text it lowered to, with
+/// the key of the packet that was admitted for it.
+enum Fate {
+    Refused(Stage, Option<String>),
+    Lowered(String, String),
+}
+
+/// One round: encodes every live Train and Validation item of the run's pinned
+/// corpus through `model`, admits each packet into the round's own
+/// `<root>/round-<n>/packets.cc`, lowers, scores, and records the round. The
+/// round is all or nothing: while any prompt is unanswered, nothing is written.
+pub fn round<M: ModelPort, E: Embedder>(
+    run: &mut RunStores,
+    model: &mut M,
+    scorer: &Scorer<E>,
+) -> Result<RoundOutcome, RunError> {
+    let store = |_| RunError::Store;
+    if model.model() != run.record.model {
+        return Err(RunError::Drift(DriftOf::Model));
+    }
+    if scorer.embedder().model() != run.record.embedder {
+        return Err(RunError::Drift(DriftOf::Embedder));
+    }
+    let inventory = run.inventory.inventory().map_err(store)?;
+    let rev = inventory.latest().ok_or(RunError::NoInventory)?.n;
+
+    let train = run.train().map_err(store)?;
+    let mut calls = Vec::new();
+    let mut answers = Vec::new();
+    let mut unanswered = Vec::new();
+    for offer in run.offers().map_err(store)? {
+        let prompt = Prompt::encode(&offer, &train, &inventory, rev);
+        match model.answer(&prompt) {
+            Ok(answer) => answers.push((offer.key().to_string(), answer)),
+            Err(PortError::Unanswered) => unanswered.push(prompt.digest()),
+            Err(PortError::Io(kind)) => return Err(RunError::Io(kind)),
+        }
+        calls.push(Call {
+            prompt: prompt.digest(),
+            items: prompt.item_keys().to_vec(),
+        });
+    }
+    if !unanswered.is_empty() {
+        return Ok(RoundOutcome::Unanswered {
+            prompts: unanswered,
+        });
+    }
+
+    let dir = run.next_round_dir().map_err(store)?;
+    std::fs::create_dir_all(&dir).map_err(|e| RunError::Io(e.kind()))?;
+    let mut packets = PacketStore::open(&dir.join("packets.cc")).map_err(store)?;
+    let encoder = encoder_id(model.model(), &run.record.prompt_digest);
+    let mut items: Vec<CorpusItem> = Vec::new();
+    let mut fates: Vec<Fate> = Vec::new();
+    for (key, answer) in &answers {
+        let item = run.corpus.get(key).map_err(store)?.ok_or(RunError::Store)?;
+        let id = CorpusItemId::parse(key).map_err(|_| RunError::Store)?;
+        let fate = match PacketDraft::parse(answer) {
+            Err(_) => Fate::Refused(Stage::Parse, None),
+            Ok(draft) => {
+                let packet = draft.into_packet(&id, rev, &encoder);
+                let packet_key = packet.id.to_string();
+                match packets.admit(packet, &run.inventory, &run.corpus, &run.entities) {
+                    Err(_) => Fate::Refused(Stage::Admit, None),
+                    Ok(view) => match lower(&view, &inventory, &run.entities) {
+                        Err(_) => Fate::Refused(Stage::Lower, Some(packet_key)),
+                        Ok(text) => Fate::Lowered(text, packet_key),
+                    },
+                }
+            }
+        };
+        items.push(item);
+        fates.push(fate);
+    }
+
+    // One score call over what lowered; none when nothing did.
+    let lowered: Vec<(usize, &str)> = fates
+        .iter()
+        .enumerate()
+        .filter_map(|(i, fate)| match fate {
+            Fate::Lowered(text, _) => Some((i, text.as_str())),
+            Fate::Refused(..) => None,
+        })
+        .collect();
+    let inputs: Vec<ScoreInput> = lowered
+        .iter()
+        .map(|(i, text)| ScoreInput {
+            reference: &items[*i].text,
+            output: text,
+        })
+        .collect();
+    let scores = if inputs.is_empty() {
+        Vec::new()
+    } else {
+        scorer.score(&inputs).map_err(|_| RunError::Embed)?
+    };
+    let mut score_at: Vec<Option<ItemScore>> = vec![None; items.len()];
+    for ((i, _), score) in lowered.iter().zip(scores) {
+        score_at[*i] = Some(score);
+    }
+    let scored: Vec<(&CorpusItem, ItemScore)> = items
+        .iter()
+        .zip(&score_at)
+        .filter_map(|(item, score)| score.clone().map(|s| (item, s)))
+        .collect();
+    let means = aggregate(&scored);
+
+    let mut train_rows = Vec::new();
+    let mut refused = RefusalCounts::default();
+    for ((item, fate), score) in items.iter().zip(&fates).zip(&score_at) {
+        let (outcome, packet) = match (fate, score) {
+            (Fate::Lowered(_, key), Some(score)) => (
+                Outcome::Scored {
+                    chrf: score.chrf,
+                    meaning: score.meaning,
+                },
+                Some(key.clone()),
+            ),
+            (Fate::Refused(stage, key), _) => (Outcome::Refused(*stage), key.clone()),
+            (Fate::Lowered(..), None) => return Err(RunError::Store),
+        };
+        match (SplitScheme::V1.live(item), fate) {
+            (Some(Split::Train), _) => train_rows.push(TrainRow {
+                item: item.id.clone(),
+                packet,
+                outcome,
+            }),
+            (Some(Split::Validation), Fate::Refused(stage, _)) => match stage {
+                Stage::Parse => refused.parse += 1,
+                Stage::Admit => refused.admit += 1,
+                Stage::Lower => refused.lower += 1,
+            },
+            _ => {}
+        }
+    }
+
+    let n = run.rounds().map_err(store)?.len() as u32 + 1;
+    let record = RoundRecord {
+        n,
+        inventory_rev: rev,
+        prompt_digest: run.record.prompt_digest.clone(),
+        lowerer_digest: run.record.lowerer_digest.clone(),
+        corpus_digest: run.record.corpus_digest.clone(),
+        entity_digest: run.record.entity_digest.clone(),
+        model: run.record.model.clone(),
+        embedder: run.record.embedder.clone(),
+        chrf_version: run.record.chrf_version.clone(),
+        calls,
+        train: train_rows,
+        train_mean: means.train,
+        validation_mean: means.validation,
+        validation_refused: refused,
+    };
+    run.cache
+        .put(format!("run:{}:round:{n}", run.record.label), &record)
+        .map_err(store)?;
+    Ok(RoundOutcome::Recorded(record))
 }
