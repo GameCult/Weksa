@@ -624,6 +624,8 @@ fn round_over_the_dao_stores_scores_train_and_validation() {
     assert_eq!(r.model(), "fake-model");
     assert_eq!(r.embedder(), "bag");
     assert_eq!(r.chrf_version(), weksa::score::CHRF_VERSION);
+    assert_eq!(r.inventory_digest(), pinned.inventory_digest);
+    assert_eq!(r.cycle(), None, "a plain round belongs to no cycle");
 
     // It is stored, and the packets are in the round's own store, made by the encoder step.
     assert_eq!(
@@ -944,6 +946,34 @@ fn refusal_stages_are_counted() {
         "refusing never raises the mean"
     );
     assert_eq!(full.validation_scored(), 2);
+}
+
+#[test]
+fn non_utf8_encode_answer_is_a_parse_refusal() {
+    let mut dao = dao();
+    let expected = prompts(&dao.run);
+    let answers: HashMap<String, String> = good_answers()
+        .into_iter()
+        .map(|(n, a)| (format!("item:daodejing:{n}"), a))
+        .collect();
+    let round1 = dao.root.join("round-1");
+    std::fs::create_dir_all(&round1).unwrap();
+    for (key, p) in &expected {
+        let bytes = if key == "item:daodejing:3" {
+            vec![0xff, 0xfe, 0xfd]
+        } else {
+            answers[key].clone().into_bytes()
+        };
+        std::fs::write(round1.join(format!("{}.answer", p.digest())), bytes).unwrap();
+    }
+    let mut files = AnswerFiles::new(round1.clone(), "fake-model".into());
+    let r = recorded(round(&mut dao.run, &mut files, &Scorer::new(Bag)).unwrap());
+    // Item 3 is Validation: its refusal is a Parse refusal and the round stands.
+    let v = r.validation_refused();
+    assert_eq!((v.parse, v.admit, v.lower), (1, 0, 0));
+    assert_eq!((r.train_scored(), r.validation_scored()), (1, 1));
+    assert_eq!(r.validation_mean().count, 2);
+    assert_eq!(dao.run.rounds().unwrap(), [r]);
 }
 
 /// An embedder that is down.

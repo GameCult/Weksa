@@ -147,6 +147,8 @@ pub struct RefusalCounts {
 ///         validation_mean: SplitMean::default(),
 ///         validation_scored: 0,
 ///         validation_refused: RefusalCounts::default(),
+///         inventory_digest: String::new(),
+///         cycle: None,
 ///     }
 /// }
 /// ```
@@ -190,6 +192,12 @@ pub struct RoundRecord {
     /// raise it.
     #[cultcache(key = 15)]
     validation_scored: u32,
+    /// 16 hex of the inventory file the round was scored under.
+    #[cultcache(key = 16)]
+    inventory_digest: String,
+    /// `Some(k)` for the candidate round of cycle `k`.
+    #[cultcache(key = 17)]
+    cycle: Option<u32>,
 }
 
 impl RoundRecord {
@@ -240,6 +248,12 @@ impl RoundRecord {
     }
     pub fn validation_scored(&self) -> u32 {
         self.validation_scored
+    }
+    pub fn inventory_digest(&self) -> &str {
+        &self.inventory_digest
+    }
+    pub fn cycle(&self) -> Option<u32> {
+        self.cycle
     }
 
     /// The one line a recorded round prints. `n` is every item of the split,
@@ -564,14 +578,53 @@ pub fn round<M: ModelPort, E: Embedder>(
     model: &mut M,
     scorer: &Scorer<E>,
 ) -> Result<RoundOutcome, RunError> {
+    check_drift(run, model, scorer)?;
     let store = |_| RunError::Store;
+    let dir = run.next_round_dir().map_err(store)?;
+    let digest = run.record.inventory_digest.clone();
+    match score_round(run, &run.inventory, &digest, &dir, None, model, scorer)? {
+        RoundOutcome::Recorded(record) => {
+            run.cache
+                .put(
+                    format!("run:{}:round:{}", run.record.label, record.n),
+                    &record,
+                )
+                .map_err(store)?;
+            Ok(RoundOutcome::Recorded(record))
+        }
+        unanswered => Ok(unanswered),
+    }
+}
+
+/// The model and embedder the run pinned are the ones answering.
+fn check_drift<M: ModelPort, E: Embedder>(
+    run: &RunStores,
+    model: &M,
+    scorer: &Scorer<E>,
+) -> Result<(), RunError> {
     if model.model() != run.record.model {
         return Err(RunError::Drift(DriftOf::Model));
     }
     if scorer.embedder().model() != run.record.embedder {
         return Err(RunError::Drift(DriftOf::Embedder));
     }
-    let inventory = run.inventory.inventory().map_err(store)?;
+    Ok(())
+}
+
+/// Encodes, admits, lowers and scores every offered item under `inventory`
+/// (whose file digests to `inventory_digest`), with packets in `dir`, and
+/// returns the record unput. `Recorded` here means built, not stored.
+fn score_round<M: ModelPort, E: Embedder>(
+    run: &RunStores,
+    inventory_store: &InventoryStore,
+    inventory_digest: &str,
+    dir: &Path,
+    cycle: Option<u32>,
+    model: &mut M,
+    scorer: &Scorer<E>,
+) -> Result<RoundOutcome, RunError> {
+    let store = |_| RunError::Store;
+    let inventory = inventory_store.inventory().map_err(store)?;
     let rev = inventory.latest().ok_or(RunError::NoInventory)?.n;
 
     let train = run.train().map_err(store)?;
@@ -581,7 +634,11 @@ pub fn round<M: ModelPort, E: Embedder>(
     for offer in run.offers().map_err(store)? {
         let prompt = Prompt::encode(&offer, &train, &inventory, rev);
         match model.answer(&prompt) {
-            Ok(answer) => answers.push((offer.key().to_string(), answer)),
+            Ok(answer) => answers.push((offer.key().to_string(), Some(answer))),
+            // An answer that is not UTF-8 is that item's parse refusal.
+            Err(PortError::Io(ErrorKind::InvalidData)) => {
+                answers.push((offer.key().to_string(), None))
+            }
             Err(PortError::Unanswered) => unanswered.push(prompt.digest()),
             Err(PortError::Io(kind)) => return Err(RunError::Io(kind)),
         }
@@ -596,10 +653,9 @@ pub fn round<M: ModelPort, E: Embedder>(
         });
     }
 
-    let dir = run.next_round_dir().map_err(store)?;
-    std::fs::create_dir_all(&dir).map_err(|e| RunError::Io(e.kind()))?;
+    std::fs::create_dir_all(dir).map_err(|e| RunError::Io(e.kind()))?;
     // The directory of an unrecorded round holds only a failed attempt's packets.
-    discard_packets(&dir);
+    discard_packets(dir);
     let mut packets = PacketStore::open(&dir.join("packets.cc")).map_err(store)?;
     let encoder = encoder_id(model.model(), &run.record.prompt_digest);
     let mut items: Vec<CorpusItem> = Vec::new();
@@ -607,12 +663,12 @@ pub fn round<M: ModelPort, E: Embedder>(
     for (key, answer) in &answers {
         let item = run.corpus.get(key).map_err(store)?.ok_or(RunError::Store)?;
         let id = CorpusItemId::parse(key).map_err(|_| RunError::Store)?;
-        let fate = match PacketDraft::parse(answer) {
-            Err(_) => Fate::Refused(Stage::Parse, None),
-            Ok(draft) => {
+        let fate = match answer.as_deref().map(PacketDraft::parse) {
+            None | Some(Err(_)) => Fate::Refused(Stage::Parse, None),
+            Some(Ok(draft)) => {
                 let packet = draft.into_packet(&id, rev, &encoder);
                 let packet_key = packet.id.to_string();
-                match packets.admit(packet, &run.inventory, &run.corpus, &run.entities) {
+                match packets.admit(packet, inventory_store, &run.corpus, &run.entities) {
                     Err(_) => Fate::Refused(Stage::Admit, None),
                     Ok(view) => match lower(&view, &inventory, &run.entities) {
                         Err(_) => Fate::Refused(Stage::Lower, Some(packet_key)),
@@ -647,7 +703,7 @@ pub fn round<M: ModelPort, E: Embedder>(
         match scorer.score(&inputs) {
             Ok(scores) => scores,
             Err(_) => {
-                discard_packets(&dir);
+                discard_packets(dir);
                 return Err(RunError::Embed);
             }
         }
@@ -720,10 +776,9 @@ pub fn round<M: ModelPort, E: Embedder>(
         validation_refused: refused,
         train_scored,
         validation_scored,
+        inventory_digest: inventory_digest.to_string(),
+        cycle,
     };
-    run.cache
-        .put(format!("run:{}:round:{n}", run.record.label), &record)
-        .map_err(store)?;
     Ok(RoundOutcome::Recorded(record))
 }
 
@@ -759,6 +814,8 @@ mod tests {
             validation_mean: SplitMean::default(),
             validation_scored: 0,
             validation_refused: RefusalCounts::default(),
+            inventory_digest: String::new(),
+            cycle: None,
         };
         assert_eq!(r.n(), 1);
     }
