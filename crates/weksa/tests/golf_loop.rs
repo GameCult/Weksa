@@ -370,8 +370,8 @@ fn a_store_changed_between_its_digest_and_its_open_is_drift() {
         Some(RunError::Drift(DriftOf::Corpus))
     );
 
-    // The same window at create: nothing is pinned and nothing is left behind,
-    // so the retry creates.
+    // The same window at create: nothing is pinned and the inventory copy and its
+    // lock are taken away again, so the retry creates.
     let mut w = world();
     let dir = w.dir.path().to_path_buf();
     let root = dir.join("run");
@@ -389,8 +389,71 @@ fn a_store_changed_between_its_digest_and_its_open_is_drift() {
         Some(RunError::Drift(DriftOf::Corpus))
     );
     assert!(!root.join("inventory.cc").exists());
+    // Not the copy and not the lock the store's open left beside it.
+    assert!(!root.join("inventory.cc.lock").exists());
     assert_eq!(RunStores::open(&root).err(), Some(RunError::NoRun));
     RunStores::create(&root, "t", paths(), "fake-model", "bag").unwrap();
+}
+
+/// Runs `change` in the window between the pins and the open, at `open` and at
+/// `create`, and returns what each refused with plus what `create` left behind.
+fn window(
+    change: impl Fn(&mut common::World, &Path),
+) -> (Option<RunError>, Option<RunError>, bool, Option<RunError>) {
+    let mut w = world();
+    let dir = w.dir.path().to_path_buf();
+    let root = dir.join("run");
+    run_over(&dir);
+    let opened = RunStores::open_between(&root, || change(&mut w, &root)).err();
+
+    let mut w = world();
+    let dir = w.dir.path().to_path_buf();
+    let root = dir.join("run");
+    let (c, i, e) = (dir.join("c.cc"), dir.join("i.cc"), dir.join("entities.cc"));
+    let paths = weksa::run::RunPaths {
+        corpus: &c,
+        inventory: &i,
+        entities: &e,
+    };
+    let created = RunStores::create_between(&root, "t", paths, "fake-model", "bag", || {
+        change(&mut w, &root)
+    })
+    .err();
+    let left = root.join("inventory.cc").exists() || root.join("inventory.cc.lock").exists();
+    (opened, created, left, RunStores::open(&root).err())
+}
+
+#[test]
+fn an_entity_store_changed_between_its_digest_and_its_open_is_drift() {
+    let (opened, created, left, after) = window(|w, _| {
+        w.entities.put(ent("kay", "en-US", &["Kay"])).unwrap();
+    });
+    assert_eq!(opened, Some(RunError::Drift(DriftOf::Entities)));
+    assert_eq!(created, Some(RunError::Drift(DriftOf::Entities)));
+    assert!(!left);
+    assert_eq!(after, Some(RunError::NoRun));
+}
+
+#[test]
+fn a_head_inventory_changed_between_its_digest_and_its_open_is_drift() {
+    let (opened, created, left, after) = window(|_, root| {
+        weksa::InventoryStore::open(&root.join("inventory.cc"))
+            .unwrap()
+            .admit_revision(
+                weksa::InventoryRevision {
+                    n: 5,
+                    parent: Some(4),
+                    changes: vec![],
+                    frozen: false,
+                },
+                vec![],
+            )
+            .unwrap();
+    });
+    assert_eq!(opened, Some(RunError::Drift(DriftOf::Inventory)));
+    assert_eq!(created, Some(RunError::Drift(DriftOf::Inventory)));
+    assert!(!left);
+    assert_eq!(after, Some(RunError::NoRun));
 }
 
 #[test]
@@ -398,12 +461,29 @@ fn source_digests_cover_their_files() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let digest = |name: &str| fnv1a64(&std::fs::read(src.join(name)).unwrap());
     // The prompt's partition and names come from split.rs: it is covered too.
-    let both = [
+    let (context, split) = (
         std::fs::read(src.join("context.rs")).unwrap(),
         std::fs::read(src.join("split.rs")).unwrap(),
+    );
+    // Each file enters behind its length, so the pair has one framing.
+    let framed = [
+        (context.len() as u64).to_le_bytes().as_slice(),
+        &context,
+        (split.len() as u64).to_le_bytes().as_slice(),
+        &split,
     ]
     .concat();
-    assert_eq!(weksa::run::PROMPT_SOURCE_DIGEST, fnv1a64(&both));
+    assert_eq!(weksa::run::PROMPT_SOURCE_DIGEST, fnv1a64(&framed));
+    assert_ne!(
+        weksa::run::PROMPT_SOURCE_DIGEST,
+        fnv1a64(&[context.clone(), split.clone()].concat()),
+        "bare concatenation is not the digest"
+    );
+    // Moving the boundary between the parts moves the digest.
+    assert_ne!(
+        weksa::split::fnv1a64_of(&[b"ab", b"c"]),
+        weksa::split::fnv1a64_of(&[b"a", b"bc"])
+    );
     assert_ne!(weksa::run::PROMPT_SOURCE_DIGEST, digest("context.rs"));
     assert_eq!(weksa::run::LOWERER_SOURCE_DIGEST, digest("lower.rs"));
     assert_ne!(
@@ -1387,6 +1467,10 @@ fn errors_echo_no_input() {
         format!("{:?}", RunError::Drift(DriftOf::Model)),
         "drift in Model"
     );
+    // The Prompts text names the two files its digest covers, and only them.
+    let prompts = RunError::Drift(DriftOf::Prompts).to_string();
+    assert!(prompts.contains("context.rs") && prompts.contains("split.rs"));
+    assert_eq!(format!("{:?}", RunError::Drift(DriftOf::Prompts)), prompts);
 }
 
 #[test]
