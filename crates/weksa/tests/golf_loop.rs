@@ -213,6 +213,50 @@ fn a_run_works_on_its_own_copy_of_the_inventory() {
     );
 }
 
+#[test]
+fn create_refuses_a_root_that_holds_an_inventory_and_never_truncates_it() {
+    let dao = dao();
+    let bytes = std::fs::read(&dao.inventory).unwrap();
+    let create = |root: &Path, inventory: &Path| {
+        RunStores::create(
+            root,
+            "x",
+            RunPaths {
+                corpus: &dao.corpus,
+                inventory,
+                entities: &dao.entities,
+            },
+            "fake-model",
+            "bag",
+        )
+    };
+
+    // The source is the root's own inventory.cc: the copy would open it as its
+    // destination. It is refused and the source bytes survive.
+    let own = dao.root.join("own");
+    std::fs::create_dir_all(&own).unwrap();
+    std::fs::write(own.join("inventory.cc"), &bytes).unwrap();
+    assert_eq!(
+        create(&own, &own.join("inventory.cc")).err(),
+        Some(RunError::Io(std::io::ErrorKind::AlreadyExists))
+    );
+    assert_eq!(std::fs::read(own.join("inventory.cc")).unwrap(), bytes);
+
+    // Any other file of that name in the root is refused untouched, too.
+    let other = dao.root.join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(other.join("inventory.cc"), b"not yours").unwrap();
+    assert_eq!(
+        create(&other, &dao.inventory).err(),
+        Some(RunError::Io(std::io::ErrorKind::AlreadyExists))
+    );
+    assert_eq!(
+        std::fs::read(other.join("inventory.cc")).unwrap(),
+        b"not yours"
+    );
+    assert_eq!(std::fs::read(&dao.inventory).unwrap(), bytes);
+}
+
 /// `weksa.loop_run` as it was before the run kept its own inventory copy: keys
 /// 0 to 10.
 #[derive(Clone, cultcache_rs::DatabaseEntry)]
@@ -1954,9 +1998,9 @@ fn source_tripwires() {
     let count = |needle: &str| code.iter().filter(|l| l.contains(needle)).count();
     assert!(!run.contains("pub fn new"));
     assert_eq!(count("admit_revision("), 1, "one door call");
-    assert_eq!(count("std::fs::copy"), 2, "create's copy and cycle's");
+    assert_eq!(count("std::fs::copy"), 1, "the cycle's copy; create's is copy_new");
     assert_eq!(
-        count("record.inventory,"),
+        count("Path::new(&record.inventory)"),
         1,
         "the source path is read once"
     );

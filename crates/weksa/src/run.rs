@@ -418,6 +418,20 @@ fn one_run(cache: &CultCache) -> Result<Option<RunRecord>, RunError> {
         .next())
 }
 
+/// Copies `from` onto a `to` that must not exist: a root that already holds a
+/// file of that name (the source itself, say) refuses before anything is written.
+fn copy_new(from: &Path, to: &Path) -> Result<(), RunError> {
+    let io = |e: std::io::Error| RunError::Io(e.kind());
+    let mut source = std::fs::File::open(from).map_err(io)?;
+    let mut dest = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(to)
+        .map_err(io)?;
+    std::io::copy(&mut source, &mut dest).map_err(io)?;
+    Ok(())
+}
+
 impl RunStores {
     /// Pins the three stores at `root`, which must hold no run. A store file
     /// that does not exist is `Io(NotFound)`.
@@ -457,7 +471,7 @@ impl RunStores {
         };
         // The run works on its own copy; the caller's store is never opened again.
         let head = root.join(INVENTORY_FILE);
-        std::fs::copy(&record.inventory, &head).map_err(|e| RunError::Io(e.kind()))?;
+        copy_new(Path::new(&record.inventory), &head)?;
         let record = RunRecord {
             corpus_digest: file_digest(&record.corpus).ok_or(RunError::Store)?,
             entity_digest: file_digest(&record.entities).ok_or(RunError::Store)?,
