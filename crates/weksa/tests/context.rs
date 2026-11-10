@@ -686,3 +686,21 @@ mod lowering {
         }
     }
 }
+
+/// First real rounds: five of six encoders wrote bare integers (`"concept": 7`)
+/// where the inventory lists `concept:7`, and the draft reader refused them.
+/// The prompt says the form outright, and the inventory lines it points to
+/// are spelled in that form.
+#[test]
+fn the_encode_prompt_states_the_id_form_the_inventory_lines_use() {
+    assert!(ENCODE.contains("family prefix included: concept:7, never 7"));
+    let (text, _) = encode_with_prior("Hello there.", "Hi.");
+    let listed = text
+        .lines()
+        .skip_while(|l| !l.starts_with("inventory rev:"))
+        .skip(1);
+    for line in listed {
+        let id = line.split(": ").next().unwrap();
+        assert!(id.contains(':'), "an inventory line spells its id in full: {line}");
+    }
+}

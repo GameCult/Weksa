@@ -59,7 +59,7 @@ Fields:
 - predications: a list of {id, concept, frame, roles, features}; roles is a list of {role, filler}, filler a node id.
 - relations: a list of {relation, from, to, features}.
 - stance: {features}; the speaker's felt affect and restraint, never the affect the line displays.
-Node ids are n1, n2, and so on, one per referent and predication. Every other id comes from the inventory listed below and must be live at its revision. An entity comes only from the entities line.
+Node ids are n1, n2, and so on, one per referent and predication. Every other id comes from the inventory listed below and must be live at its revision. Write each id in full, exactly as the inventory lines spell it, family prefix included: concept:7, never 7. An entity comes only from the entities line.
 A feature is {feature, value}; value is {\"Grade\": 0 to 1000}, {\"Option\": label} or {\"Flag\": true or false}, as the inventory lists the feature's kind.";
 
 /// The instructions a lowering prompt starts with: the lowerer's whole brief.

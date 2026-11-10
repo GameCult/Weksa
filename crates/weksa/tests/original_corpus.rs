@@ -65,3 +65,50 @@ fn the_original_inventory_is_the_dao_revision_three() {
     std::fs::copy(&own, &copy).unwrap();
     assert!(InventoryStore::open(&copy).is_ok());
 }
+
+/// The probe over the real original corpus: every item is offered, none names a
+/// work, and a model that answers with unrelated words reads at the noise floor.
+#[test]
+fn the_recall_probe_covers_all_six_original_items_and_names_no_work() {
+    use weksa::model::{ModelPort, PortError};
+    use weksa::run::{RecallOutcome, RunPaths, RunStores};
+    struct Unrelated(Vec<String>);
+    impl ModelPort for Unrelated {
+        fn model(&self) -> &str {
+            "unrelated"
+        }
+        fn answer(&mut self, p: &weksa::context::Prompt) -> Result<String, PortError> {
+            self.0.push(p.text().to_string());
+            Ok(r#"{"text":"stone harbours remember distant lanterns"}"#.to_string())
+        }
+    }
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/original");
+    let tmp = tempfile::tempdir().unwrap();
+    let path = |f: &str| {
+        std::fs::copy(src.join(f), tmp.path().join(f)).unwrap();
+        tmp.path().join(f)
+    };
+    let (c, i, e) = (path("corpus.cc"), path("inventory.cc"), path("entity.cc"));
+    let run = RunStores::create(
+        &tmp.path().join("run"),
+        "orig",
+        RunPaths {
+            corpus: &c,
+            inventory: &i,
+            entities: &e,
+        },
+        "m",
+        "bag",
+        weksa::run::LowererReach::BriefedSubagent,
+    )
+    .unwrap();
+    let mut model = Unrelated(vec![]);
+    let RecallOutcome::Read(r) = run.recall(&mut model).unwrap() else {
+        panic!("answered");
+    };
+    assert_eq!((r.n, r.answered), (6, 6));
+    assert!(r.chrf < 25.0, "{}", r.chrf);
+    assert_eq!(model.0.len(), 6);
+    assert!(model.0.iter().all(|t| t.contains("work: not published")));
+    assert!(model.0.iter().all(|t| !t.contains("translator:")));
+}
