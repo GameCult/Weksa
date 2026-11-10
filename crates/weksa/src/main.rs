@@ -11,7 +11,7 @@ use weksa::corpus::{CorpusItem, ModelFamily, NameSpan, Source, Turn};
 use weksa::entity::{Entity, EntityOrigin, LanguageForms, Pronunciation};
 use weksa::inventory::{proof_revision, seed};
 use weksa::packet::proof_packet;
-use weksa::run::{Outcome, RoundOutcome, RoundRecord, RunPaths, RunStores, round};
+use weksa::run::{RoundOutcome, RunPaths, RunStores, round};
 use weksa::score::ScoreInput;
 use weksa::{
     AnswerFiles, CorpusStore, EntityId, EntityStore, InventoryStore, OllamaEmbedder, PacketStore,
@@ -522,35 +522,6 @@ fn refused(e: StoreError) -> anyhow::Error {
     anyhow::anyhow!("{e}")
 }
 
-/// `none` for an absent mean.
-fn mean_text(value: Option<f64>, places: usize) -> String {
-    value.map_or("none".to_string(), |v| format!("{v:.places$}"))
-}
-
-/// The one line a recorded round prints.
-fn round_line(r: &RoundRecord) -> String {
-    let refused = r
-        .train()
-        .iter()
-        .filter(|row| matches!(row.outcome, Outcome::Refused(_)))
-        .count();
-    let (t, v, x) = (r.train_mean(), r.validation_mean(), r.validation_refused());
-    format!(
-        "round {} rev {} train n={} chrf={} meaning={} refused={refused} validation n={} chrf={} meaning={} refused parse={} admit={} lower={}",
-        r.n(),
-        r.inventory_rev(),
-        t.count,
-        mean_text(t.chrf, 2),
-        mean_text(t.meaning, 4),
-        v.count,
-        mean_text(v.chrf, 2),
-        mean_text(v.meaning, 4),
-        x.parse,
-        x.admit,
-        x.lower,
-    )
-}
-
 fn main() -> Result<()> {
     let cli = parse_cli();
     match cli.command {
@@ -784,7 +755,7 @@ fn main() -> Result<()> {
                     println!("unanswered {} of {asked}", prompts.len());
                     std::process::exit(3);
                 }
-                RoundOutcome::Recorded(r) => println!("{}", round_line(&r)),
+                RoundOutcome::Recorded(r) => println!("{}", r.summary_line()),
             }
         }
         Command::Schema { out } => {

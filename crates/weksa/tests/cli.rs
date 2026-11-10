@@ -1392,7 +1392,7 @@ fn loop_open_and_unanswered_round() {
     assert!(second.status.success(), "{}", out(&second));
     assert_eq!(
         out(&second),
-        "round 1 rev 3 train n=0 chrf=none meaning=none refused=1 validation n=0 chrf=none meaning=none refused parse=2 admit=0 lower=0\n"
+        "round 1 rev 3 train n=1 scored=0 chrf=0.00 meaning=0.0000 refused=1 validation n=2 scored=0 chrf=0.00 meaning=0.0000 refused parse=2 admit=0 lower=0\n"
     );
 
     // The global store flags are not read by loop round: a drifted store is refused.

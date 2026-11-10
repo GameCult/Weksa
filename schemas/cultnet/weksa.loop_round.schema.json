@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "RoundRecord",
-  "description": "One scored round. It holds no text and no Test reading: per-item rows for\nTrain only, Validation only as means and refusal counts by stage. Only\n`run::round` builds one.\n\n```\nfn f(r: &weksa::run::RoundRecord) -> u32 { r.n() }\n```\n\n```compile_fail\nfn f() -> weksa::run::RoundRecord {\n    weksa::run::RoundRecord { n: 1 }\n}\n```",
+  "description": "One scored round. It holds no text and no Test reading: per-item rows for\nTrain only, Validation only as means and refusal counts by stage. Only\n`run::round` builds one.\n\n```\nfn f(r: &weksa::run::RoundRecord) -> u32 { r.n() }\n```\n\nEvery field is given, so the literal below fails only on privacy; its twin\nis the same literal in the unit test `a_round_record_literal_compiles_in_the_lib`.\n\n```compile_fail,E0451\nuse weksa::run::{RefusalCounts, RoundRecord};\nuse weksa::score::SplitMean;\nfn f() -> RoundRecord {\n    RoundRecord {\n        n: 1,\n        inventory_rev: 1,\n        prompt_digest: String::new(),\n        lowerer_digest: String::new(),\n        corpus_digest: String::new(),\n        entity_digest: String::new(),\n        model: String::new(),\n        embedder: String::new(),\n        chrf_version: String::new(),\n        calls: vec![],\n        train: vec![],\n        train_mean: SplitMean::default(),\n        train_scored: 0,\n        validation_mean: SplitMean::default(),\n        validation_scored: 0,\n        validation_refused: RefusalCounts::default(),\n    }\n}\n```",
   "type": "object",
   "properties": {
     "calls": {
@@ -50,11 +50,23 @@
     "train_mean": {
       "$ref": "#/$defs/SplitMean"
     },
+    "train_scored": {
+      "description": "Train items that lowered and scored; `train_mean` is over all of them\nand counts a refused item as 0.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
     "validation_mean": {
       "$ref": "#/$defs/SplitMean"
     },
     "validation_refused": {
       "$ref": "#/$defs/RefusalCounts"
+    },
+    "validation_scored": {
+      "description": "Validation items that lowered and scored; `validation_mean` is over all\nof them and counts a refused item as 0, so refusing a weak item cannot\nraise it.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
     }
   },
   "required": [
@@ -71,7 +83,9 @@
     "train",
     "train_mean",
     "validation_mean",
-    "validation_refused"
+    "validation_refused",
+    "train_scored",
+    "validation_scored"
   ],
   "$defs": {
     "Call": {

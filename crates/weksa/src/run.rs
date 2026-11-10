@@ -113,9 +113,31 @@ pub struct RefusalCounts {
 /// fn f(r: &weksa::run::RoundRecord) -> u32 { r.n() }
 /// ```
 ///
-/// ```compile_fail
-/// fn f() -> weksa::run::RoundRecord {
-///     weksa::run::RoundRecord { n: 1 }
+/// Every field is given, so the literal below fails only on privacy; its twin
+/// is the same literal in the unit test `a_round_record_literal_compiles_in_the_lib`.
+///
+/// ```compile_fail,E0451
+/// use weksa::run::{RefusalCounts, RoundRecord};
+/// use weksa::score::SplitMean;
+/// fn f() -> RoundRecord {
+///     RoundRecord {
+///         n: 1,
+///         inventory_rev: 1,
+///         prompt_digest: String::new(),
+///         lowerer_digest: String::new(),
+///         corpus_digest: String::new(),
+///         entity_digest: String::new(),
+///         model: String::new(),
+///         embedder: String::new(),
+///         chrf_version: String::new(),
+///         calls: vec![],
+///         train: vec![],
+///         train_mean: SplitMean::default(),
+///         train_scored: 0,
+///         validation_mean: SplitMean::default(),
+///         validation_scored: 0,
+///         validation_refused: RefusalCounts::default(),
+///     }
 /// }
 /// ```
 #[derive(Clone, Debug, PartialEq, JsonSchema, DatabaseEntry)]
@@ -149,6 +171,15 @@ pub struct RoundRecord {
     validation_mean: SplitMean,
     #[cultcache(key = 13)]
     validation_refused: RefusalCounts,
+    /// Train items that lowered and scored; `train_mean` is over all of them
+    /// and counts a refused item as 0.
+    #[cultcache(key = 14)]
+    train_scored: u32,
+    /// Validation items that lowered and scored; `validation_mean` is over all
+    /// of them and counts a refused item as 0, so refusing a weak item cannot
+    /// raise it.
+    #[cultcache(key = 15)]
+    validation_scored: u32,
 }
 
 impl RoundRecord {
@@ -193,6 +224,46 @@ impl RoundRecord {
     }
     pub fn validation_refused(&self) -> RefusalCounts {
         self.validation_refused
+    }
+    pub fn train_scored(&self) -> u32 {
+        self.train_scored
+    }
+    pub fn validation_scored(&self) -> u32 {
+        self.validation_scored
+    }
+
+    /// The one line a recorded round prints. `n` is every item of the split,
+    /// `scored` those that lowered; a mean counts a refused item as 0.
+    pub fn summary_line(&self) -> String {
+        let mean = |value: Option<f64>, places: usize| {
+            value.map_or("none".to_string(), |v| format!("{v:.places$}"))
+        };
+        let refused = self
+            .train
+            .iter()
+            .filter(|row| matches!(row.outcome, Outcome::Refused(_)))
+            .count();
+        let (t, v, x) = (
+            &self.train_mean,
+            &self.validation_mean,
+            self.validation_refused,
+        );
+        format!(
+            "round {} rev {} train n={} scored={} chrf={} meaning={} refused={refused} validation n={} scored={} chrf={} meaning={} refused parse={} admit={} lower={}",
+            self.n,
+            self.inventory_rev,
+            t.count,
+            self.train_scored,
+            mean(t.chrf, 2),
+            mean(t.meaning, 4),
+            v.count,
+            self.validation_scored,
+            mean(v.chrf, 2),
+            mean(v.meaning, 4),
+            x.parse,
+            x.admit,
+            x.lower,
+        )
     }
 }
 
@@ -456,7 +527,11 @@ enum Fate {
 /// One round: encodes every live Train and Validation item of the run's pinned
 /// corpus through `model`, admits each packet into the round's own
 /// `<root>/round-<n>/packets.cc`, lowers, scores, and records the round. The
-/// round is all or nothing: while any prompt is unanswered, nothing is written.
+/// round is all or nothing: while any prompt is unanswered, nothing is written,
+/// and a round that fails before its record is put (the embedder down) leaves no
+/// `packets.cc` behind, so a rerun with revised answers starts clean. A mean
+/// counts an item that was refused or did not lower as 0, so refusing a weak
+/// item cannot raise it; `scored` counts beside it say how many were real.
 pub fn round<M: ModelPort, E: Embedder>(
     run: &mut RunStores,
     model: &mut M,
@@ -496,6 +571,8 @@ pub fn round<M: ModelPort, E: Embedder>(
 
     let dir = run.next_round_dir().map_err(store)?;
     std::fs::create_dir_all(&dir).map_err(|e| RunError::Io(e.kind()))?;
+    // The directory of an unrecorded round holds only a failed attempt's packets.
+    discard_packets(&dir);
     let mut packets = PacketStore::open(&dir.join("packets.cc")).map_err(store)?;
     let encoder = encoder_id(model.model(), &run.record.prompt_digest);
     let mut items: Vec<CorpusItem> = Vec::new();
@@ -540,21 +617,33 @@ pub fn round<M: ModelPort, E: Embedder>(
     let scores = if inputs.is_empty() {
         Vec::new()
     } else {
-        scorer.score(&inputs).map_err(|_| RunError::Embed)?
+        match scorer.score(&inputs) {
+            Ok(scores) => scores,
+            Err(_) => {
+                discard_packets(&dir);
+                return Err(RunError::Embed);
+            }
+        }
     };
     let mut score_at: Vec<Option<ItemScore>> = vec![None; items.len()];
     for ((i, _), score) in lowered.iter().zip(scores) {
         score_at[*i] = Some(score);
     }
+    // An item that did not lower scores 0 in every mean.
+    let nothing = ItemScore {
+        chrf: 0.0,
+        meaning: Some(0.0),
+    };
     let scored: Vec<(&CorpusItem, ItemScore)> = items
         .iter()
         .zip(&score_at)
-        .filter_map(|(item, score)| score.clone().map(|s| (item, s)))
+        .map(|(item, score)| (item, score.clone().unwrap_or_else(|| nothing.clone())))
         .collect();
     let means = aggregate(&scored);
 
     let mut train_rows = Vec::new();
     let mut refused = RefusalCounts::default();
+    let (mut train_scored, mut validation_scored) = (0, 0);
     for ((item, fate), score) in items.iter().zip(&fates).zip(&score_at) {
         let (outcome, packet) = match (fate, score) {
             (Fate::Lowered(_, key), Some(score)) => (
@@ -568,11 +657,15 @@ pub fn round<M: ModelPort, E: Embedder>(
             (Fate::Lowered(..), None) => return Err(RunError::Store),
         };
         match (SplitScheme::V1.live(item), fate) {
-            (Some(Split::Train), _) => train_rows.push(TrainRow {
-                item: item.id.clone(),
-                packet,
-                outcome,
-            }),
+            (Some(Split::Train), fate) => {
+                train_scored += u32::from(matches!(fate, Fate::Lowered(..)));
+                train_rows.push(TrainRow {
+                    item: item.id.clone(),
+                    packet,
+                    outcome,
+                });
+            }
+            (Some(Split::Validation), Fate::Lowered(..)) => validation_scored += 1,
             (Some(Split::Validation), Fate::Refused(stage, _)) => match stage {
                 Stage::Parse => refused.parse += 1,
                 Stage::Admit => refused.admit += 1,
@@ -598,9 +691,48 @@ pub fn round<M: ModelPort, E: Embedder>(
         train_mean: means.train,
         validation_mean: means.validation,
         validation_refused: refused,
+        train_scored,
+        validation_scored,
     };
     run.cache
         .put(format!("run:{}:round:{n}", run.record.label), &record)
         .map_err(store)?;
     Ok(RoundOutcome::Recorded(record))
+}
+
+/// Removes a round directory's packet store and its lock.
+fn discard_packets(dir: &Path) {
+    for name in ["packets.cc", "packets.cc.lock"] {
+        let _ = std::fs::remove_file(dir.join(name));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The twin of the `RoundRecord` literal in its compile_fail doctest: the
+    /// same fields, compiling here because the fields are private to this module.
+    #[test]
+    fn a_round_record_literal_compiles_in_the_lib() {
+        let r = RoundRecord {
+            n: 1,
+            inventory_rev: 1,
+            prompt_digest: String::new(),
+            lowerer_digest: String::new(),
+            corpus_digest: String::new(),
+            entity_digest: String::new(),
+            model: String::new(),
+            embedder: String::new(),
+            chrf_version: String::new(),
+            calls: vec![],
+            train: vec![],
+            train_mean: SplitMean::default(),
+            train_scored: 0,
+            validation_mean: SplitMean::default(),
+            validation_scored: 0,
+            validation_refused: RefusalCounts::default(),
+        };
+        assert_eq!(r.n(), 1);
+    }
 }

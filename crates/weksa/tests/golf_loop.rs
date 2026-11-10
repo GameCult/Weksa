@@ -732,41 +732,146 @@ fn refusal_stages_are_counted() {
     ]);
     assert_eq!(r.train()[0].outcome, Outcome::Refused(Stage::Parse));
     assert_eq!(r.train()[0].packet, None);
-    assert_eq!((r.train_mean().count, r.train_mean().chrf), (0, None));
+    // A refused item is in the mean as 0: n counts every item, scored the real ones.
+    let m = r.train_mean();
+    assert_eq!((m.count, m.chrf, m.meaning), (1, Some(0.0), Some(0.0)));
+    assert_eq!((r.train_scored(), r.validation_scored()), (0, 0));
     assert_eq!(r.validation_refused().parse, 0);
     assert_eq!(
         (r.validation_refused().admit, r.validation_refused().lower),
         (1, 1)
     );
-    assert_eq!(
-        (r.validation_mean().count, r.validation_mean().chrf),
-        (0, None)
-    );
+    let m = r.validation_mean();
+    assert_eq!((m.count, m.chrf, m.meaning), (2, Some(0.0), Some(0.0)));
 
-    let r = run([
+    // Validation items 2 and 3 score a and b when both lower (the Dao bed:
+    // 82.12 and 74.99). Refusing one halves the mean; it cannot raise it.
+    let full = run(good_answers().map(|(_, a)| a).try_into().unwrap());
+    let b_only = run([
         edited(1, unknown_concept),
         junk.clone(),
         good_answers()[2].1.clone(),
     ]);
-    assert_eq!(r.train()[0].outcome, Outcome::Refused(Stage::Admit));
-    assert_eq!(r.train()[0].packet, None, "a refused packet is not stored");
-    let v = r.validation_refused();
+    assert_eq!(b_only.train()[0].outcome, Outcome::Refused(Stage::Admit));
+    assert_eq!(
+        b_only.train()[0].packet,
+        None,
+        "a refused packet is not stored"
+    );
+    let v = b_only.validation_refused();
     assert_eq!((v.parse, v.admit, v.lower), (1, 0, 0));
     assert_eq!(
-        r.validation_mean().count,
-        1,
-        "only the scored item is counted"
+        b_only.validation_mean().count,
+        2,
+        "every Validation item counts"
     );
-    assert_eq!(two_dp(r.validation_mean().chrf.unwrap()), 74.99);
-
-    let r = run([edited(1, with_relation), good_answers()[1].1.clone(), junk]);
-    assert_eq!(r.train()[0].outcome, Outcome::Refused(Stage::Lower));
+    assert_eq!(b_only.validation_scored(), 1);
+    let b_half = b_only.validation_mean().chrf.unwrap();
     assert!(
-        r.train()[0].packet.is_some(),
+        (b_half - 74.99 / 2.0).abs() < 0.01,
+        "(74.99 + 0) / 2 = {b_half}"
+    );
+
+    let a_only = run([edited(1, with_relation), good_answers()[1].1.clone(), junk]);
+    assert_eq!(a_only.train()[0].outcome, Outcome::Refused(Stage::Lower));
+    assert!(
+        a_only.train()[0].packet.is_some(),
         "a packet that lowers badly was admitted"
     );
-    assert_eq!(r.validation_refused().parse, 1);
-    assert_eq!(two_dp(r.validation_mean().chrf.unwrap()), 82.12);
+    assert_eq!(a_only.validation_refused().parse, 1);
+    let a_half = a_only.validation_mean().chrf.unwrap();
+    assert!(
+        (a_half - 82.12 / 2.0).abs() < 0.01,
+        "(82.12 + 0) / 2 = {a_half}"
+    );
+    // The halves add to the full mean: (a + 0) / 2 + (0 + b) / 2 = (a + b) / 2.
+    let whole = full.validation_mean().chrf.unwrap();
+    assert!(
+        (a_half + b_half - whole).abs() < 1e-9,
+        "{a_half} + {b_half} vs {whole}"
+    );
+    assert!(
+        b_half < whole && a_half < whole,
+        "refusing never raises the mean"
+    );
+    assert_eq!(full.validation_scored(), 2);
+}
+
+/// An embedder that is down.
+struct Down;
+
+impl Embedder for Down {
+    fn model(&self) -> &str {
+        "bag"
+    }
+    fn embed(&self, _: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+        anyhow::bail!("down")
+    }
+}
+
+#[test]
+fn a_failed_round_leaves_nothing_a_rerun_collides_with() {
+    let mut dao = dao();
+    let mut model = fake(&good_answers());
+    assert_eq!(
+        round(&mut dao.run, &mut model, &Scorer::new(Down)).err(),
+        Some(RunError::Embed)
+    );
+    assert!(dao.run.rounds().unwrap().is_empty());
+    assert!(
+        !dao.root.join("round-1/packets.cc").exists(),
+        "the failed attempt's packets are discarded"
+    );
+
+    // The session revises item 1's answer and reruns: its packet is admitted
+    // as the revised one, not refused as a changed packet under the same key.
+    let mut revised = draft_of(1);
+    revised.confidence = weksa::packet::Grade::new(123).unwrap();
+    let mut answers = good_answers();
+    answers[0].1 = json(&revised);
+    let mut model = fake(&answers);
+    let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    assert!(
+        matches!(r.train()[0].outcome, Outcome::Scored { .. }),
+        "{:?}",
+        r.train()[0]
+    );
+    assert_eq!(r.validation_refused(), Default::default());
+    let stored = PacketStore::open(&dao.root.join("round-1/packets.cc"))
+        .unwrap()
+        .all()
+        .unwrap();
+    assert_eq!(stored.len(), 3);
+    assert!(stored.iter().any(|p| p.provenance.confidence.get() == 123));
+}
+
+#[test]
+fn the_round_line_prints_each_split_under_its_own_name() {
+    let mut dao = dao();
+    let mut model = fake(&good_answers());
+    let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    let line = r.summary_line();
+    // Train is item 1 alone, Validation items 2 and 3; the numbers differ.
+    let (t, v) = (r.train_mean(), r.validation_mean());
+    assert_eq!(
+        line,
+        format!(
+            "round 1 rev 3 train n=1 scored=1 chrf={:.2} meaning={:.4} refused=0 validation n=2 scored=2 chrf={:.2} meaning={:.4} refused parse=0 admit=0 lower=0",
+            t.chrf.unwrap(),
+            t.meaning.unwrap(),
+            v.chrf.unwrap(),
+            v.meaning.unwrap()
+        )
+    );
+    assert!(
+        line.contains("train n=1 scored=1 chrf=44.18 meaning=0."),
+        "{line}"
+    );
+    assert!(
+        line.contains("validation n=2 scored=2 chrf=78.56 meaning=0."),
+        "{line}"
+    );
+    assert_ne!(t.meaning, v.meaning);
 }
 
 #[test]
