@@ -85,6 +85,11 @@ impl InvId {
     pub fn family(self) -> Family {
         self.family
     }
+
+    /// The `n` of `<family prefix>:<n>`.
+    pub fn n(self) -> NonZeroU32 {
+        self.n
+    }
 }
 
 impl fmt::Display for InvId {

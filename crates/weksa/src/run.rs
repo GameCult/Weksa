@@ -1,8 +1,15 @@
-//! One golf-loop run: the stores it pinned at open, the rounds it has recorded,
-//! and the one writer of both (`RunStores::create` and, for rounds, `round`).
+//! One golf-loop run: the stores it pinned at open, the rounds and decisions it
+//! has recorded, and the one writer of all of them (`RunStores::create`, `round`
+//! and `cycle`). A cycle asks an editor for one inventory edit, scores a
+//! candidate round under it and accepts or rejects on Validation (`decide`); the
+//! latest Accepted decision names the run's head inventory.
 //!
 //! A run pins its corpus and entity store files by canonical path and FNV-1a 64
-//! digest of their bytes. Every round reopens them only from that record and
+//! digest of their bytes. It works on its own copy of the inventory:
+//! `RunStores::create` copies the caller's inventory file to
+//! `<root>/inventory.cc` and pins the digest of the copy; the caller's path is
+//! kept as provenance and never opened again, and `open` refuses a head file
+//! whose digest differs. Every round reopens them only from that record and
 //! refuses on drift, and every round record carries the digests. Nothing inside
 //! a process whose writer controls the code can stop an item faked into a
 //! scratch store; what this makes true is that a run over a scratch store is a
@@ -19,9 +26,9 @@ use cultcache_rs::{CultCache, DatabaseEntry};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::context::{EncoderOffer, Prompt, TrainItems};
+use crate::context::{EditFeedback, EncoderOffer, Prompt, TrainItems};
 use crate::corpus::{CorpusItem, CorpusItemId};
-use crate::encode::{PacketDraft, encoder_id};
+use crate::encode::{EditDraft, PacketDraft, encoder_id};
 use crate::form::{is_attestation, is_slug};
 use crate::lower::lower;
 use crate::model::{ModelPort, PortError};
@@ -37,6 +44,13 @@ pub const PROMPT_SOURCE_DIGEST: u64 = fnv1a64(include_bytes!("context.rs"));
 /// included, ends a run; code outside that file is not covered.
 pub const LOWERER_SOURCE_DIGEST: u64 = fnv1a64(include_bytes!("lower.rs"));
 
+/// The least composite gain an edit must show over item noise to be kept, and
+/// the grid the editor's one held-out number is rounded to. A run releases at
+/// most `1 / LADDER_STEP` = 200 distinct head composites (the Ladder, Blum and
+/// Hardt 2015), because the head changes only on an accept and an accept needs
+/// a gain above one step.
+pub const LADDER_STEP: f64 = 0.005;
+
 /// What a run pinned at open. Key `run:<label>`.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, DatabaseEntry)]
 #[cultcache(type = "weksa.loop_run")]
@@ -46,6 +60,9 @@ pub struct RunRecord {
     /// Canonical absolute path of the corpus store.
     #[cultcache(key = 1)]
     pub corpus: String,
+    /// Canonical absolute path of the inventory store the run was opened over:
+    /// provenance only. `create` copies that file to `<root>/inventory.cc` and
+    /// the run reads nothing at this path afterwards.
     #[cultcache(key = 2)]
     pub inventory: String,
     #[cultcache(key = 3)]
@@ -67,6 +84,9 @@ pub struct RunRecord {
     pub embedder: String,
     #[cultcache(key = 10)]
     pub chrf_version: String,
+    /// 16 hex of the bytes `create` copied to `<root>/inventory.cc`.
+    #[cultcache(key = 11)]
+    pub inventory_digest: String,
 }
 
 /// Where a round refused: the first stage that did.
@@ -137,6 +157,8 @@ pub struct RefusalCounts {
 ///         validation_mean: SplitMean::default(),
 ///         validation_scored: 0,
 ///         validation_refused: RefusalCounts::default(),
+///         inventory_digest: String::new(),
+///         cycle: None,
 ///     }
 /// }
 /// ```
@@ -180,6 +202,12 @@ pub struct RoundRecord {
     /// raise it.
     #[cultcache(key = 15)]
     validation_scored: u32,
+    /// 16 hex of the inventory file the round was scored under.
+    #[cultcache(key = 16)]
+    inventory_digest: String,
+    /// `Some(k)` for the candidate round of cycle `k`.
+    #[cultcache(key = 17)]
+    cycle: Option<u32>,
 }
 
 impl RoundRecord {
@@ -231,6 +259,12 @@ impl RoundRecord {
     pub fn validation_scored(&self) -> u32 {
         self.validation_scored
     }
+    pub fn inventory_digest(&self) -> &str {
+        &self.inventory_digest
+    }
+    pub fn cycle(&self) -> Option<u32> {
+        self.cycle
+    }
 
     /// The one line a recorded round prints. `n` is every item of the split,
     /// `scored` those that lowered; a mean counts a refused item as 0.
@@ -276,6 +310,8 @@ pub enum DriftOf {
     Lowerer,
     Model,
     Embedder,
+    /// The run's own head inventory file.
+    Inventory,
 }
 
 /// A run's failure. Display and Debug name a kind, never a path, key, label or
@@ -296,6 +332,10 @@ pub enum RunError {
     Store,
     /// The embedder failed.
     Embed,
+    /// Rounds 1 and 2 are not two plain replicates under the run's first inventory.
+    NoFloor,
+    /// A round has no Validation reading.
+    NoValidation,
 }
 
 impl fmt::Display for RunError {
@@ -309,6 +349,8 @@ impl fmt::Display for RunError {
             RunError::Io(kind) => write!(f, "io error {kind:?}"),
             RunError::Store => f.write_str("a store would not read or write"),
             RunError::Embed => f.write_str("the embedder failed"),
+            RunError::NoFloor => f.write_str("the run has no noise floor: record two rounds first"),
+            RunError::NoValidation => f.write_str("a reading has no validation item"),
         }
     }
 }
@@ -340,8 +382,15 @@ pub struct RunStores {
     entities: EntityStore,
 }
 
-fn file_digest(path: &str) -> Option<String> {
+/// The run's own copy of the inventory, made at `create`.
+const INVENTORY_FILE: &str = "inventory.cc";
+
+fn file_digest_at(path: &Path) -> Option<String> {
     std::fs::read(path).ok().map(|b| hex16(fnv1a64(&b)))
+}
+
+fn file_digest(path: &str) -> Option<String> {
+    file_digest_at(Path::new(path))
 }
 
 fn canonical(path: &Path) -> Result<String, RunError> {
@@ -355,7 +404,8 @@ fn canonical(path: &Path) -> Result<String, RunError> {
 fn run_cache(root: &Path) -> Result<CultCache, RunError> {
     open_cache(&root.join("run.cc"), |c| {
         c.register_entry_type::<RunRecord>()?;
-        c.register_entry_type::<RoundRecord>()
+        c.register_entry_type::<RoundRecord>()?;
+        c.register_entry_type::<Decision>()
     })
     .map_err(|_| RunError::Store)
 }
@@ -366,6 +416,24 @@ fn one_run(cache: &CultCache) -> Result<Option<RunRecord>, RunError> {
         .map_err(|_| RunError::Store)?
         .into_iter()
         .next())
+}
+
+/// Copies `from` onto a `to` that must not exist: a root that already holds a
+/// file of that name (the source itself, say) refuses before anything is written.
+fn copy_new(from: &Path, to: &Path) -> Result<(), RunError> {
+    let io = |e: std::io::Error| RunError::Io(e.kind());
+    let mut source = std::fs::File::open(from).map_err(io)?;
+    let mut dest = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(to)
+        .map_err(io)?;
+    if let Err(e) = std::io::copy(&mut source, &mut dest) {
+        // The file is ours (create_new made it): a half copy must not block a retry.
+        let _ = std::fs::remove_file(to);
+        return Err(io(e));
+    }
+    Ok(())
 }
 
 impl RunStores {
@@ -403,16 +471,29 @@ impl RunStores {
             model: model.to_string(),
             embedder: embedder.to_string(),
             chrf_version: CHRF_VERSION.to_string(),
+            inventory_digest: String::new(),
         };
-        let record = RunRecord {
-            corpus_digest: file_digest(&record.corpus).ok_or(RunError::Store)?,
-            entity_digest: file_digest(&record.entities).ok_or(RunError::Store)?,
-            ..record
-        };
-        cache
-            .put(format!("run:{label}"), &record)
-            .map_err(|_| RunError::Store)?;
-        Self::with(root, cache, record)
+        // The run works on its own copy; the caller's store is never opened again.
+        let head = root.join(INVENTORY_FILE);
+        copy_new(Path::new(&record.inventory), &head)?;
+        // The copy is ours from here: any later failure takes it away again, or
+        // it would refuse every retry.
+        let pinned = (|| {
+            let record = RunRecord {
+                corpus_digest: file_digest(&record.corpus).ok_or(RunError::Store)?,
+                entity_digest: file_digest(&record.entities).ok_or(RunError::Store)?,
+                inventory_digest: file_digest_at(&head).ok_or(RunError::Store)?,
+                ..record
+            };
+            cache
+                .put(format!("run:{label}"), &record)
+                .map_err(|_| RunError::Store)?;
+            Self::with(root, cache, record)
+        })();
+        if pinned.is_err() {
+            let _ = std::fs::remove_file(&head);
+        }
+        pinned
     }
 
     /// Reopens the run at `root` from its record, refusing when a pinned store
@@ -435,15 +516,20 @@ impl RunStores {
         if file_digest(&record.entities).as_ref() != Some(&record.entity_digest) {
             return Err(RunError::Drift(DriftOf::Entities));
         }
+        let (path, digest, _) = head_of(&cache, root, &record)?;
+        if file_digest_at(&path).as_ref() != Some(&digest) {
+            return Err(RunError::Drift(DriftOf::Inventory));
+        }
         Self::with(root, cache, record)
     }
 
     fn with(root: &Path, cache: CultCache, record: RunRecord) -> Result<Self, RunError> {
         let store = |_| RunError::Store;
+        let (head, _, _) = head_of(&cache, root, &record)?;
         Ok(Self {
             root: root.to_path_buf(),
             corpus: CorpusStore::open(Path::new(&record.corpus)).map_err(store)?,
-            inventory: InventoryStore::open(Path::new(&record.inventory)).map_err(store)?,
+            inventory: InventoryStore::open(&head).map_err(store)?,
             entities: EntityStore::open(Path::new(&record.entities)).map_err(store)?,
             cache,
             record,
@@ -499,6 +585,23 @@ impl RunStores {
         Ok(rounds)
     }
 
+    /// The recorded decisions, by cycle.
+    pub fn decisions(&self) -> anyhow::Result<Vec<Decision>> {
+        decisions_of(&self.cache)
+    }
+
+    /// The head inventory file, its digest and its establishing round.
+    fn head(&self) -> Result<(PathBuf, String, u32), RunError> {
+        head_of(&self.cache, &self.root, &self.record)
+    }
+
+    /// `<root>/cycle-<k>` for the next undecided cycle `k`.
+    pub fn next_cycle_dir(&self) -> anyhow::Result<PathBuf> {
+        Ok(self
+            .root
+            .join(format!("cycle-{}", self.decisions()?.len() + 1)))
+    }
+
     /// `<root>/round-<n>` for the next unrecorded round `n`.
     pub fn next_round_dir(&self) -> anyhow::Result<PathBuf> {
         Ok(self
@@ -507,8 +610,42 @@ impl RunStores {
     }
 }
 
-/// What a round came to.
+fn decisions_of(cache: &CultCache) -> anyhow::Result<Vec<Decision>> {
+    let mut decisions = cache.get_all::<Decision>()?;
+    decisions.sort_by_key(Decision::k);
+    Ok(decisions)
+}
+
+/// The head is derived, never stored: the latest Accepted decision names it
+/// (`<root>/cycle-<k>/inventory.cc`, its candidate digest, its candidate round);
+/// with none it is the copy `create` made and round 1.
+fn head_of(
+    cache: &CultCache,
+    root: &Path,
+    record: &RunRecord,
+) -> Result<(PathBuf, String, u32), RunError> {
+    let decisions = decisions_of(cache).map_err(|_| RunError::Store)?;
+    let accepted = decisions.iter().rfind(|d| d.verdict == Verdict::Accepted);
+    match accepted {
+        None => Ok((
+            root.join(INVENTORY_FILE),
+            record.inventory_digest.clone(),
+            1,
+        )),
+        Some(d) => Ok((
+            root.join(format!("cycle-{}", d.k)).join(INVENTORY_FILE),
+            d.candidate_inventory_digest
+                .clone()
+                .ok_or(RunError::Store)?,
+            d.candidate_round.ok_or(RunError::Store)?,
+        )),
+    }
+}
+
+/// What a round came to. One is built per call and matched at once, so the
+/// size of the record is not worth an indirection.
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum RoundOutcome {
     /// Prompts nobody has answered; nothing was written to the run or admitted.
     Unanswered {
@@ -537,14 +674,53 @@ pub fn round<M: ModelPort, E: Embedder>(
     model: &mut M,
     scorer: &Scorer<E>,
 ) -> Result<RoundOutcome, RunError> {
+    check_drift(run, model, scorer)?;
     let store = |_| RunError::Store;
+    let dir = run.next_round_dir().map_err(store)?;
+    let (_, digest, _) = run.head()?;
+    match score_round(run, &run.inventory, &digest, &dir, None, model, scorer)? {
+        RoundOutcome::Recorded(record) => {
+            run.cache
+                .put(
+                    format!("run:{}:round:{}", run.record.label, record.n),
+                    &record,
+                )
+                .map_err(store)?;
+            Ok(RoundOutcome::Recorded(record))
+        }
+        unanswered => Ok(unanswered),
+    }
+}
+
+/// The model and embedder the run pinned are the ones answering.
+fn check_drift<M: ModelPort, E: Embedder>(
+    run: &RunStores,
+    model: &M,
+    scorer: &Scorer<E>,
+) -> Result<(), RunError> {
     if model.model() != run.record.model {
         return Err(RunError::Drift(DriftOf::Model));
     }
     if scorer.embedder().model() != run.record.embedder {
         return Err(RunError::Drift(DriftOf::Embedder));
     }
-    let inventory = run.inventory.inventory().map_err(store)?;
+    Ok(())
+}
+
+/// Encodes, admits, lowers and scores every offered item under `inventory`
+/// (whose file digests to `inventory_digest`), with packets in `dir`, and
+/// returns the record unput. `Recorded` here means built, not stored.
+fn score_round<M: ModelPort, E: Embedder>(
+    run: &RunStores,
+    inventory_store: &InventoryStore,
+    inventory_digest: &str,
+    dir: &Path,
+    cycle: Option<u32>,
+    model: &mut M,
+    scorer: &Scorer<E>,
+) -> Result<RoundOutcome, RunError> {
+    let store = |_| RunError::Store;
+    let inventory = inventory_store.inventory().map_err(store)?;
     let rev = inventory.latest().ok_or(RunError::NoInventory)?.n;
 
     let train = run.train().map_err(store)?;
@@ -554,7 +730,11 @@ pub fn round<M: ModelPort, E: Embedder>(
     for offer in run.offers().map_err(store)? {
         let prompt = Prompt::encode(&offer, &train, &inventory, rev);
         match model.answer(&prompt) {
-            Ok(answer) => answers.push((offer.key().to_string(), answer)),
+            Ok(answer) => answers.push((offer.key().to_string(), Some(answer))),
+            // An answer that is not UTF-8 is that item's parse refusal.
+            Err(PortError::Io(ErrorKind::InvalidData)) => {
+                answers.push((offer.key().to_string(), None))
+            }
             Err(PortError::Unanswered) => unanswered.push(prompt.digest()),
             Err(PortError::Io(kind)) => return Err(RunError::Io(kind)),
         }
@@ -569,10 +749,9 @@ pub fn round<M: ModelPort, E: Embedder>(
         });
     }
 
-    let dir = run.next_round_dir().map_err(store)?;
-    std::fs::create_dir_all(&dir).map_err(|e| RunError::Io(e.kind()))?;
+    std::fs::create_dir_all(dir).map_err(|e| RunError::Io(e.kind()))?;
     // The directory of an unrecorded round holds only a failed attempt's packets.
-    discard_packets(&dir);
+    discard_packets(dir);
     let mut packets = PacketStore::open(&dir.join("packets.cc")).map_err(store)?;
     let encoder = encoder_id(model.model(), &run.record.prompt_digest);
     let mut items: Vec<CorpusItem> = Vec::new();
@@ -580,12 +759,12 @@ pub fn round<M: ModelPort, E: Embedder>(
     for (key, answer) in &answers {
         let item = run.corpus.get(key).map_err(store)?.ok_or(RunError::Store)?;
         let id = CorpusItemId::parse(key).map_err(|_| RunError::Store)?;
-        let fate = match PacketDraft::parse(answer) {
-            Err(_) => Fate::Refused(Stage::Parse, None),
-            Ok(draft) => {
+        let fate = match answer.as_deref().map(PacketDraft::parse) {
+            None | Some(Err(_)) => Fate::Refused(Stage::Parse, None),
+            Some(Ok(draft)) => {
                 let packet = draft.into_packet(&id, rev, &encoder);
                 let packet_key = packet.id.to_string();
-                match packets.admit(packet, &run.inventory, &run.corpus, &run.entities) {
+                match packets.admit(packet, inventory_store, &run.corpus, &run.entities) {
                     Err(_) => Fate::Refused(Stage::Admit, None),
                     Ok(view) => match lower(&view, &inventory, &run.entities) {
                         Err(_) => Fate::Refused(Stage::Lower, Some(packet_key)),
@@ -620,7 +799,7 @@ pub fn round<M: ModelPort, E: Embedder>(
         match scorer.score(&inputs) {
             Ok(scores) => scores,
             Err(_) => {
-                discard_packets(&dir);
+                discard_packets(dir);
                 return Err(RunError::Embed);
             }
         }
@@ -693,16 +872,410 @@ pub fn round<M: ModelPort, E: Embedder>(
         validation_refused: refused,
         train_scored,
         validation_scored,
+        inventory_digest: inventory_digest.to_string(),
+        cycle,
     };
-    run.cache
-        .put(format!("run:{}:round:{n}", run.record.label), &record)
-        .map_err(store)?;
     Ok(RoundOutcome::Recorded(record))
+}
+
+/// One validation reading: chrF 0 to 100, meaning 0 to 1, and their composite.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Reading {
+    pub chrf: f64,
+    pub meaning: f64,
+    pub composite: f64,
+}
+
+impl Reading {
+    /// `None` when the split has no items or no chrF; a missing meaning reads as
+    /// 0. The composite is the mean of chrF as a fraction and meaning.
+    pub fn of(mean: &SplitMean) -> Option<Self> {
+        if mean.count == 0 {
+            return None;
+        }
+        let chrf = mean.chrf?;
+        let meaning = mean.meaning.unwrap_or(0.0);
+        Some(Self {
+            chrf,
+            meaning,
+            composite: (chrf / 100.0 + meaning) / 2.0,
+        })
+    }
+}
+
+/// Which metric an edit regressed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum Metric {
+    Chrf,
+    Meaning,
+}
+
+/// Why an edit was rejected.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum Why {
+    /// The answer was not an edit draft.
+    EditParse,
+    /// The draft asked for no change or too many, or the inventory door refused it.
+    EditAdmit,
+    NoGain,
+    Regressed(Metric),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum Verdict {
+    Accepted,
+    Rejected(Why),
+}
+
+/// The smallest composite gain that accepts an edit: the measured floor, but
+/// never under one [`LADDER_STEP`], so a zero floor from identical replicates
+/// does not let a rounding-error gain through.
+pub fn threshold(floor: &Reading) -> f64 {
+    floor.composite.max(LADDER_STEP)
+}
+
+/// A reading difference in billionths. [`decide`] compares whole numbers, so a
+/// gain of exactly one [`LADDER_STEP`] is a tie on every baseline of the grid
+/// instead of a coin the last bits of `0.505 - 0.5` toss; differences under a
+/// billionth are not told apart.
+fn nano(x: f64) -> i64 {
+    (x * 1e9).round() as i64
+}
+
+/// The accept rule. A metric that falls by more than its tolerance (the floor,
+/// at least one step) rejects; otherwise the composite must gain strictly more
+/// than [`threshold`]. Means count a refused Validation item as 0, so refusing a
+/// weak item cannot raise a reading. Differences are compared in billionths.
+pub fn decide(base: &Reading, candidate: &Reading, floor: &Reading) -> Verdict {
+    if nano(candidate.chrf - base.chrf) < -nano(floor.chrf.max(100.0 * LADDER_STEP)) {
+        Verdict::Rejected(Why::Regressed(Metric::Chrf))
+    } else if nano(candidate.meaning - base.meaning) < -nano(floor.meaning.max(LADDER_STEP)) {
+        Verdict::Rejected(Why::Regressed(Metric::Meaning))
+    } else if nano(candidate.composite - base.composite) > nano(threshold(floor)) {
+        Verdict::Accepted
+    } else {
+        Verdict::Rejected(Why::NoGain)
+    }
+}
+
+/// One closed edit-accept cycle: digests and numbers, no text. Key
+/// `run:<label>:cycle:<k>`. Only [`cycle`] builds one.
+///
+/// ```
+/// fn f(d: &weksa::run::Decision) -> u32 { d.k() }
+/// ```
+///
+/// Every field is given, so the literal below fails only on privacy; its twin is
+/// the same literal in the unit test `a_decision_literal_compiles_in_the_lib`.
+///
+/// ```compile_fail,E0451
+/// use weksa::run::{Call, Decision, Reading, Verdict};
+/// fn f() -> Decision {
+///     let r = Reading { chrf: 0.0, meaning: 0.0, composite: 0.0 };
+///     Decision {
+///         k: 1,
+///         base_round: 1,
+///         base_rev: 1,
+///         base_inventory_digest: String::new(),
+///         edit: Call { prompt: String::new(), items: vec![] },
+///         edit_answer_digest: None,
+///         candidate_rev: None,
+///         candidate_inventory_digest: None,
+///         candidate_round: None,
+///         base: r,
+///         candidate: None,
+///         floor: r,
+///         threshold: 0.0,
+///         verdict: Verdict::Accepted,
+///     }
+/// }
+/// ```
+#[derive(Clone, Debug, PartialEq, JsonSchema, DatabaseEntry)]
+#[cultcache(type = "weksa.loop_decision")]
+pub struct Decision {
+    #[cultcache(key = 0)]
+    k: u32,
+    /// The head's establishing round: the base of this cycle.
+    #[cultcache(key = 1)]
+    base_round: u32,
+    #[cultcache(key = 2)]
+    base_rev: u32,
+    #[cultcache(key = 3)]
+    base_inventory_digest: String,
+    /// The edit prompt's digest and the Train keys it held.
+    #[cultcache(key = 4)]
+    edit: Call,
+    /// 16 hex of the editor's answer; `None` when it was unreadable.
+    #[cultcache(key = 5)]
+    edit_answer_digest: Option<String>,
+    #[cultcache(key = 6)]
+    candidate_rev: Option<u32>,
+    #[cultcache(key = 7)]
+    candidate_inventory_digest: Option<String>,
+    #[cultcache(key = 8)]
+    candidate_round: Option<u32>,
+    #[cultcache(key = 9)]
+    base: Reading,
+    #[cultcache(key = 10)]
+    candidate: Option<Reading>,
+    #[cultcache(key = 11)]
+    floor: Reading,
+    #[cultcache(key = 12)]
+    threshold: f64,
+    #[cultcache(key = 13)]
+    verdict: Verdict,
+}
+
+impl Decision {
+    pub fn k(&self) -> u32 {
+        self.k
+    }
+    pub fn base_round(&self) -> u32 {
+        self.base_round
+    }
+    pub fn base_rev(&self) -> u32 {
+        self.base_rev
+    }
+    pub fn base_inventory_digest(&self) -> &str {
+        &self.base_inventory_digest
+    }
+    pub fn edit(&self) -> &Call {
+        &self.edit
+    }
+    pub fn edit_answer_digest(&self) -> Option<&str> {
+        self.edit_answer_digest.as_deref()
+    }
+    pub fn candidate_rev(&self) -> Option<u32> {
+        self.candidate_rev
+    }
+    pub fn candidate_inventory_digest(&self) -> Option<&str> {
+        self.candidate_inventory_digest.as_deref()
+    }
+    pub fn candidate_round(&self) -> Option<u32> {
+        self.candidate_round
+    }
+    pub fn base(&self) -> &Reading {
+        &self.base
+    }
+    pub fn candidate(&self) -> Option<&Reading> {
+        self.candidate.as_ref()
+    }
+    pub fn floor(&self) -> &Reading {
+        &self.floor
+    }
+    pub fn threshold(&self) -> f64 {
+        self.threshold
+    }
+    pub fn verdict(&self) -> Verdict {
+        self.verdict
+    }
+
+    /// The one line a closed cycle prints.
+    pub fn summary_line(&self) -> String {
+        let candidate_rev = self
+            .candidate_rev
+            .map_or("none".to_string(), |n| n.to_string());
+        let candidate = self
+            .candidate
+            .map_or("none".to_string(), |c| format!("{:.4}", c.composite));
+        let verdict = match self.verdict {
+            Verdict::Accepted => "accepted".to_string(),
+            Verdict::Rejected(why) => format!(
+                "rejected {}",
+                match why {
+                    Why::EditParse => "edit-parse",
+                    Why::EditAdmit => "edit-admit",
+                    Why::NoGain => "no-gain",
+                    Why::Regressed(Metric::Chrf) => "regressed-chrf",
+                    Why::Regressed(Metric::Meaning) => "regressed-meaning",
+                }
+            ),
+        };
+        format!(
+            "cycle {} rev {}->{candidate_rev} base={:.4} candidate={candidate} floor={:.4} threshold={:.4} {verdict}",
+            self.k, self.base_rev, self.base.composite, self.floor.composite, self.threshold
+        )
+    }
+}
+
+/// What a cycle came to; built once per call, as [`RoundOutcome`] is.
+#[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
+pub enum CycleOutcome {
+    /// Prompts nobody has answered; nothing was written to `run.cc`.
+    Unanswered {
+        prompts: Vec<String>,
+    },
+    Decided(Decision),
+}
+
+/// The spread of the Validation reading between rounds 1 and 2: two independent
+/// encodings under the run's first inventory and one spec, measured once per run.
+fn floor_of(rounds: &[RoundRecord], record: &RunRecord) -> Result<Reading, RunError> {
+    let replicate = |n: u32| {
+        let round = rounds
+            .iter()
+            .find(|r| {
+                r.n == n && r.cycle.is_none() && r.inventory_digest == record.inventory_digest
+            })
+            .ok_or(RunError::NoFloor)?;
+        Reading::of(&round.validation_mean).ok_or(RunError::NoValidation)
+    };
+    let (a, b) = (replicate(1)?, replicate(2)?);
+    Ok(Reading {
+        chrf: (a.chrf - b.chrf).abs(),
+        meaning: (a.meaning - b.meaning).abs(),
+        composite: (a.composite - b.composite).abs(),
+    })
+}
+
+/// One edit-accept cycle. The editor is asked for one inventory edit from a
+/// prompt built over Train items, the head inventory and an [`EditFeedback`];
+/// the edit is admitted as a candidate revision in `<root>/cycle-<k>/inventory.cc`;
+/// a candidate round scores it; [`decide`] accepts or rejects on Validation
+/// against the head's establishing round. Accepting is one write: the candidate
+/// round and the decision go into `run.cc` in one batch, and the decision names
+/// the new head. While any prompt is unanswered, or the candidate round fails,
+/// `run.cc` is untouched. An edit that fails is a rejected decision, not an error.
+pub fn cycle<M: ModelPort, E: Embedder>(
+    run: &mut RunStores,
+    model: &mut M,
+    scorer: &Scorer<E>,
+) -> Result<CycleOutcome, RunError> {
+    let store = |_| RunError::Store;
+    check_drift(run, model, scorer)?;
+    let rounds = run.rounds().map_err(store)?;
+    let floor = floor_of(&rounds, &run.record)?;
+    let (head_path, head_digest, base_round) = run.head()?;
+    let base = rounds
+        .iter()
+        .find(|r| r.n == base_round)
+        .ok_or(RunError::Store)?;
+    let base = Reading::of(&base.validation_mean).ok_or(RunError::NoValidation)?;
+    let decisions = run.decisions().map_err(store)?;
+    let k = decisions.len() as u32 + 1;
+    let dir = run.next_cycle_dir().map_err(store)?;
+    let inventory = run.inventory.inventory().map_err(store)?;
+    let base_rev = inventory.latest().ok_or(RunError::NoInventory)?.n;
+
+    let feedback = EditFeedback::new(
+        decisions.last().map(|d| d.verdict == Verdict::Accepted),
+        Some(base.composite),
+    );
+    let train = run.train().map_err(store)?;
+    let prompt = Prompt::mint(&train, &inventory, base_rev, &feedback);
+    let answer = match model.answer(&prompt) {
+        Ok(answer) => Some(answer),
+        Err(PortError::Io(ErrorKind::InvalidData)) => None,
+        Err(PortError::Unanswered) => {
+            return Ok(CycleOutcome::Unanswered {
+                prompts: vec![prompt.digest()],
+            });
+        }
+        Err(PortError::Io(kind)) => return Err(RunError::Io(kind)),
+    };
+
+    let blank = |verdict: Verdict| Decision {
+        k,
+        base_round,
+        base_rev,
+        base_inventory_digest: head_digest.clone(),
+        edit: Call {
+            prompt: prompt.digest(),
+            items: prompt.item_keys().to_vec(),
+        },
+        edit_answer_digest: answer.as_ref().map(|a| hex16(fnv1a64(a.as_bytes()))),
+        candidate_rev: None,
+        candidate_inventory_digest: None,
+        candidate_round: None,
+        base,
+        candidate: None,
+        floor,
+        threshold: threshold(&floor),
+        verdict,
+    };
+    let decision_key = format!("run:{}:cycle:{k}", run.record.label);
+    // A rejection leaves no candidate inventory behind, whichever attempt built it.
+    let reject = |run: &mut RunStores, why: Why| -> Result<CycleOutcome, RunError> {
+        discard_inventory(&dir);
+        let d = blank(Verdict::Rejected(why));
+        run.cache.put(decision_key.clone(), &d).map_err(store)?;
+        Ok(CycleOutcome::Decided(d))
+    };
+
+    let Some(draft) = answer.as_deref().and_then(|a| EditDraft::parse(a).ok()) else {
+        return reject(run, Why::EditParse);
+    };
+    let Some((revision, entries)) = draft.into_revision(&inventory, base_rev) else {
+        return reject(run, Why::EditAdmit);
+    };
+    let candidate_rev = revision.n;
+
+    // The cycle's directory holds prompts and answers; its inventory and packets
+    // are rebuilt from the head on every attempt.
+    let candidate_file = dir.join(INVENTORY_FILE);
+    std::fs::create_dir_all(&dir).map_err(|e| RunError::Io(e.kind()))?;
+    discard_inventory(&dir);
+    discard_packets(&dir);
+    std::fs::copy(&head_path, &candidate_file).map_err(|e| RunError::Io(e.kind()))?;
+    let mut candidate_store = InventoryStore::open(&candidate_file).map_err(store)?;
+    if candidate_store.admit_revision(revision, entries).is_err() {
+        drop(candidate_store);
+        return reject(run, Why::EditAdmit);
+    }
+    let candidate_digest = file_digest_at(&candidate_file).ok_or(RunError::Store)?;
+
+    let record = match score_round(
+        run,
+        &candidate_store,
+        &candidate_digest,
+        &dir,
+        Some(k),
+        model,
+        scorer,
+    )? {
+        RoundOutcome::Unanswered { prompts } => return Ok(CycleOutcome::Unanswered { prompts }),
+        RoundOutcome::Recorded(record) => record,
+    };
+    let candidate = Reading::of(&record.validation_mean).ok_or(RunError::NoValidation)?;
+    let verdict = decide(&base, &candidate, &floor);
+    let decided = Decision {
+        candidate_rev: Some(candidate_rev),
+        candidate_inventory_digest: Some(candidate_digest),
+        candidate_round: Some(record.n),
+        candidate: Some(candidate),
+        ..blank(verdict)
+    };
+    let staged = vec![
+        run.cache
+            .prepare_entry_named(
+                format!("run:{}:round:{}", run.record.label, record.n),
+                &record,
+            )
+            .map_err(store)?
+            .0,
+        run.cache
+            .prepare_entry_named(decision_key.clone(), &decided)
+            .map_err(store)?
+            .0,
+    ];
+    run.cache.put_prepared_batch(staged).map_err(store)?;
+    if verdict == Verdict::Accepted {
+        run.inventory = candidate_store;
+    }
+    Ok(CycleOutcome::Decided(decided))
 }
 
 /// Removes a round directory's packet store and its lock.
 fn discard_packets(dir: &Path) {
     for name in ["packets.cc", "packets.cc.lock"] {
+        let _ = std::fs::remove_file(dir.join(name));
+    }
+}
+
+/// Removes a cycle directory's candidate inventory and its lock.
+fn discard_inventory(dir: &Path) {
+    for name in [INVENTORY_FILE, "inventory.cc.lock"] {
         let _ = std::fs::remove_file(dir.join(name));
     }
 }
@@ -732,7 +1305,278 @@ mod tests {
             validation_mean: SplitMean::default(),
             validation_scored: 0,
             validation_refused: RefusalCounts::default(),
+            inventory_digest: String::new(),
+            cycle: None,
         };
         assert_eq!(r.n(), 1);
+    }
+
+    /// The twin of the `Decision` literal in its compile_fail doctest.
+    #[test]
+    fn a_decision_literal_compiles_in_the_lib() {
+        let r = Reading {
+            chrf: 0.0,
+            meaning: 0.0,
+            composite: 0.0,
+        };
+        let d = Decision {
+            k: 1,
+            base_round: 1,
+            base_rev: 1,
+            base_inventory_digest: String::new(),
+            edit: Call {
+                prompt: String::new(),
+                items: vec![],
+            },
+            edit_answer_digest: None,
+            candidate_rev: None,
+            candidate_inventory_digest: None,
+            candidate_round: None,
+            base: r,
+            candidate: None,
+            floor: r,
+            threshold: 0.0,
+            verdict: Verdict::Accepted,
+        };
+        assert_eq!(d.k(), 1);
+    }
+
+    fn reading(chrf: f64, meaning: f64, composite: f64) -> Reading {
+        Reading {
+            chrf,
+            meaning,
+            composite,
+        }
+    }
+
+    #[test]
+    fn reading_of_a_mean() {
+        let mean = |count, chrf, meaning| SplitMean {
+            count,
+            chrf,
+            meaning,
+        };
+        assert_eq!(Reading::of(&mean(0, Some(50.0), Some(0.5))), None);
+        assert_eq!(Reading::of(&mean(2, None, Some(0.5))), None);
+        assert_eq!(
+            Reading::of(&mean(2, Some(50.0), Some(0.5))),
+            Some(reading(50.0, 0.5, 0.5))
+        );
+        // A missing meaning reads as 0.
+        assert_eq!(
+            Reading::of(&mean(2, Some(80.0), None)),
+            Some(reading(80.0, 0.0, 0.4))
+        );
+        assert_eq!(
+            Reading::of(&mean(1, Some(0.0), Some(1.0)))
+                .unwrap()
+                .composite,
+            0.5
+        );
+    }
+
+    #[test]
+    fn the_threshold_is_the_floor_but_never_under_a_step() {
+        assert_eq!(threshold(&reading(0.0, 0.0, 0.0)), LADDER_STEP);
+        assert_eq!(threshold(&reading(0.0, 0.0, 0.001)), LADDER_STEP);
+        assert_eq!(threshold(&reading(0.0, 0.0, LADDER_STEP)), LADDER_STEP);
+        assert_eq!(threshold(&reading(0.0, 0.0, 0.25)), 0.25);
+    }
+
+    #[test]
+    fn decide_pins_each_branch() {
+        let base = reading(50.0, 0.5, 0.5);
+        let zero = reading(0.0, 0.0, 0.0);
+        let rejected = Verdict::Rejected;
+
+        // Floor 0: a chrF drop beyond 100 * LADDER_STEP regresses, inside it does not.
+        let down = |chrf| reading(chrf, 0.5, 0.5);
+        assert_eq!(
+            decide(&base, &down(49.4), &zero),
+            rejected(Why::Regressed(Metric::Chrf))
+        );
+        assert_eq!(decide(&base, &down(49.6), &zero), rejected(Why::NoGain));
+        // The tolerance is the floor when that is larger: exactly at it stands.
+        let floor = reading(8.0, 0.0, 0.0);
+        assert_eq!(decide(&base, &down(42.0), &floor), rejected(Why::NoGain));
+        assert_eq!(
+            decide(&base, &down(41.99), &floor),
+            rejected(Why::Regressed(Metric::Chrf))
+        );
+        // A floor under a step does not narrow it.
+        let small = reading(0.1, 0.001, 0.0);
+        assert_eq!(decide(&base, &down(49.6), &small), rejected(Why::NoGain));
+        assert_eq!(
+            decide(&base, &reading(50.0, 0.498, 0.5), &small),
+            rejected(Why::NoGain)
+        );
+        // Meaning likewise: one step by default, the floor when larger.
+        let meaning = |m| reading(50.0, m, 0.5);
+        assert_eq!(
+            decide(&base, &meaning(0.49), &zero),
+            rejected(Why::Regressed(Metric::Meaning))
+        );
+        assert_eq!(decide(&base, &meaning(0.498), &zero), rejected(Why::NoGain));
+        let floor = reading(0.0, 0.25, 0.0);
+        assert_eq!(decide(&base, &meaning(0.25), &floor), rejected(Why::NoGain));
+        assert_eq!(
+            decide(&base, &meaning(0.2499), &floor),
+            rejected(Why::Regressed(Metric::Meaning))
+        );
+        // A regression rejects whatever the composite gained; chrF is judged first.
+        assert_eq!(
+            decide(&base, &reading(40.0, 0.9, 0.9), &zero),
+            rejected(Why::Regressed(Metric::Chrf))
+        );
+        assert_eq!(
+            decide(&base, &reading(50.0, 0.4, 0.9), &zero),
+            rejected(Why::Regressed(Metric::Meaning))
+        );
+        assert_eq!(
+            decide(&base, &reading(40.0, 0.4, 0.1), &zero),
+            rejected(Why::Regressed(Metric::Chrf))
+        );
+
+        // The gain must exceed the threshold strictly.
+        let gain = |c| reading(50.0, 0.5, c);
+        assert_eq!(decide(&base, &gain(0.504), &zero), rejected(Why::NoGain));
+        assert_eq!(decide(&base, &gain(0.506), &zero), Verdict::Accepted);
+        assert_eq!(decide(&base, &gain(0.5), &zero), rejected(Why::NoGain));
+        assert_eq!(decide(&base, &gain(0.4), &zero), rejected(Why::NoGain));
+        // A floor above the step sets the threshold: a gain equal to it is no gain.
+        let floor = reading(0.0, 0.0, 0.25);
+        assert_eq!(decide(&base, &gain(0.75), &floor), rejected(Why::NoGain));
+        assert_eq!(decide(&base, &gain(0.7501), &floor), Verdict::Accepted);
+        assert_eq!(decide(&base, &gain(0.506), &floor), rejected(Why::NoGain));
+    }
+
+    #[test]
+    fn a_gain_of_exactly_one_step_is_no_gain_on_every_baseline_of_the_grid() {
+        let zero = reading(0.0, 0.0, 0.0);
+        let at = |i: u32| reading(50.0, 0.5, f64::from(i) * LADDER_STEP);
+        for i in 0..400 {
+            assert_eq!(
+                decide(&at(i), &at(i + 1), &zero),
+                Verdict::Rejected(Why::NoGain),
+                "{i}"
+            );
+            // Two steps clears one; a step and a hair over clears it too.
+            assert_eq!(decide(&at(i), &at(i + 2), &zero), Verdict::Accepted, "{i}");
+            let hair = reading(50.0, 0.5, f64::from(i + 1) * LADDER_STEP + 1e-6);
+            assert_eq!(decide(&at(i), &hair, &zero), Verdict::Accepted, "{i}");
+        }
+        // The floor is a tie at its own value on the grid, as the step is.
+        let floor = reading(0.0, 0.0, 3.0 * LADDER_STEP);
+        for i in 0..400 {
+            assert_eq!(
+                decide(&at(i), &at(i + 3), &floor),
+                Verdict::Rejected(Why::NoGain),
+                "{i}"
+            );
+            assert_eq!(decide(&at(i), &at(i + 4), &floor), Verdict::Accepted, "{i}");
+        }
+        // The regression tolerance is a tie at its own value, on both metrics.
+        for i in 0..400 {
+            let chrf = 20.0 + f64::from(i) * 0.5;
+            let base = reading(chrf, 0.5, 0.5);
+            let drop = reading(chrf - 100.0 * LADDER_STEP, 0.5, 0.5);
+            assert_eq!(decide(&base, &drop, &zero), Verdict::Rejected(Why::NoGain));
+            let meaning = f64::from(i + 1) * LADDER_STEP;
+            let base = reading(50.0, meaning, 0.5);
+            let drop = reading(50.0, meaning - LADDER_STEP, 0.5);
+            assert_eq!(decide(&base, &drop, &zero), Verdict::Rejected(Why::NoGain));
+        }
+        // Two-decimal chrF readings are not binary-exact: in float, 84 of these
+        // pairs would read as a regression of more than 0.5.
+        for i in 60..10_000 {
+            let base = reading(f64::from(i) / 100.0, 0.5, 0.5);
+            let drop = reading(f64::from(i - 50) / 100.0, 0.5, 0.5);
+            assert_eq!(
+                decide(&base, &drop, &zero),
+                Verdict::Rejected(Why::NoGain),
+                "{i}"
+            );
+        }
+    }
+
+    fn replicate(n: u32, digest: &str, chrf: f64, meaning: f64) -> RoundRecord {
+        RoundRecord {
+            n,
+            inventory_rev: 1,
+            prompt_digest: String::new(),
+            lowerer_digest: String::new(),
+            corpus_digest: String::new(),
+            entity_digest: String::new(),
+            model: String::new(),
+            embedder: String::new(),
+            chrf_version: String::new(),
+            calls: vec![],
+            train: vec![],
+            train_mean: SplitMean::default(),
+            train_scored: 0,
+            validation_mean: SplitMean {
+                count: 2,
+                chrf: Some(chrf),
+                meaning: Some(meaning),
+            },
+            validation_scored: 2,
+            validation_refused: RefusalCounts::default(),
+            inventory_digest: digest.to_string(),
+            cycle: None,
+        }
+    }
+
+    fn record_of(digest: &str) -> RunRecord {
+        RunRecord {
+            label: "t".into(),
+            corpus: String::new(),
+            inventory: String::new(),
+            entities: String::new(),
+            corpus_digest: String::new(),
+            entity_digest: String::new(),
+            prompt_digest: String::new(),
+            lowerer_digest: String::new(),
+            model: String::new(),
+            embedder: String::new(),
+            chrf_version: String::new(),
+            inventory_digest: digest.to_string(),
+        }
+    }
+
+    /// The floor is the spread of each field of the two replicates, the composite
+    /// as the spread of the composites: with chrF up and meaning down it is not
+    /// a function of the other two spreads' magnitudes.
+    #[test]
+    fn the_floor_is_the_spread_of_each_field_of_the_two_replicates() {
+        let record = record_of("d1");
+        let rounds = [replicate(1, "d1", 60.0, 0.5), replicate(2, "d1", 50.0, 0.7)];
+        let floor = floor_of(&rounds, &record).unwrap();
+        // composites 0.55 and 0.6.
+        assert_eq!(floor.chrf, 10.0);
+        assert!((floor.meaning - 0.2).abs() < 1e-12);
+        assert!(
+            (floor.composite - 0.05).abs() < 1e-12,
+            "{}",
+            floor.composite
+        );
+
+        // The order of the replicates does not matter, and a third round, or a
+        // round under another inventory or from a cycle, is not a replicate.
+        let mut other = replicate(2, "d2", 0.0, 0.0);
+        let mut cycle = replicate(2, "d1", 0.0, 0.0);
+        cycle.cycle = Some(1);
+        other.n = 2;
+        let rounds = [
+            replicate(3, "d1", 0.0, 0.0),
+            other,
+            cycle,
+            replicate(2, "d1", 50.0, 0.7),
+            replicate(1, "d1", 60.0, 0.5),
+        ];
+        assert_eq!(floor_of(&rounds, &record).unwrap(), floor);
+        assert_eq!(
+            floor_of(&rounds[..3], &record).err(),
+            Some(RunError::NoFloor)
+        );
     }
 }

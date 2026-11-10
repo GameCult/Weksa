@@ -134,6 +134,12 @@ fn published_schemas_match() {
     let published = weksa::schema::published();
     let mut names: Vec<String> = published.iter().map(|(n, _)| n.clone()).collect();
     names.sort();
+    for loop_type in ["run", "round", "decision"] {
+        assert!(
+            names.contains(&format!("weksa.loop_{loop_type}.schema.json")),
+            "{loop_type}"
+        );
+    }
     let mut on_disk: Vec<String> = std::fs::read_dir(&dir)
         .unwrap()
         .map(|e| e.unwrap().file_name().into_string().unwrap())
