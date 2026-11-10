@@ -120,6 +120,10 @@ fn open_checks_each_pin_by_name() {
         drift(&|r| r.entity_digest = "0".repeat(16)),
         Some(RunError::Drift(DriftOf::Entities))
     );
+    assert_eq!(
+        drift(&|r| r.inventory_digest = "0".repeat(16)),
+        Some(RunError::Drift(DriftOf::Inventory))
+    );
     assert_eq!(drift(&|_| {}), None, "the unchanged record opens");
 
     // An entity put after the pin is another entity store.
@@ -130,6 +134,146 @@ fn open_checks_each_pin_by_name() {
         RunStores::open(&root).err(),
         Some(RunError::Drift(DriftOf::Entities))
     );
+}
+
+#[test]
+fn a_run_works_on_its_own_copy_of_the_inventory() {
+    let w = world();
+    let dir = w.dir.path().to_path_buf();
+    let root = dir.join("run");
+    let (c, i, e) = paths(&dir);
+    let source_bytes = std::fs::read(&i).unwrap();
+    let mut run = RunStores::create(
+        &root,
+        "t",
+        RunPaths {
+            corpus: &c,
+            inventory: &i,
+            entities: &e,
+        },
+        "fake-model",
+        "bag",
+    )
+    .unwrap();
+
+    // The copy is byte for byte the source, and the record pins its digest.
+    let copy = root.join("inventory.cc");
+    assert_eq!(std::fs::read(&copy).unwrap(), source_bytes);
+    assert_eq!(run.record().inventory_digest, hex(&i));
+    assert_eq!(run.record().inventory_digest, hex(&copy));
+    assert_eq!(
+        run.record().inventory,
+        std::fs::canonicalize(&i).unwrap().to_str().unwrap(),
+        "the source path is provenance"
+    );
+    let rev = run.inventory().inventory().unwrap().latest().unwrap().n;
+
+    // A revision written to the source after open is a revision the run never
+    // reads, and it does not drift the run.
+    let mut source = weksa::InventoryStore::open(&i).unwrap();
+    source
+        .admit_revision(
+            weksa::InventoryRevision {
+                n: rev + 1,
+                parent: Some(rev),
+                changes: vec![],
+                frozen: false,
+            },
+            vec![],
+        )
+        .unwrap();
+    assert_ne!(hex(&i), run.record().inventory_digest);
+    run = RunStores::open(&root).unwrap();
+    assert_eq!(
+        run.inventory().inventory().unwrap().latest().unwrap().n,
+        rev,
+        "the run reads its copy"
+    );
+    assert_eq!(std::fs::read(&copy).unwrap(), source_bytes);
+
+    // Even with the source gone the run opens.
+    std::fs::remove_file(&i).unwrap();
+    assert!(RunStores::open(&root).is_ok());
+
+    // A revision appended to the copy is drift.
+    let mut head = weksa::InventoryStore::open(&copy).unwrap();
+    head.admit_revision(
+        weksa::InventoryRevision {
+            n: rev + 1,
+            parent: Some(rev),
+            changes: vec![],
+            frozen: false,
+        },
+        vec![],
+    )
+    .unwrap();
+    assert_eq!(
+        RunStores::open(&root).err(),
+        Some(RunError::Drift(DriftOf::Inventory))
+    );
+}
+
+/// `weksa.loop_run` as it was before the run kept its own inventory copy: keys
+/// 0 to 10.
+#[derive(Clone, cultcache_rs::DatabaseEntry)]
+#[cultcache(type = "weksa.loop_run")]
+struct LegacyRun {
+    #[cultcache(key = 0)]
+    label: String,
+    #[cultcache(key = 1)]
+    corpus: String,
+    #[cultcache(key = 2)]
+    inventory: String,
+    #[cultcache(key = 3)]
+    entities: String,
+    #[cultcache(key = 4)]
+    corpus_digest: String,
+    #[cultcache(key = 5)]
+    entity_digest: String,
+    #[cultcache(key = 6)]
+    prompt_digest: String,
+    #[cultcache(key = 7)]
+    lowerer_digest: String,
+    #[cultcache(key = 8)]
+    model: String,
+    #[cultcache(key = 9)]
+    embedder: String,
+    #[cultcache(key = 10)]
+    chrf_version: String,
+}
+
+#[test]
+fn a_run_from_before_the_copy_does_not_open() {
+    // A run.cc without key 11 is a scratch run off git: its open fails Store.
+    let w = world();
+    let dir = w.dir.path().to_path_buf();
+    let current = run_over(&dir).record().clone();
+    let root = dir.join("run");
+    std::fs::remove_file(root.join("run.cc")).unwrap();
+    let mut cache = CultCache::new();
+    cache.register_entry_type::<LegacyRun>().unwrap();
+    cache
+        .add_generic_backing_store(SingleFileMessagePackBackingStore::new(root.join("run.cc")))
+        .unwrap();
+    cache
+        .put(
+            "run:t",
+            &LegacyRun {
+                label: current.label,
+                corpus: current.corpus,
+                inventory: current.inventory,
+                entities: current.entities,
+                corpus_digest: current.corpus_digest,
+                entity_digest: current.entity_digest,
+                prompt_digest: current.prompt_digest,
+                lowerer_digest: current.lowerer_digest,
+                model: current.model,
+                embedder: current.embedder,
+                chrf_version: current.chrf_version,
+            },
+        )
+        .unwrap();
+    assert_eq!(RunStores::open(&root).err(), Some(RunError::Store));
 }
 
 #[test]

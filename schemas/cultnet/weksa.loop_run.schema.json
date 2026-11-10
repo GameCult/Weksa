@@ -26,6 +26,11 @@
       "type": "string"
     },
     "inventory": {
+      "description": "Canonical absolute path of the inventory store the run was opened over:\nprovenance only. `create` copies that file to `<root>/inventory.cc` and\nthe run reads nothing at this path afterwards.",
+      "type": "string"
+    },
+    "inventory_digest": {
+      "description": "16 hex of the bytes `create` copied to `<root>/inventory.cc`.",
       "type": "string"
     },
     "label": {
@@ -53,6 +58,7 @@
     "lowerer_digest",
     "model",
     "embedder",
-    "chrf_version"
+    "chrf_version",
+    "inventory_digest"
   ]
 }

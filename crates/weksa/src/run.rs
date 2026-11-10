@@ -2,7 +2,11 @@
 //! and the one writer of both (`RunStores::create` and, for rounds, `round`).
 //!
 //! A run pins its corpus and entity store files by canonical path and FNV-1a 64
-//! digest of their bytes. Every round reopens them only from that record and
+//! digest of their bytes. It works on its own copy of the inventory:
+//! `RunStores::create` copies the caller's inventory file to
+//! `<root>/inventory.cc` and pins the digest of the copy; the caller's path is
+//! kept as provenance and never opened again, and `open` refuses a head file
+//! whose digest differs. Every round reopens them only from that record and
 //! refuses on drift, and every round record carries the digests. Nothing inside
 //! a process whose writer controls the code can stop an item faked into a
 //! scratch store; what this makes true is that a run over a scratch store is a
@@ -46,6 +50,9 @@ pub struct RunRecord {
     /// Canonical absolute path of the corpus store.
     #[cultcache(key = 1)]
     pub corpus: String,
+    /// Canonical absolute path of the inventory store the run was opened over:
+    /// provenance only. `create` copies that file to `<root>/inventory.cc` and
+    /// the run reads nothing at this path afterwards.
     #[cultcache(key = 2)]
     pub inventory: String,
     #[cultcache(key = 3)]
@@ -67,6 +74,9 @@ pub struct RunRecord {
     pub embedder: String,
     #[cultcache(key = 10)]
     pub chrf_version: String,
+    /// 16 hex of the bytes `create` copied to `<root>/inventory.cc`.
+    #[cultcache(key = 11)]
+    pub inventory_digest: String,
 }
 
 /// Where a round refused: the first stage that did.
@@ -276,6 +286,8 @@ pub enum DriftOf {
     Lowerer,
     Model,
     Embedder,
+    /// The run's own head inventory file.
+    Inventory,
 }
 
 /// A run's failure. Display and Debug name a kind, never a path, key, label or
@@ -340,8 +352,15 @@ pub struct RunStores {
     entities: EntityStore,
 }
 
-fn file_digest(path: &str) -> Option<String> {
+/// The run's own copy of the inventory, made at `create`.
+const INVENTORY_FILE: &str = "inventory.cc";
+
+fn file_digest_at(path: &Path) -> Option<String> {
     std::fs::read(path).ok().map(|b| hex16(fnv1a64(&b)))
+}
+
+fn file_digest(path: &str) -> Option<String> {
+    file_digest_at(Path::new(path))
 }
 
 fn canonical(path: &Path) -> Result<String, RunError> {
@@ -403,10 +422,15 @@ impl RunStores {
             model: model.to_string(),
             embedder: embedder.to_string(),
             chrf_version: CHRF_VERSION.to_string(),
+            inventory_digest: String::new(),
         };
+        // The run works on its own copy; the caller's store is never opened again.
+        let head = root.join(INVENTORY_FILE);
+        std::fs::copy(&record.inventory, &head).map_err(|e| RunError::Io(e.kind()))?;
         let record = RunRecord {
             corpus_digest: file_digest(&record.corpus).ok_or(RunError::Store)?,
             entity_digest: file_digest(&record.entities).ok_or(RunError::Store)?,
+            inventory_digest: file_digest_at(&head).ok_or(RunError::Store)?,
             ..record
         };
         cache
@@ -435,6 +459,9 @@ impl RunStores {
         if file_digest(&record.entities).as_ref() != Some(&record.entity_digest) {
             return Err(RunError::Drift(DriftOf::Entities));
         }
+        if file_digest_at(&root.join(INVENTORY_FILE)).as_ref() != Some(&record.inventory_digest) {
+            return Err(RunError::Drift(DriftOf::Inventory));
+        }
         Self::with(root, cache, record)
     }
 
@@ -443,7 +470,7 @@ impl RunStores {
         Ok(Self {
             root: root.to_path_buf(),
             corpus: CorpusStore::open(Path::new(&record.corpus)).map_err(store)?,
-            inventory: InventoryStore::open(Path::new(&record.inventory)).map_err(store)?,
+            inventory: InventoryStore::open(&root.join(INVENTORY_FILE)).map_err(store)?,
             entities: EntityStore::open(Path::new(&record.entities)).map_err(store)?,
             cache,
             record,
