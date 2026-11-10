@@ -694,6 +694,7 @@ mod lowering {
 #[test]
 fn the_encode_prompt_states_the_id_form_the_inventory_lines_use() {
     assert!(ENCODE.contains("family prefix included: concept:7, never 7"));
+    assert!(ENCODE.contains("A referent's concept is never null, even when it carries an entity: give the nearest concept id."));
     let w = world();
     let run = run_over(w.dir.path());
     let inv = run.inventory().inventory().unwrap();
