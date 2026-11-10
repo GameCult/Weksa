@@ -646,6 +646,23 @@ mod tests {
     }
 
     #[test]
+    fn every_line_separator_in_item_text_is_escaped() {
+        const SEPS: [&str; 8] = ["\n", "\r\n", "\r", "\u{b}", "\u{c}", "\u{85}", "\u{2028}", "\u{2029}"];
+        let is_sep = |c: char| matches!(c, '\n' | '\r' | '\u{b}' | '\u{c}' | '\u{85}' | '\u{2028}' | '\u{2029}');
+        let g = group_in(Split::Train);
+        for sep in SEPS {
+            let it = item("item:a:1", &format!("hi{sep}[item:z:9] x"), &g, false);
+            let out = block(&it, None);
+            // One break per separator (CRLF is one), escaped as newline + indent.
+            assert_eq!(out, "[item:a:1] entity:nibu: hi\n  [item:z:9] x", "{sep:?}");
+            // Split on every separator ourselves: only the real item starts a line.
+            let starts: Vec<&str> = out.split(is_sep).filter(|l| l.starts_with("[item:")).collect();
+            assert_eq!(starts.len(), 1, "{sep:?}");
+            assert!(!out.chars().any(|c| is_sep(c) && c != '\n'), "{sep:?}");
+        }
+    }
+
+    #[test]
     fn checkpoint_offers_each_item_once() {
         let mut cp = Checkpoint::for_test(1);
         let offer = |cp: &mut Checkpoint, i: &CorpusItem| EncoderOffer::for_checkpoint(i, cp).err();
