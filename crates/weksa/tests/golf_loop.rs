@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use common::{ent, run_over, world};
 use cultcache_rs::{CultCache, SingleFileMessagePackBackingStore};
+use weksa::corpus::ModelFamily;
 use weksa::run::{DriftOf, RunError, RunPaths, RunRecord, RunStores};
 use weksa::split::fnv1a64;
 
@@ -2945,6 +2946,282 @@ fn admit_refusals_are_counted_by_rule_and_printed_with_the_label() {
     let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
     assert!(r.admit_rules().is_empty());
     assert!(!dao.run.round_line(&r).contains("admit-rules"));
+}
+
+/// Item 1's good draft as JSON, changed by `change`, as the model's answer.
+fn mangled(change: impl FnOnce(&mut serde_json::Value)) -> String {
+    let mut v: serde_json::Value = serde_json::from_str(&json(&draft_of(1))).unwrap();
+    change(&mut v);
+    v.to_string()
+}
+
+/// The round record of a Dao run whose item 1 is answered with `answer` and
+/// the rest well.
+fn round_with_item_1(answer: String) -> (Dao, RoundRecord) {
+    let mut dao = dao();
+    let mut answers = good_answers();
+    answers[0].1 = answer;
+    let mut model = fake(&answers);
+    let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    (dao, r)
+}
+
+fn reasons(r: &RoundRecord) -> Vec<(&str, u32)> {
+    r.parse_reasons()
+        .iter()
+        .map(|c| (c.rule.as_str(), c.count))
+        .collect()
+}
+
+#[test]
+fn parse_reasons_by_class() {
+    let good = json(&draft_of(1));
+    let truncated = good[..good.len() / 2].to_string();
+    let cases: Vec<(&str, String)> = vec![
+        ("syntax", "not json at all".to_string()),
+        ("eof", truncated),
+        (
+            "invalid-type",
+            mangled(|v| v["referents"][0]["concept"] = serde_json::json!(7)),
+        ),
+        (
+            "bad-form",
+            mangled(|v| v["referents"][0]["concept"] = serde_json::json!("entity:x")),
+        ),
+        (
+            "unknown-field",
+            mangled(|v| v["surprise"] = serde_json::json!(1)),
+        ),
+        (
+            "missing-field",
+            mangled(|v| {
+                v.as_object_mut().unwrap().remove("referents");
+            }),
+        ),
+    ];
+    for (code, answer) in cases {
+        let (dao, r) = round_with_item_1(answer);
+        assert_eq!(reasons(&r), [(code, 1)], "{code}");
+        assert_eq!(r.train()[0].outcome, Outcome::Refused(Stage::Parse), "{code}");
+        let line = dao.run.round_line(&r);
+        assert!(line.contains(&format!("parse-reasons={code}x1")), "{line}");
+    }
+    // A round nothing refused at Parse carries and prints none.
+    let (dao, r) = round_with_item_1(good);
+    assert!(r.parse_reasons().is_empty());
+    assert!(!dao.run.round_line(&r).contains("parse-reasons"));
+}
+
+#[test]
+fn parse_reasons_count_per_code_over_both_splits_and_name_unreadable() {
+    let mut dao = dao();
+    let expected = prompts(&dao.run);
+    let answers = keyed(&good_answers());
+    let round1 = dao.root.join("round-1");
+    std::fs::create_dir_all(&round1).unwrap();
+    for (key, p) in &expected {
+        let bytes = match key.as_str() {
+            // Train: not UTF-8, so no answer parsed from the file.
+            "item:daodejing:1" => vec![0xff, 0xfe],
+            // Validation: not JSON.
+            "item:daodejing:2" => b"nope".to_vec(),
+            _ => answers[key].clone().into_bytes(),
+        };
+        std::fs::write(round1.join(format!("{}.answer", p.digest())), bytes).unwrap();
+    }
+    let table = table_english();
+    for (key, p) in lowering_prompts(&dao, dao.run.inventory())
+        .iter()
+        .filter(|(key, _)| key == "item:daodejing:3")
+    {
+        let answer = serde_json::json!({ "text": table[key] }).to_string();
+        std::fs::write(round1.join(format!("{}.answer", p.digest())), answer).unwrap();
+    }
+    let mut files = AnswerFiles::new(round1, "fake-model".into());
+    let r = recorded(round(&mut dao.run, &mut files, &Scorer::new(Bag)).unwrap());
+    assert_eq!(reasons(&r), [("syntax", 1), ("unreadable", 1)]);
+}
+
+#[test]
+fn parse_reasons_never_echo_answer() {
+    let canary = "CANARY-7f3a-held-out";
+    // The canary sits where serde would quote it: an unknown field name, an
+    // invalid value, and the raw text of a non-JSON answer.
+    let answers = [
+        mangled(|v| v[canary] = serde_json::json!(1)),
+        mangled(|v| v["referents"][0]["concept"] = serde_json::json!(canary)),
+        format!("{canary} is not json"),
+    ];
+    for answer in answers {
+        // Item 2 is Validation: the held-out item carries the canary.
+        let mut dao = dao();
+        let mut a = good_answers();
+        a[1].1 = answer;
+        let mut model = fake(&a);
+        let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+        assert_eq!(r.validation_refused().parse, 1);
+        let line = dao.run.round_line(&r);
+        assert!(!line.contains(canary) && !line.contains("CANARY"), "{line}");
+        let bytes = std::fs::read(dao.root.join("run.cc")).unwrap();
+        assert!(!bytes.windows(6).any(|w| w == b"CANARY"));
+        assert!(!format!("{r:?}").contains("CANARY"));
+    }
+}
+
+/// A run record as written before `answerer_family` (key 13) existed.
+#[derive(Clone, Debug, schemars::JsonSchema, cultcache_rs::DatabaseEntry)]
+#[cultcache(type = "weksa.loop_run")]
+struct PreFamilyRun {
+    #[cultcache(key = 0)]
+    label: String,
+    #[cultcache(key = 1)]
+    corpus: String,
+    #[cultcache(key = 2)]
+    inventory: String,
+    #[cultcache(key = 3)]
+    entities: String,
+    #[cultcache(key = 4)]
+    corpus_digest: String,
+    #[cultcache(key = 5)]
+    entity_digest: String,
+    #[cultcache(key = 6)]
+    prompt_digest: String,
+    #[cultcache(key = 8)]
+    model: String,
+    #[cultcache(key = 9)]
+    embedder: String,
+    #[cultcache(key = 10)]
+    chrf_version: String,
+    #[cultcache(key = 11)]
+    inventory_digest: String,
+    #[cultcache(key = 12)]
+    lowerer_reach: weksa::run::LowererReach,
+}
+
+/// A round record as written before `parse_reasons` and `own_family`, and
+/// before `admit_rules` had a default.
+#[derive(Clone, Debug, schemars::JsonSchema, cultcache_rs::DatabaseEntry)]
+#[cultcache(type = "weksa.loop_round")]
+struct LegacyRound {
+    #[cultcache(key = 0)]
+    n: u32,
+    #[cultcache(key = 1)]
+    inventory_rev: u32,
+    #[cultcache(key = 2)]
+    prompt_digest: String,
+    #[cultcache(key = 4)]
+    corpus_digest: String,
+    #[cultcache(key = 5)]
+    entity_digest: String,
+    #[cultcache(key = 6)]
+    model: String,
+    #[cultcache(key = 7)]
+    embedder: String,
+    #[cultcache(key = 8)]
+    chrf_version: String,
+    #[cultcache(key = 9)]
+    calls: Vec<weksa::run::Call>,
+    #[cultcache(key = 10)]
+    train: Vec<weksa::run::TrainRow>,
+    #[cultcache(key = 11)]
+    train_mean: weksa::score::SplitMean,
+    #[cultcache(key = 12)]
+    validation_mean: weksa::score::SplitMean,
+    #[cultcache(key = 13)]
+    validation_refused: weksa::run::RefusalCounts,
+    #[cultcache(key = 14)]
+    train_scored: u32,
+    #[cultcache(key = 15)]
+    validation_scored: u32,
+    #[cultcache(key = 16)]
+    inventory_digest: String,
+    #[cultcache(key = 17)]
+    cycle: Option<u32>,
+}
+
+#[test]
+fn records_from_before_the_new_fields_decode_with_defaults() {
+    let mut dao = dao();
+    let mut model = fake(&good_answers());
+    let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    let rec = dao.run.record().clone();
+    let root = dao.root.clone();
+    let legacy = LegacyRound {
+        n: r.n(),
+        inventory_rev: r.inventory_rev(),
+        prompt_digest: r.prompt_digest().into(),
+        corpus_digest: r.corpus_digest().into(),
+        entity_digest: r.entity_digest().into(),
+        model: r.model().into(),
+        embedder: r.embedder().into(),
+        chrf_version: r.chrf_version().into(),
+        calls: r.calls().to_vec(),
+        train: r.train().to_vec(),
+        train_mean: r.train_mean().clone(),
+        validation_mean: r.validation_mean().clone(),
+        validation_refused: r.validation_refused(),
+        train_scored: r.train_scored(),
+        validation_scored: r.validation_scored(),
+        inventory_digest: r.inventory_digest().into(),
+        cycle: r.cycle(),
+    };
+    let run = PreFamilyRun {
+        label: rec.label.clone(),
+        corpus: rec.corpus.clone(),
+        inventory: rec.inventory.clone(),
+        entities: rec.entities.clone(),
+        corpus_digest: rec.corpus_digest.clone(),
+        entity_digest: rec.entity_digest.clone(),
+        prompt_digest: rec.prompt_digest.clone(),
+        model: rec.model.clone(),
+        embedder: rec.embedder.clone(),
+        chrf_version: rec.chrf_version.clone(),
+        inventory_digest: rec.inventory_digest.clone(),
+        lowerer_reach: rec.lowerer_reach,
+    };
+    drop(dao.run);
+    let mut cache = CultCache::new();
+    cache.register_entry_type::<PreFamilyRun>().unwrap();
+    cache.register_entry_type::<LegacyRound>().unwrap();
+    cache
+        .add_generic_backing_store(SingleFileMessagePackBackingStore::new(root.join("run.cc")))
+        .unwrap();
+    cache.pull_all_backing_stores().unwrap();
+    cache.put("run:dao".to_string(), &run).unwrap();
+    cache.put("run:dao:round:1".to_string(), &legacy).unwrap();
+    drop(cache);
+
+    let reopened = RunStores::open(&root).unwrap();
+    assert_eq!(reopened.record().answerer_family, ModelFamily::Unrecorded);
+    let rounds = reopened.rounds().unwrap();
+    assert_eq!(rounds.len(), 1);
+    assert_eq!(rounds[0].n(), 1);
+    assert!(rounds[0].admit_rules().is_empty());
+    assert!(rounds[0].parse_reasons().is_empty());
+    assert_eq!(rounds[0].own_family(), 0);
+}
+
+#[test]
+fn the_published_run_and_round_schemas_require_none_of_the_new_fields() {
+    let published = weksa::schema::published();
+    let schema = |needle: &str| -> serde_json::Value {
+        let (_, json) = published
+            .iter()
+            .find(|(name, _)| name.contains(needle))
+            .unwrap();
+        serde_json::from_str(json).unwrap()
+    };
+    for (needle, fields) in [
+        ("loop_round", &["parse_reasons", "own_family"][..]),
+        ("loop_run", &["answerer_family"][..]),
+    ] {
+        let s = schema(needle);
+        let required = s["required"].as_array().unwrap();
+        for f in fields {
+            assert!(s["properties"][f].is_object(), "{needle} {f}");
+            assert!(!required.iter().any(|r| r == f), "{needle} {f} is required");
+        }
+    }
 }
 
 /// Answers a recall probe from the corpus: the item's own second half, a

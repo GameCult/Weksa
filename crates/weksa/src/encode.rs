@@ -64,9 +64,12 @@ pub enum DraftClass {
     UnknownField,
     /// A value of the wrong JSON type, such as a bare integer for an id.
     InvalidType,
-    /// A value of the right type that is not one of the field's: a node id
-    /// spelled `entity:x`, a number out of range.
+    /// A value of the right type that is not one of the field's, such as a
+    /// number out of range.
     InvalidValue,
+    /// A string that is not the form its field names: a node id spelled
+    /// `entity:x`, an id of the wrong kind ([`crate::form::FormError`]).
+    BadForm,
     Other,
 }
 
@@ -80,6 +83,7 @@ impl DraftClass {
             DraftClass::UnknownField => "unknown-field",
             DraftClass::InvalidType => "invalid-type",
             DraftClass::InvalidValue => "invalid-value",
+            DraftClass::BadForm => "bad-form",
             DraftClass::Other => "other",
         }
     }
@@ -102,6 +106,8 @@ impl DraftClass {
                     DraftClass::InvalidType
                 } else if msg.starts_with("invalid value") {
                     DraftClass::InvalidValue
+                } else if msg.starts_with("not a ") {
+                    DraftClass::BadForm
                 } else {
                     DraftClass::Other
                 }
@@ -310,6 +316,31 @@ mod tests {
 
     fn item() -> CorpusItemId {
         CorpusItemId::parse("item:daodejing:1").unwrap()
+    }
+
+    #[test]
+    fn a_draft_error_is_classed_from_serdes_vocabulary_and_keeps_no_text() {
+        let class = |answer: &str| PacketDraft::parse(answer).unwrap_err().class;
+        assert_eq!(class("not json"), DraftClass::Syntax);
+        assert_eq!(class("{\"referents\": ["), DraftClass::Eof);
+        assert_eq!(class("{}"), DraftClass::MissingField);
+        // The classes serde's own messages open with, read off a plain error.
+        let of = |r: Result<u8, serde_json::Error>| DraftClass::of(&r.unwrap_err());
+        assert_eq!(of(serde_json::from_str("300")), DraftClass::InvalidValue);
+        assert_eq!(of(serde_json::from_str("\"x\"")), DraftClass::InvalidType);
+        // Every code is distinct and none can hold answer text: they are fixed.
+        let all = [
+            DraftClass::Syntax,
+            DraftClass::Eof,
+            DraftClass::MissingField,
+            DraftClass::UnknownField,
+            DraftClass::InvalidType,
+            DraftClass::InvalidValue,
+            DraftClass::BadForm,
+            DraftClass::Other,
+        ];
+        let codes: std::collections::BTreeSet<_> = all.iter().map(|c| c.code()).collect();
+        assert_eq!(codes.len(), all.len());
     }
 
     #[test]

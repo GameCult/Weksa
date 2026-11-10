@@ -4,6 +4,11 @@
   "description": "What a run pinned at open. Key `run:<label>`.",
   "type": "object",
   "properties": {
+    "answerer_family": {
+      "description": "The family of the model answering the run's encode and lowering\nprompts, set once at open; `Unrecorded` when the opener did not say\nand for a run opened before this was kept.",
+      "$ref": "#/$defs/ModelFamily",
+      "default": "Unrecorded"
+    },
     "chrf_version": {
       "type": "string"
     },
@@ -75,6 +80,27 @@
           "description": "The prompt passed inline to an agent with no file tools.",
           "type": "string",
           "const": "ToolLessRelay"
+        }
+      ]
+    },
+    "ModelFamily": {
+      "description": "The family of the model that wrote a line.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "Anthropic",
+            "OpenAi",
+            "Google",
+            "Alibaba",
+            "Meta",
+            "Mistral"
+          ]
+        },
+        {
+          "description": "Nothing records which family wrote the line.",
+          "type": "string",
+          "const": "Unrecorded"
         }
       ]
     }

@@ -35,7 +35,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::context::{EditFeedback, EncoderOffer, Prompt, TrainItems};
-use crate::corpus::{CorpusItem, CorpusItemId, Source};
+use crate::corpus::{CorpusItem, CorpusItemId, ModelFamily, Source};
 use crate::encode::{EditDraft, LoweringDraft, PacketDraft, encoder_id};
 use crate::form::{is_attestation, is_slug};
 use crate::model::{ModelPort, PortError};
@@ -107,6 +107,12 @@ pub struct RunRecord {
     /// How the run's lowering prompts are answered, set once at open.
     #[cultcache(key = 12)]
     pub lowerer_reach: LowererReach,
+    /// The family of the model answering the run's encode and lowering
+    /// prompts, set once at open; `Unrecorded` when the opener did not say
+    /// and for a run opened before this was kept.
+    #[cultcache(key = 13, default)]
+    #[schemars(default)]
+    pub answerer_family: ModelFamily,
 }
 
 /// How a run's lowering prompts reach the model that answers them (rulings
@@ -224,6 +230,8 @@ pub struct RefusalCounts {
 ///         inventory_digest: String::new(),
 ///         cycle: None,
 ///         admit_rules: vec![],
+///         parse_reasons: vec![],
+///         own_family: 0,
 ///     }
 /// }
 /// ```
@@ -276,9 +284,22 @@ pub struct RoundRecord {
     cycle: Option<u32>,
     /// The rules admission refused items under, in rule order; every Train
     /// and Validation item refused at `Stage::Admit` is counted once per rule.
-    #[cultcache(key = 18)]
+    #[cultcache(key = 18, default)]
     #[schemars(default)]
     admit_rules: Vec<RuleCount>,
+    /// Why items were refused at `Stage::Parse`, in code order, over Train and
+    /// Validation: a [`DraftClass`] code (`rule`), or `unreadable` for an
+    /// item with no answer that read as text. Never a token of an answer.
+    #[cultcache(key = 19, default)]
+    #[schemars(default)]
+    parse_reasons: Vec<RuleCount>,
+    /// Offered (live Train and Validation) `ModelWritten` items whose writer
+    /// family is the run's answerer family. The corpus rule binds
+    /// model judges; the scorer is deterministic, so nothing is refused for
+    /// this: the round labels it.
+    #[cultcache(key = 20, default)]
+    #[schemars(default)]
+    own_family: u32,
 }
 
 impl RoundRecord {
@@ -336,6 +357,12 @@ impl RoundRecord {
     pub fn admit_rules(&self) -> &[RuleCount] {
         &self.admit_rules
     }
+    pub fn parse_reasons(&self) -> &[RuleCount] {
+        &self.parse_reasons
+    }
+    pub fn own_family(&self) -> u32 {
+        self.own_family
+    }
 
     /// The round line, unlabelled: [`RunStores::round_line`] adds how the run was lowered. `n` is every item of the split,
     /// `scored` those that lowered; a mean counts a refused item as 0.
@@ -369,16 +396,24 @@ impl RoundRecord {
             x.admit,
             x.lower,
         );
-        if self.admit_rules.is_empty() {
-            line
-        } else {
-            let rules: Vec<String> = self
-                .admit_rules
+        let codes = |counts: &[RuleCount]| {
+            counts
                 .iter()
                 .map(|r| format!("{}x{}", r.rule, r.count))
-                .collect();
-            format!("{line} admit-rules={}", rules.join(","))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let mut line = line;
+        if !self.parse_reasons.is_empty() {
+            line = format!("{line} parse-reasons={}", codes(&self.parse_reasons));
         }
+        if !self.admit_rules.is_empty() {
+            line = format!("{line} admit-rules={}", codes(&self.admit_rules));
+        }
+        if self.own_family > 0 {
+            line = format!("{line} own-family {}", self.own_family);
+        }
+        line
     }
 }
 
@@ -550,13 +585,15 @@ impl RunStores {
         model: &str,
         embedder: &str,
         reach: LowererReach,
+        answerer_family: ModelFamily,
     ) -> Result<Self, RunError> {
-        Self::create_between(root, label, paths, model, embedder, reach, || {})
+        Self::create_between(root, label, paths, model, embedder, reach, answerer_family, || {})
     }
 
     /// `create` with `between` run after the digests are taken and before the
     /// stores are opened: the seam that lets a test change a store in that window.
     #[doc(hidden)]
+    #[allow(clippy::too_many_arguments)] // `create`'s six plus the test seam
     pub fn create_between(
         root: &Path,
         label: &str,
@@ -564,6 +601,7 @@ impl RunStores {
         model: &str,
         embedder: &str,
         reach: LowererReach,
+        answerer_family: ModelFamily,
         between: impl FnOnce(),
     ) -> Result<Self, RunError> {
         if !is_slug(label) {
@@ -592,6 +630,7 @@ impl RunStores {
             chrf_version: CHRF_VERSION.to_string(),
             inventory_digest: String::new(),
             lowerer_reach: reach,
+            answerer_family,
         };
         // The run works on its own copy; the caller's store is never opened again.
         let head = root.join(INVENTORY_FILE);
@@ -1024,13 +1063,21 @@ fn score_round<M: ModelPort, E: Embedder>(
     let mut items: Vec<CorpusItem> = Vec::new();
     let mut fates: Vec<Fate> = Vec::new();
     let mut admit_rules: BTreeMap<String, u32> = BTreeMap::new();
+    let mut parse_reasons: BTreeMap<String, u32> = BTreeMap::new();
     // Phase 1 ends at admission: each admitted view waits for its lowering.
     let mut admitted: Vec<(usize, CorpusItemId, String, LoweringInput)> = Vec::new();
     for (key, answer) in &answers {
         let item = run.corpus.get(key).map_err(store)?.ok_or(RunError::Store)?;
         let id = CorpusItemId::parse(key).map_err(|_| RunError::Store)?;
         let fate = match answer.as_deref().map(PacketDraft::parse) {
-            None | Some(Err(_)) => Fate::Refused(Stage::Parse, None),
+            None => {
+                *parse_reasons.entry("unreadable".to_string()).or_default() += 1;
+                Fate::Refused(Stage::Parse, None)
+            }
+            Some(Err(e)) => {
+                *parse_reasons.entry(e.class.code().to_string()).or_default() += 1;
+                Fate::Refused(Stage::Parse, None)
+            }
             Some(Ok(draft)) => {
                 let packet = draft.into_packet(&id, rev, &encoder);
                 let packet_key = packet.id.to_string();
@@ -1172,6 +1219,15 @@ fn score_round<M: ModelPort, E: Embedder>(
         }
     }
 
+    let own_family = match run.record.answerer_family {
+        ModelFamily::Unrecorded => 0,
+        family => items
+            .iter()
+            .filter(|item| {
+                matches!(&item.source, Source::ModelWritten { family: f, .. } if *f == family)
+            })
+            .count() as u32,
+    };
     let n = run.rounds().map_err(store)?.len() as u32 + 1;
     let record = RoundRecord {
         n,
@@ -1195,6 +1251,11 @@ fn score_round<M: ModelPort, E: Embedder>(
             .into_iter()
             .map(|(rule, count)| RuleCount { rule, count })
             .collect(),
+        parse_reasons: parse_reasons
+            .into_iter()
+            .map(|(rule, count)| RuleCount { rule, count })
+            .collect(),
+        own_family,
     };
     Ok(RoundOutcome::Recorded(record))
 }
@@ -1628,6 +1689,8 @@ mod tests {
             inventory_digest: String::new(),
             cycle: None,
             admit_rules: vec![],
+            parse_reasons: vec![],
+            own_family: 0,
         };
         assert_eq!(r.n(), 1);
     }
@@ -1844,6 +1907,8 @@ mod tests {
             inventory_digest: digest.to_string(),
             cycle: None,
             admit_rules: vec![],
+            parse_reasons: vec![],
+            own_family: 0,
         }
     }
 
@@ -1861,6 +1926,7 @@ mod tests {
             chrf_version: String::new(),
             inventory_digest: digest.to_string(),
             lowerer_reach: LowererReach::ToolLessRelay,
+            answerer_family: ModelFamily::Unrecorded,
         }
     }
 
