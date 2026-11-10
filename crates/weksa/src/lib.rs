@@ -3,6 +3,7 @@
 //! train/validation/test split, the stores that admit them, and the scorer
 //! (chrF, meaning cosine, leak diagnostics).
 
+pub mod context;
 pub mod corpus;
 pub mod daodejing;
 pub mod entity;

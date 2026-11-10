@@ -1,5 +1,6 @@
 //! The train/validation/test split is derived from an item's group and nothing
-//! else. No stored assignment exists, so no writer can reassign one.
+//! else. No stored assignment exists, so no writer can reassign one. An item is
+//! read in its live split; Test is read only under a Checkpoint.
 
 use crate::corpus::{CorpusItem, Source};
 
@@ -50,5 +51,56 @@ impl SplitScheme {
             Split::Test if matches!(item.source, Source::ModelWritten { .. }) => None,
             split => Some(split),
         }
+    }
+
+    /// The split an item is read in; a withdrawn item is read in none.
+    pub fn live(self, item: &CorpusItem) -> Option<Split> {
+        if item.withdrawn {
+            None
+        } else {
+            self.split(item)
+        }
+    }
+}
+
+/// Permission to read Test once. The loop declares one at a convergence
+/// checkpoint (convergence-test); `TestReadings::at_checkpoint` consumes it, so
+/// one declaration buys one Test reading, and `EncoderOffer::for_checkpoint`
+/// borrows it first.
+///
+/// ```
+/// use weksa::score::TestReadings;
+/// use weksa::split::Checkpoint;
+/// let c = Checkpoint::declare(3);
+/// assert_eq!(c.round(), 3);
+/// let _ = TestReadings::at_checkpoint(c, &[], &[], &[]);
+/// ```
+///
+/// One declaration, one reading:
+///
+/// ```compile_fail
+/// use weksa::score::TestReadings;
+/// use weksa::split::Checkpoint;
+/// let c = Checkpoint::declare(3);
+/// let _ = TestReadings::at_checkpoint(c, &[], &[], &[]);
+/// let _ = TestReadings::at_checkpoint(c, &[], &[], &[]);
+/// ```
+///
+/// ```compile_fail
+/// use weksa::split::Checkpoint;
+/// let c = Checkpoint::declare(3);
+/// let _again = c.clone();
+/// ```
+pub struct Checkpoint {
+    round: u32,
+}
+
+impl Checkpoint {
+    pub fn declare(round: u32) -> Self {
+        Self { round }
+    }
+
+    pub fn round(&self) -> u32 {
+        self.round
     }
 }

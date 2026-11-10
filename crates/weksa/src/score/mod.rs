@@ -2,7 +2,9 @@
 //! output against the whole reference. Nothing is deleted, hidden or replaced
 //! before either is read, and the scorer takes no input from a packet, so no
 //! text the output carries can raise a score except by resembling the
-//! reference. No door judges text; the diagnostics report.
+//! reference. No door judges text; the diagnostics report. The round path
+//! (`aggregate`, `leak_diagnostic`) reads Train and Validation; Test is read
+//! only through `TestReadings::at_checkpoint` (convergence-test).
 
 mod chrf;
 mod diagnostics;
@@ -12,13 +14,11 @@ mod words;
 use anyhow::{Result, ensure};
 
 pub use chrf::{CHRF_VERSION, chrf};
-pub use diagnostics::{
-    LeakDiagnostic, OrderCoverage, PairChrf, SplitLeak, WorstItem, leak_diagnostic,
-};
+pub use diagnostics::{OrderCoverage, PairChrf, SplitLeak, WorstItem, leak_diagnostic};
 pub use embed::{Embedder, OllamaEmbedder, cosine};
 
 use crate::corpus::CorpusItem;
-use crate::split::{Split, SplitScheme};
+use crate::split::{Checkpoint, Split, SplitScheme};
 
 /// One reference/output pair; both are scored whole.
 pub struct ScoreInput<'a> {
@@ -111,34 +111,132 @@ pub struct SplitMean {
     pub meaning: Option<f64>,
 }
 
+/// The round readings a round record may hold. The scorer decides when Test
+/// can be read, by type: `Aggregate` has no Test field.
+///
+/// ```
+/// let agg = weksa::score::aggregate(&[]);
+/// let _ = agg.validation;
+/// ```
+///
+/// ```compile_fail
+/// let agg = weksa::score::aggregate(&[]);
+/// let _ = agg.test;
+/// ```
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Aggregate {
     pub train: SplitMean,
     pub validation: SplitMean,
-    pub test: SplitMean,
 }
 
-/// Groups scores by the item's derived split. Items in no split are counted
-/// nowhere. The scorer only groups: the loop decides when Test is read.
-pub fn aggregate(scored: &[(&CorpusItem, ItemScore)]) -> Aggregate {
-    let mean = |want: Split| {
-        let of: Vec<&ItemScore> = scored
-            .iter()
-            .filter(|(item, _)| SplitScheme::V1.split(item) == Some(want))
-            .map(|(_, score)| score)
-            .collect();
-        let average = |values: Vec<f64>| {
-            (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64)
-        };
-        SplitMean {
-            count: of.len(),
-            chrf: average(of.iter().map(|s| s.chrf).collect()),
-            meaning: average(of.iter().filter_map(|s| s.meaning).collect()),
-        }
+/// The mean of the scores of the items read in split `want`.
+fn split_mean(scored: &[(&CorpusItem, ItemScore)], want: Split) -> SplitMean {
+    let of: Vec<&ItemScore> = scored
+        .iter()
+        .filter(|(item, _)| SplitScheme::V1.live(item) == Some(want))
+        .map(|(_, score)| score)
+        .collect();
+    let average = |values: Vec<f64>| {
+        (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64)
     };
+    SplitMean {
+        count: of.len(),
+        chrf: average(of.iter().map(|s| s.chrf).collect()),
+        meaning: average(of.iter().filter_map(|s| s.meaning).collect()),
+    }
+}
+
+/// Groups scores by the split each item is read in. Items read in no split
+/// (withdrawn, or model-written in a Test group) are counted nowhere.
+pub fn aggregate(scored: &[(&CorpusItem, ItemScore)]) -> Aggregate {
     Aggregate {
-        train: mean(Split::Train),
-        validation: mean(Split::Validation),
-        test: mean(Split::Test),
+        train: split_mean(scored, Split::Train),
+        validation: split_mean(scored, Split::Validation),
+    }
+}
+
+/// The Test split's readings, scalars only: no item key, no minted string, no
+/// pair. The checkpoint decision (convergence-test) needs numbers; a key beside
+/// a minted string is the handle an edit step would act on. The only producer
+/// is `at_checkpoint`, which consumes a `Checkpoint`.
+///
+/// ```
+/// use weksa::score::TestReadings;
+/// use weksa::split::Checkpoint;
+/// fn s<T: serde::Serialize>(_: &T) {}
+/// let t = TestReadings::at_checkpoint(Checkpoint::declare(1), &[], &[], &[]);
+/// assert_eq!(t.count(), 0);
+/// s(&0u8);
+/// ```
+///
+/// ```compile_fail
+/// use weksa::score::TestReadings;
+/// use weksa::split::Checkpoint;
+/// let t = TestReadings::at_checkpoint(Checkpoint::declare(1), &[], &[], &[]);
+/// let _u = t.clone();
+/// ```
+///
+/// ```compile_fail
+/// use weksa::score::TestReadings;
+/// use weksa::split::Checkpoint;
+/// let t = TestReadings::at_checkpoint(Checkpoint::declare(1), &[], &[], &[]);
+/// let _ = format!("{t:?}");
+/// ```
+///
+/// ```compile_fail
+/// use weksa::score::TestReadings;
+/// use weksa::split::Checkpoint;
+/// fn s<T: serde::Serialize>(_: &T) {}
+/// let t = TestReadings::at_checkpoint(Checkpoint::declare(1), &[], &[], &[]);
+/// s(&t);
+/// ```
+pub struct TestReadings {
+    mean: SplitMean,
+    leak: SplitLeak,
+}
+
+impl TestReadings {
+    /// Reads the live Test items against the scores and the minted strings,
+    /// by the same `split_leak` method the Validation reading uses. The
+    /// checkpoint is spent.
+    pub fn at_checkpoint(
+        checkpoint: Checkpoint,
+        scored: &[(&CorpusItem, ItemScore)],
+        minted: &[&str],
+        items: &[CorpusItem],
+    ) -> TestReadings {
+        let _spent = checkpoint;
+        TestReadings {
+            mean: split_mean(scored, Split::Test),
+            leak: diagnostics::held_out(minted, items, Split::Test),
+        }
+    }
+
+    /// Scored Test items.
+    pub fn count(&self) -> usize {
+        self.mean.count
+    }
+
+    pub fn chrf(&self) -> Option<f64> {
+        self.mean.chrf
+    }
+
+    pub fn meaning(&self) -> Option<f64> {
+        self.mean.meaning
+    }
+
+    /// Test items in the leak reading.
+    pub fn items(&self) -> usize {
+        self.leak.items
+    }
+
+    /// The highest chrF of any minted string against any Test item; the score
+    /// only, never the pair.
+    pub fn max_chrf(&self) -> Option<f64> {
+        self.leak.max_chrf.as_ref().map(|p| p.chrf)
+    }
+
+    pub fn coverage_by_n(&self) -> &[OrderCoverage] {
+        &self.leak.coverage_by_n
     }
 }
