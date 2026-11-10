@@ -1,10 +1,10 @@
 mod common;
 
-use common::{cast, ent, entities_in, group_in_bucket, item_in, model, world};
+use common::{cast, ent, entities_in, group_in_bucket, item_in, model, run_over, world};
 use weksa::context::{
-    ENCODE_INSTRUCTIONS as ENCODE, EncoderOffer, MINT_INSTRUCTIONS as MINT, OfferRefusal, Prompt,
-    TrainItems,
+    ENCODE_INSTRUCTIONS as ENCODE, MINT_INSTRUCTIONS as MINT, OfferRefusal, Prompt,
 };
+use weksa::run::RunStores;
 use weksa::{
     CorpusItem, CorpusItemId, CorpusStore, NameSpan, PacketId, PacketStore, StoreError,
     StoreRefusal, Turn,
@@ -13,6 +13,7 @@ use weksa::{
 struct Corpus {
     _dir: tempfile::TempDir,
     store: CorpusStore,
+    run: RunStores,
 }
 
 /// One live item per split, a withdrawn Train item and a model-written
@@ -69,7 +70,12 @@ fn corpus() -> Corpus {
         &group_in_bucket(90),
         model(),
     ));
-    Corpus { _dir: dir, store }
+    let run = run_over(dir.path());
+    Corpus {
+        _dir: dir,
+        store,
+        run,
+    }
 }
 
 fn get(c: &Corpus, key: &str) -> CorpusItem {
@@ -79,7 +85,7 @@ fn get(c: &Corpus, key: &str) -> CorpusItem {
 #[test]
 fn train_items_hold_only_live_train() {
     let c = corpus();
-    let t = TrainItems::from_corpus(&c.store).unwrap();
+    let t = c.run.train().unwrap();
     assert_eq!(t.keys().collect::<Vec<_>>(), ["item:a:1"]);
     assert_eq!((t.len(), t.is_empty()), (1, false));
 }
@@ -98,15 +104,14 @@ fn train_items_are_in_key_order() {
             .add(item_in(key, text, &group_in_bucket(10), cast()), &entities)
             .unwrap();
     }
-    let t = TrainItems::from_corpus(&store).unwrap();
+    let t = run_over(dir.path()).train().unwrap();
     assert_eq!(
         t.keys().collect::<Vec<_>>(),
         ["item:a:1", "item:m:1", "item:z:1"]
     );
     assert_eq!((t.len(), t.is_empty()), (3, false));
     let dir = tempfile::tempdir().unwrap();
-    let none = CorpusStore::open(&dir.path().join("c.cc")).unwrap();
-    let none = TrainItems::from_corpus(&none).unwrap();
+    let none = run_over(dir.path()).train().unwrap();
     assert_eq!((none.len(), none.is_empty()), (0, true));
     assert_eq!(Prompt::mint(&none).text(), MINT);
     assert!(Prompt::mint(&none).item_keys().is_empty());
@@ -115,7 +120,7 @@ fn train_items_are_in_key_order() {
 #[test]
 fn mint_prompt_holds_train_text_only() {
     let c = corpus();
-    let t = TrainItems::from_corpus(&c.store).unwrap();
+    let t = c.run.train().unwrap();
     let p = Prompt::mint(&t);
     assert!(p.text().starts_with(MINT));
     assert!(p.text().contains("alphamarker"));
@@ -142,7 +147,8 @@ fn prompts_render_deterministically() {
             &entities,
         )
         .unwrap();
-    let t = TrainItems::from_corpus(&store).unwrap();
+    let run = run_over(dir.path());
+    let t = run.train().unwrap();
     assert_eq!(
         Prompt::mint(&t).text(),
         format!(
@@ -151,39 +157,45 @@ fn prompts_render_deterministically() {
     );
     assert_eq!(Prompt::mint(&t).item_keys(), ["item:a:1", "item:a:2"]);
 
-    let offer = EncoderOffer::for_round(&store.get("item:a:2").unwrap().unwrap()).unwrap();
+    let offer = run.offer("item:a:2").unwrap().unwrap();
+    let inv = run.inventory().inventory().unwrap();
     assert_eq!(
-        Prompt::encode(&offer, &t).text(),
-        format!("{ENCODE}\n\n[item:a:2] entity:nibu: Second line.\n\nentities: entity:nibu")
+        Prompt::encode(&offer, &t, &inv, 0).text(),
+        format!(
+            "{ENCODE}\n\n[item:a:2] entity:nibu: Second line.\n\nentities: entity:nibu\n\ninventory rev:0"
+        )
     );
-    assert_eq!(Prompt::encode(&offer, &t).item_keys(), ["item:a:2"]);
+    assert_eq!(
+        Prompt::encode(&offer, &t, &inv, 0).item_keys(),
+        ["item:a:2"]
+    );
 }
 
 #[test]
 fn encoder_offer_split_gate() {
     let c = corpus();
-    let train = get(&c, "item:a:1");
-    let validation = get(&c, "item:b:1");
-    let test = get(&c, "item:c:1");
-    let no_split = get(&c, "item:c:2");
-    let withdrawn = get(&c, "item:a:2");
-    assert!(withdrawn.withdrawn);
-    let round = |i: &CorpusItem| EncoderOffer::for_round(i).err();
+    let round = |key: &str| c.run.offer(key).unwrap().err();
+    assert_eq!(round("item:a:1"), None);
+    assert_eq!(round("item:b:1"), None);
+    assert_eq!(round("item:c:1"), Some(OfferRefusal::TestBeforeCheckpoint));
+    assert_eq!(round("item:c:2"), Some(OfferRefusal::NoSplit));
+    assert_eq!(round("item:a:2"), Some(OfferRefusal::Withdrawn));
+    assert!(get(&c, "item:a:2").withdrawn);
+    let absent = c.run.offer("item:z:9").err().unwrap().to_string();
+    assert!(!absent.contains("item:z:9"), "an absent key is not echoed");
+}
 
-    assert_eq!(round(&train), None);
-    assert_eq!(round(&validation), None);
-    assert_eq!(round(&test), Some(OfferRefusal::TestBeforeCheckpoint));
-    assert_eq!(round(&no_split), Some(OfferRefusal::NoSplit));
-    assert_eq!(round(&withdrawn), Some(OfferRefusal::Withdrawn));
-
-    // Withdrawn wins over NoSplit.
-    let mut both = no_split.clone();
-    both.withdrawn = true;
-    assert_eq!(round(&both), Some(OfferRefusal::Withdrawn));
-    // A withdrawn Test item is Withdrawn, not TestBeforeCheckpoint.
-    let mut test_gone = test.clone();
-    test_gone.withdrawn = true;
-    assert_eq!(round(&test_gone), Some(OfferRefusal::Withdrawn));
+#[test]
+fn offers_are_the_live_train_and_validation_items_in_key_order() {
+    let c = corpus();
+    let keys: Vec<String> = c
+        .run
+        .offers()
+        .unwrap()
+        .iter()
+        .map(|o| o.key().to_string())
+        .collect();
+    assert_eq!(keys, ["item:a:1", "item:b:1"]);
 }
 
 fn span(slug: &str, start: u32, end: u32) -> NameSpan {
@@ -219,13 +231,22 @@ fn cited_world() -> (Corpus, CorpusItem, CorpusItem) {
     sibling.names = vec![span("someone", 0, 7)];
     store.add(mine.clone(), &entities).unwrap();
     store.add(sibling.clone(), &entities).unwrap();
-    (Corpus { _dir: dir, store }, mine, sibling)
+    let run = run_over(dir.path());
+    (
+        Corpus {
+            _dir: dir,
+            store,
+            run,
+        },
+        mine,
+        sibling,
+    )
 }
 
 #[test]
 fn encoder_offer_entities_are_the_items_own() {
-    let (c, mine, sibling) = cited_world();
-    let t = TrainItems::from_corpus(&c.store).unwrap();
+    let (c, mine, _sibling) = cited_world();
+    let t = c.run.train().unwrap();
     assert_eq!(
         mine.cited_entities()
             .map(|e| e.as_str())
@@ -238,7 +259,7 @@ fn encoder_offer_entities_are_the_items_own() {
         ],
         "names, speaker, prior-turn speakers, repeats kept"
     );
-    let offer = EncoderOffer::for_round(&mine).unwrap();
+    let offer = c.run.offer("item:a:1").unwrap().unwrap();
     let ids: Vec<&str> = offer.entities().iter().map(|e| e.as_str()).collect();
     assert_eq!(ids, ["entity:brokkr", "entity:hero", "entity:kay"]);
     assert!(
@@ -246,15 +267,16 @@ fn encoder_offer_entities_are_the_items_own() {
         "a sibling's entity is not the item's"
     );
     assert_eq!(offer.key(), "item:a:1");
-    let p = Prompt::encode(&offer, &t);
+    let inv = c.run.inventory().inventory().unwrap();
+    let p = Prompt::encode(&offer, &t, &inv, 0);
     assert!(
         p.text()
-            .ends_with("entities: entity:brokkr, entity:hero, entity:kay")
+            .ends_with("entities: entity:brokkr, entity:hero, entity:kay\n\ninventory rev:0")
     );
     assert!(p.text().contains("[item:a:1]"));
     assert!(!p.text().contains("item:a:2") && !p.text().contains("Someone waits"));
     assert_eq!(p.item_keys(), ["item:a:1"]);
-    let sib = EncoderOffer::for_round(&sibling).unwrap();
+    let sib = c.run.offer("item:a:2").unwrap().unwrap();
     assert_eq!(sib.entities().len(), 2);
 }
 
@@ -275,7 +297,10 @@ fn offer_and_store_agree() {
         text: "Where?".into(),
     }];
     w.corpus.add(item.clone(), &w.entities).unwrap();
-    let offer = EncoderOffer::for_round(&item).unwrap();
+    let offer = run_over(w.dir.path())
+        .offer("item:nibu:2")
+        .unwrap()
+        .unwrap();
 
     let mut packets = PacketStore::open(&w.dir.path().join("p.cc")).unwrap();
     let all = ["nibu", "hero", "kay", "brokkr", "player", "s", "someone"];
@@ -348,7 +373,8 @@ fn prior_turns_print_only_text_a_live_train_item_holds() {
     add("item:c:1", "testsecret line", &group_in_bucket(90), vec![]);
     store.withdraw("item:a:1").unwrap();
 
-    let t = TrainItems::from_corpus(&store).unwrap();
+    let run = run_over(dir.path());
+    let t = run.train().unwrap();
     let mint = Prompt::mint(&t);
     for secret in ["withdrawnsecret", "testsecret", "validation reply"] {
         assert!(!mint.text().contains(secret), "mint printed {secret}");
@@ -358,9 +384,9 @@ fn prior_turns_print_only_text_a_live_train_item_holds() {
         "mint prints no prior turns"
     );
 
+    let inv = run.inventory().inventory().unwrap();
     let encode = |key: &str| {
-        let item = store.get(key).unwrap().unwrap();
-        Prompt::encode(&EncoderOffer::for_round(&item).unwrap(), &t)
+        Prompt::encode(&run.offer(key).unwrap().unwrap(), &t, &inv, 0)
             .text()
             .to_string()
     };
@@ -397,8 +423,10 @@ fn encode_with_prior(train_text: &str, prior_text: &str) -> (String, Result<(), 
         text: prior_text.into(),
     }];
     store.add(reply.clone(), &entities).unwrap();
-    let t = TrainItems::from_corpus(&store).unwrap();
-    let p = Prompt::encode(&EncoderOffer::for_round(&reply).unwrap(), &t);
+    let run = run_over(dir.path());
+    let t = run.train().unwrap();
+    let inv = run.inventory().inventory().unwrap();
+    let p = Prompt::encode(&run.offer("item:a:2").unwrap().unwrap(), &t, &inv, 0);
     let text = p.text().to_string();
     // The store's own rule, as the oracle for key equality; after the prompt is
     // built, because an admitted probe would itself become a held line.

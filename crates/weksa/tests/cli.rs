@@ -309,6 +309,8 @@ fn schema_writes_the_published_files() {
             "weksa.interlingua_packet.schema.json",
             "weksa.inventory_entry.schema.json",
             "weksa.inventory_revision.schema.json",
+            "weksa.loop_round.schema.json",
+            "weksa.loop_run.schema.json",
             "weksa.scene.schema.json",
             "weksa.speaker.schema.json"
         ]
@@ -1312,4 +1314,146 @@ fn pronunciation_language_is_never_echoed() {
         "{text}"
     );
     assert!(!text.to_lowercase().contains("sentinel"), "{text}");
+}
+
+/// Copies of the Dao De Jing stores where `weksa()` looks for them.
+fn dao_stores(dir: &std::path::Path) {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/daodejing");
+    for (from, to) in [
+        ("corpus.cc", "c.cc"),
+        ("inventory.cc", "i.cc"),
+        ("entity.cc", "e.cc"),
+    ] {
+        std::fs::copy(src.join(from), dir.join(to)).unwrap();
+    }
+}
+
+#[test]
+fn loop_open_and_unanswered_round() {
+    let d = tempfile::tempdir().unwrap();
+    dao_stores(d.path());
+    let open = |root: &str| {
+        weksa(
+            d.path(),
+            &[
+                "loop",
+                "open",
+                root,
+                "--label",
+                "smoke",
+                "--answerer",
+                "fake-model",
+            ],
+        )
+    };
+    let o = open("canaryroot");
+    assert!(o.status.success(), "{}", out(&o));
+    assert_eq!(out(&o), "opened run:smoke\n");
+
+    // A second open fails and names neither the root nor a path.
+    let again = open("canaryroot");
+    assert!(!again.status.success());
+    let text = out(&again);
+    assert!(text.contains("already holds a run"), "{text}");
+    for echoed in ["canaryroot", d.path().to_str().unwrap()] {
+        assert!(!text.contains(echoed), "{text}");
+    }
+
+    // Round 1 is unanswered: three digests, a count, exit 3, no round recorded.
+    let round = || weksa(d.path(), &["loop", "round", "canaryroot"]);
+    let first = round();
+    assert_eq!(first.status.code(), Some(3), "{}", out(&first));
+    let text = out(&first);
+    let digests: Vec<&str> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("unanswered "))
+        .filter(|d| d.len() == 16)
+        .collect();
+    assert_eq!(digests.len(), 3, "{text}");
+    assert!(text.ends_with("unanswered 3 of 3\n"), "{text}");
+    assert!(!text.contains("canaryroot"), "{text}");
+    for digest in &digests {
+        assert!(
+            d.path()
+                .join(format!("canaryroot/round-1/{digest}.prompt"))
+                .is_file()
+        );
+    }
+
+    // Answers that are not drafts record a round of refusals, with no embed call.
+    for digest in &digests {
+        std::fs::write(
+            d.path().join(format!("canaryroot/round-1/{digest}.answer")),
+            "not json",
+        )
+        .unwrap();
+    }
+    let second = round();
+    assert!(second.status.success(), "{}", out(&second));
+    assert_eq!(
+        out(&second),
+        "round 1 rev 3 train n=1 scored=0 chrf=0.00 meaning=0.0000 refused=1 validation n=2 scored=0 chrf=0.00 meaning=0.0000 refused parse=2 admit=0 lower=0\n"
+    );
+
+    // The global store flags are not read by loop round: a drifted store is refused.
+    let mut entities = EntityStore::open(&d.path().join("e.cc")).unwrap();
+    entities.put(common::ent("kay", "en-US", &["Kay"])).unwrap();
+    let drifted = round();
+    assert!(!drifted.status.success());
+    assert!(
+        out(&drifted).contains("drift in Entities"),
+        "{}",
+        out(&drifted)
+    );
+}
+
+#[test]
+fn loop_errors_echo_no_input() {
+    let d = tempfile::tempdir().unwrap();
+    dao_stores(d.path());
+    let o = weksa(d.path(), &["loop", "round", "canaryroot"]);
+    assert!(!o.status.success());
+    assert!(out(&o).contains("holds no run"), "{}", out(&o));
+    for args in [
+        vec![
+            "loop",
+            "open",
+            "canaryroot",
+            "--label",
+            "CANARYLABEL",
+            "--answerer",
+            "m",
+        ],
+        vec![
+            "loop",
+            "open",
+            "canaryroot",
+            "--label",
+            "ok",
+            "--answerer",
+            "CANARY\n",
+        ],
+    ] {
+        let o = weksa(d.path(), &args);
+        assert!(!o.status.success());
+        assert!(!out(&o).to_uppercase().contains("CANARY"), "{}", out(&o));
+    }
+    // A store path that does not exist.
+    let o = Command::new(env!("CARGO_BIN_EXE_weksa"))
+        .current_dir(d.path())
+        .args([
+            "--corpus",
+            "./canarystore.cc",
+            "loop",
+            "open",
+            "canaryroot",
+            "--label",
+            "ok",
+            "--answerer",
+            "m",
+        ])
+        .output()
+        .unwrap();
+    assert!(!o.status.success());
+    assert!(!out(&o).to_uppercase().contains("CANARY"), "{}", out(&o));
 }

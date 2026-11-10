@@ -24,13 +24,20 @@ pub enum SplitScheme {
     V1,
 }
 
-pub fn fnv1a64(bytes: &[u8]) -> u64 {
+pub const fn fnv1a64(bytes: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in bytes {
-        h ^= u64::from(*b);
+    let mut i = 0;
+    while i < bytes.len() {
+        h ^= bytes[i] as u64;
         h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        i += 1;
     }
     h
+}
+
+/// 16 lowercase hex digits, zero-padded: how a digest is written everywhere.
+pub(crate) fn hex16(n: u64) -> String {
+    format!("{n:016x}")
 }
 
 impl SplitScheme {

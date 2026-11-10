@@ -114,6 +114,28 @@ pub fn entities_in(dir: &std::path::Path) -> EntityStore {
     store
 }
 
+/// A run over the stores `world()` and `corpus()` keep in `dir`: `c.cc`,
+/// `i.cc` and `entities.cc`. Read at the call, so create it after the items.
+pub fn run_over(dir: &std::path::Path) -> weksa::run::RunStores {
+    for name in ["c.cc", "i.cc", "entities.cc"] {
+        if !dir.join(name).exists() {
+            std::fs::write(dir.join(name), [0x90]).unwrap();
+        }
+    }
+    weksa::run::RunStores::create(
+        &dir.join("run"),
+        "t",
+        weksa::run::RunPaths {
+            corpus: &dir.join("c.cc"),
+            inventory: &dir.join("i.cc"),
+            entities: &dir.join("entities.cc"),
+        },
+        "fake-model",
+        "bag",
+    )
+    .unwrap()
+}
+
 pub fn item_in(key: &str, text: &str, group: &str, source: Source) -> CorpusItem {
     CorpusItem {
         id: key.into(),
@@ -329,5 +351,27 @@ pub fn good() -> Packet {
                 },
             ],
         },
+    }
+}
+
+/// A deterministic bag-of-letters embedder, so cosine differs with the text.
+pub struct Bag;
+
+impl weksa::Embedder for Bag {
+    fn model(&self) -> &str {
+        "bag"
+    }
+    fn embed(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+        Ok(texts
+            .iter()
+            .map(|t| {
+                let mut v = vec![0.0; 27];
+                v[26] = 1.0;
+                for c in t.chars().filter(char::is_ascii_alphabetic) {
+                    v[(c.to_ascii_lowercase() as u8 - b'a') as usize] += 1.0;
+                }
+                v
+            })
+            .collect())
     }
 }

@@ -3,31 +3,54 @@
 //! [`TrainItems`] or by encoding one item an [`EncoderOffer`] holds: Train-only
 //! minting and per-item encoding (leak-owned-by-flow-and-scorer-3,
 //! loop-context-builder-2). Instruction text is [`MINT_INSTRUCTIONS`] and
-//! [`ENCODE_INSTRUCTIONS`], consts in this module, and nothing else: `mint` and
-//! `encode` take none, so no run-time text can become instructions.
+//! [`ENCODE_INSTRUCTIONS`], consts in this module; an encode prompt also lists
+//! the inventory at the run's revision.
+//!
+//! Item blocks are data from the run's pinned corpus, reached only through
+//! `RunStores`, the one public producer of `TrainItems` and `EncoderOffer`
+//! (forged-item-text-in-prompt). A forged item in a scratch store is a different
+//! run with a different corpus digest, visible in its record; nothing inside a
+//! process its forger controls can stop it.
 
 use std::marker::PhantomData;
 
 use crate::corpus::CorpusItem;
+use crate::inventory::{Inventory, InventoryEntry, OptionLabel, ValueKind};
 use crate::packet::EntityId;
-use crate::split::{Checkpoint, Split, SplitScheme};
+use crate::split::{Checkpoint, Split, SplitScheme, fnv1a64, hex16};
 use crate::store::{CorpusStore, normalized};
 
 /// The instructions a mint prompt starts with. golf-loop-en edits the wording
 /// here.
 pub const MINT_INSTRUCTIONS: &str = "Mint glosses from the lines below.";
 
-/// The instructions an encode prompt starts with.
-pub const ENCODE_INSTRUCTIONS: &str = "Encode the line below.";
+/// The instructions an encode prompt starts with: the encoder's whole brief.
+/// Fixed per run by `PROMPT_SOURCE_DIGEST`.
+pub const ENCODE_INSTRUCTIONS: &str = "\
+Encode the line below as one packet draft, the meaning of the line and nothing else.
+Answer with one JSON object and nothing else: no code fence, no commentary.
+Fields:
+- confidence: 0 to 1000.
+- context: {setting, medium, participants, audience}; setting and medium are concept ids or null, participants and audience are lists of node ids.
+- discourse: {speech_act, addressee, addressee_consent, features}; speech_act is a speech_act id, addressee a node id or null, addressee_consent always null.
+- referents: a list of {id, kind, concept, entity, features}; kind is a referent_kind id, concept a concept id, entity an entity id from the entities line or null.
+- predications: a list of {id, concept, frame, roles, features}; roles is a list of {role, filler}, filler a node id.
+- relations: a list of {relation, from, to, features}.
+- stance: {features}; the speaker's felt affect and restraint, never the affect the line displays.
+Node ids are n1, n2, and so on, one per referent and predication. Every other id comes from the inventory listed below and must be live at its revision. An entity comes only from the entities line.
+A feature is {feature, value}; value is {\"Grade\": 0 to 1000}, {\"Option\": label} or {\"Flag\": true or false}, as the inventory lists the feature's kind.";
 
 /// The live Train items of a corpus, in key order. The only input minting
 /// reads; it cannot be built from a slice, and no accessor returns text or an
 /// item.
 ///
 /// ```
-/// let dir = tempfile::tempdir().unwrap();
-/// let store = weksa::CorpusStore::open(&dir.path().join("c.cc")).unwrap();
-/// let t = weksa::context::TrainItems::from_corpus(&store).unwrap();
+/// # let dir = tempfile::tempdir().unwrap();
+/// # let p = |n: &str| dir.path().join(n);
+/// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
+/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e").unwrap();
+/// let t = run.train().unwrap();
 /// assert!(t.is_empty());
 /// ```
 ///
@@ -36,17 +59,23 @@ pub const ENCODE_INSTRUCTIONS: &str = "Encode the line below.";
 /// ```
 ///
 /// ```compile_fail
-/// let dir = tempfile::tempdir().unwrap();
-/// let store = weksa::CorpusStore::open(&dir.path().join("c.cc")).unwrap();
-/// let t = weksa::context::TrainItems::from_corpus(&store).unwrap();
+/// # let dir = tempfile::tempdir().unwrap();
+/// # let p = |n: &str| dir.path().join(n);
+/// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
+/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e").unwrap();
+/// let t = run.train().unwrap();
 /// let _u = t.clone();
 /// ```
 ///
 /// ```compile_fail
 /// fn s<T: serde::Serialize>(_: &T) {}
-/// let dir = tempfile::tempdir().unwrap();
-/// let store = weksa::CorpusStore::open(&dir.path().join("c.cc")).unwrap();
-/// let t = weksa::context::TrainItems::from_corpus(&store).unwrap();
+/// # let dir = tempfile::tempdir().unwrap();
+/// # let p = |n: &str| dir.path().join(n);
+/// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
+/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e").unwrap();
+/// let t = run.train().unwrap();
 /// s(&t);
 /// ```
 pub struct TrainItems {
@@ -54,7 +83,7 @@ pub struct TrainItems {
 }
 
 impl TrainItems {
-    pub fn from_corpus(corpus: &CorpusStore) -> anyhow::Result<Self> {
+    pub(crate) fn from_corpus(corpus: &CorpusStore) -> anyhow::Result<Self> {
         let items = corpus
             .all()?
             .into_iter()
@@ -109,9 +138,9 @@ pub enum OfferRefusal {
 /// use weksa::context::{EncoderOffer, TrainItems};
 /// use weksa::split::Checkpoint;
 /// use weksa::{CorpusItem, score::TestReadings};
-/// fn f(mut c: Checkpoint, i: &CorpusItem, t: &TrainItems) {
+/// fn f(mut c: Checkpoint, i: &CorpusItem, t: &TrainItems, inv: &weksa::Inventory) {
 ///     if let Ok(o) = EncoderOffer::for_checkpoint(i, &mut c) {
-///         let _ = weksa::context::Prompt::encode(&o, t);
+///         let _ = weksa::context::Prompt::encode(&o, t, inv, 1);
 ///     }
 ///     let _ = TestReadings::at_checkpoint(c, &[], &[], &[]);
 /// }
@@ -121,10 +150,10 @@ pub enum OfferRefusal {
 /// use weksa::context::{EncoderOffer, TrainItems};
 /// use weksa::split::Checkpoint;
 /// use weksa::{CorpusItem, score::TestReadings};
-/// fn f(mut c: Checkpoint, i: &CorpusItem, t: &TrainItems) {
+/// fn f(mut c: Checkpoint, i: &CorpusItem, t: &TrainItems, inv: &weksa::Inventory) {
 ///     let o = EncoderOffer::for_checkpoint(i, &mut c).unwrap();
 ///     let _ = TestReadings::at_checkpoint(c, &[], &[], &[]);
-///     let _ = weksa::context::Prompt::encode(&o, t);
+///     let _ = weksa::context::Prompt::encode(&o, t, inv, 1);
 /// }
 /// ```
 pub struct EncoderOffer<'cp> {
@@ -134,8 +163,9 @@ pub struct EncoderOffer<'cp> {
 }
 
 impl<'cp> EncoderOffer<'cp> {
-    /// A round offers Train and Validation items.
-    pub fn for_round(item: &CorpusItem) -> Result<EncoderOffer<'static>, OfferRefusal> {
+    /// A round offers Train and Validation items. `RunStores::offer` and
+    /// `RunStores::offers` are the public producers.
+    pub(crate) fn for_round(item: &CorpusItem) -> Result<EncoderOffer<'static>, OfferRefusal> {
         match Self::gate(item)? {
             Split::Test => Err(OfferRefusal::TestBeforeCheckpoint),
             _ => Ok(Self::of(item)),
@@ -188,9 +218,12 @@ impl<'cp> EncoderOffer<'cp> {
 /// constructors are [`Prompt::mint`] and [`Prompt::encode`].
 ///
 /// ```
-/// let dir = tempfile::tempdir().unwrap();
-/// let store = weksa::CorpusStore::open(&dir.path().join("c.cc")).unwrap();
-/// let t = weksa::context::TrainItems::from_corpus(&store).unwrap();
+/// # let dir = tempfile::tempdir().unwrap();
+/// # let p = |n: &str| dir.path().join(n);
+/// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
+/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e").unwrap();
+/// let t = run.train().unwrap();
 /// let p = weksa::context::Prompt::mint(&t);
 /// assert_eq!(p.text(), weksa::context::MINT_INSTRUCTIONS);
 /// ```
@@ -198,17 +231,23 @@ impl<'cp> EncoderOffer<'cp> {
 /// Instructions are not a parameter:
 ///
 /// ```compile_fail
-/// let dir = tempfile::tempdir().unwrap();
-/// let store = weksa::CorpusStore::open(&dir.path().join("c.cc")).unwrap();
-/// let t = weksa::context::TrainItems::from_corpus(&store).unwrap();
+/// # let dir = tempfile::tempdir().unwrap();
+/// # let p = |n: &str| dir.path().join(n);
+/// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
+/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e").unwrap();
+/// let t = run.train().unwrap();
 /// let p = weksa::context::Prompt::mint("x", &t);
 /// ```
 ///
 /// ```compile_fail
 /// fn s<T: serde::Serialize>(_: &T) {}
-/// let dir = tempfile::tempdir().unwrap();
-/// let store = weksa::CorpusStore::open(&dir.path().join("c.cc")).unwrap();
-/// let t = weksa::context::TrainItems::from_corpus(&store).unwrap();
+/// # let dir = tempfile::tempdir().unwrap();
+/// # let p = |n: &str| dir.path().join(n);
+/// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
+/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e").unwrap();
+/// let t = run.train().unwrap();
 /// let p = weksa::context::Prompt::mint(&t);
 /// s(&p);
 /// ```
@@ -238,6 +277,32 @@ fn block(item: &CorpusItem, prior: Option<&TrainItems>) -> String {
     lines.join("\n")
 }
 
+/// One inventory line: the id and gloss, and for a feature or extension its
+/// value kind (with the labels of an options feature) and the slots it sits in.
+fn entry_line(entry: &InventoryEntry) -> String {
+    let mut line = format!("{}: {}", entry.id, entry.gloss);
+    let kind = entry.value_kind.as_ref().map(|kind| match kind {
+        ValueKind::Grade => "grade".to_string(),
+        ValueKind::Flag => "flag".to_string(),
+        ValueKind::Options(set) => {
+            let labels: Vec<String> = Vec::<OptionLabel>::from(set.clone())
+                .iter()
+                .map(OptionLabel::to_string)
+                .collect();
+            format!("options {}", labels.join("|"))
+        }
+    });
+    if let Some(kind) = kind {
+        let slots: Vec<String> = entry.applies_to.iter().map(|s| format!("{s:?}")).collect();
+        line.push_str(&format!(" [{kind}"));
+        if !slots.is_empty() {
+            line.push_str(&format!("; slots {}", slots.join(",")));
+        }
+        line.push(']');
+    }
+    line
+}
+
 /// Printed in place of a prior turn whose text no live Train item holds.
 const ELIDED: &str = "[elided]";
 
@@ -253,17 +318,34 @@ impl Prompt {
     }
 
     /// [`ENCODE_INSTRUCTIONS`], the one offered item with its prior turns resolved
-    /// against `train`, and the entities a packet for it may cite.
-    pub fn encode(offer: &EncoderOffer, train: &TrainItems) -> Prompt {
+    /// against `train`, the entities a packet for it may cite, and the entries
+    /// of `inventory` live at `rev`.
+    pub fn encode(
+        offer: &EncoderOffer,
+        train: &TrainItems,
+        inventory: &Inventory,
+        rev: u32,
+    ) -> Prompt {
         let ids: Vec<&str> = offer.entities.iter().map(EntityId::as_str).collect();
+        let mut text = format!(
+            "{ENCODE_INSTRUCTIONS}\n\n{}\n\nentities: {}\n\ninventory rev:{rev}",
+            block(&offer.item, Some(train)),
+            ids.join(", ")
+        );
+        for entry in inventory.entries().filter(|e| e.live_at(rev)) {
+            text.push('\n');
+            text.push_str(&entry_line(entry));
+        }
         Prompt {
-            text: format!(
-                "{ENCODE_INSTRUCTIONS}\n\n{}\n\nentities: {}",
-                block(&offer.item, Some(train)),
-                ids.join(", ")
-            ),
+            text,
             items: vec![offer.item.id.clone()],
         }
+    }
+
+    /// 16 lowercase hex digits of FNV-1a 64 of the text: the name of the prompt
+    /// in files and records.
+    pub fn digest(&self) -> String {
+        hex16(fnv1a64(self.text.as_bytes()))
     }
 
     pub fn text(&self) -> &str {
@@ -301,6 +383,20 @@ mod tests {
         let mut both = no_split.clone();
         both.withdrawn = true;
         assert_eq!(check(&both), Some(OfferRefusal::Withdrawn));
+    }
+
+    #[test]
+    fn round_offer_gate_precedence() {
+        let round = |i: &CorpusItem| EncoderOffer::for_round(i).err();
+        let mut no_split = item("item:c:2", "m", &group_in(Split::Test), true);
+        no_split.withdrawn = true;
+        // Withdrawn wins over NoSplit.
+        assert_eq!(round(&no_split), Some(OfferRefusal::Withdrawn));
+        // A withdrawn Test item is Withdrawn, not TestBeforeCheckpoint.
+        let mut test = item("item:c:1", "x", &group_in(Split::Test), false);
+        assert_eq!(round(&test), Some(OfferRefusal::TestBeforeCheckpoint));
+        test.withdrawn = true;
+        assert_eq!(round(&test), Some(OfferRefusal::Withdrawn));
     }
 
     #[test]

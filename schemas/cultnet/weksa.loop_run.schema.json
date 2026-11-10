@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RunRecord",
+  "description": "What a run pinned at open. Key `run:<label>`.",
+  "type": "object",
+  "properties": {
+    "chrf_version": {
+      "type": "string"
+    },
+    "corpus": {
+      "description": "Canonical absolute path of the corpus store.",
+      "type": "string"
+    },
+    "corpus_digest": {
+      "description": "16 hex of the corpus file's bytes.",
+      "type": "string"
+    },
+    "embedder": {
+      "description": "The embedder's model.",
+      "type": "string"
+    },
+    "entities": {
+      "type": "string"
+    },
+    "entity_digest": {
+      "type": "string"
+    },
+    "inventory": {
+      "type": "string"
+    },
+    "label": {
+      "type": "string"
+    },
+    "lowerer_digest": {
+      "type": "string"
+    },
+    "model": {
+      "description": "The answering model.",
+      "type": "string"
+    },
+    "prompt_digest": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "label",
+    "corpus",
+    "inventory",
+    "entities",
+    "corpus_digest",
+    "entity_digest",
+    "prompt_digest",
+    "lowerer_digest",
+    "model",
+    "embedder",
+    "chrf_version"
+  ]
+}

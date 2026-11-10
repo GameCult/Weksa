@@ -6,7 +6,7 @@ use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
-use common::{cast, group_in_bucket, item_in, model};
+use common::{Bag, cast, group_in_bucket, item_in, model};
 use serde_json::Value;
 use weksa::CorpusItem;
 use weksa::score::{
@@ -68,28 +68,6 @@ impl Embedder for Recorder {
             .borrow_mut()
             .extend(texts.iter().map(|t| t.to_string()));
         Ok(texts.iter().map(|t| vec![t.len() as f32, 1.0]).collect())
-    }
-}
-
-/// A deterministic bag-of-letters embedder, so cosine differs with the text.
-struct Bag;
-
-impl Embedder for Bag {
-    fn model(&self) -> &str {
-        "bag"
-    }
-    fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-        Ok(texts
-            .iter()
-            .map(|t| {
-                let mut v = vec![0.0; 27];
-                v[26] = 1.0;
-                for c in t.chars().filter(char::is_ascii_alphabetic) {
-                    v[(c.to_ascii_lowercase() as u8 - b'a') as usize] += 1.0;
-                }
-                v
-            })
-            .collect())
     }
 }
 

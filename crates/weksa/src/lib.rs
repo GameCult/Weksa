@@ -6,12 +6,15 @@
 pub mod context;
 pub mod corpus;
 pub mod daodejing;
+pub mod encode;
 pub mod entity;
 pub mod form;
 pub mod inventory;
 pub mod lower;
+pub mod model;
 pub mod packet;
 pub mod phones;
+pub mod run;
 pub mod schema;
 pub mod score;
 pub mod speaker;
@@ -20,6 +23,7 @@ pub mod store;
 pub mod validate;
 
 pub use corpus::{CorpusItem, CorpusItemId, NameSpan, Source, Turn};
+pub use encode::PacketDraft;
 pub use entity::{Entity, EntityOrigin, LanguageForms, Pronunciation};
 pub use form::FormError;
 pub use inventory::{
@@ -27,10 +31,12 @@ pub use inventory::{
     Slot, ValueKind,
 };
 pub use lower::{EntityForms, LowerError, PhoneLine, TARGET_LANGUAGE, lower, phones, pronounce};
+pub use model::{AnswerFiles, ModelPort};
 pub use packet::{
     EncoderId, EntityId, Grade, NodeId, Packet, PacketId, PacketKind, SCHEMA_VERSION, Stance,
 };
 pub use phones::{Phone, PhoneInventory, SegmentError, Stress};
+pub use run::{RoundRecord, RunStores, round};
 pub use score::{Embedder, ItemScore, OllamaEmbedder, Scorer, chrf};
 pub use speaker::{Annotator, PairRelation, Party, Scene, Speaker};
 pub use split::{Split, SplitScheme};
