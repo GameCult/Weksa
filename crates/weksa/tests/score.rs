@@ -353,12 +353,6 @@ fn aggregate_by_derived_split() {
     assert_eq!(agg.train.chrf, Some(15.0));
     assert_eq!(agg.train.meaning, Some(0.5), "None is not averaged as zero");
     assert_eq!((agg.validation.count, agg.validation.chrf), (1, Some(40.0)));
-    assert_eq!((agg.test.count, agg.test.chrf), (1, Some(60.0)));
-    assert_eq!(
-        agg.test.meaning,
-        Some(0.6),
-        "the model-written test item is in no split"
-    );
     assert_eq!(aggregate(&[]).validation.chrf, None);
 }
 
@@ -385,7 +379,6 @@ fn train(key: &str, text: &str) -> CorpusItem {
 /// (novel, covered) per order for the Validation split.
 fn read(minted: &[&str], items: &[CorpusItem]) -> Vec<(usize, usize)> {
     leak_diagnostic(minted, items)
-        .validation
         .coverage_by_n
         .iter()
         .map(|c| (c.novel, c.covered))
@@ -414,7 +407,7 @@ fn leak_diagnostic_catches_chunked_glosses() {
             test_model,
         ],
     );
-    let pair = d.validation.max_chrf.as_ref().unwrap();
+    let pair = d.max_chrf.as_ref().unwrap();
     assert!(
         pair.chrf < 50.0,
         "each chunk alone scores low: {}",
@@ -426,24 +419,21 @@ fn leak_diagnostic_catches_chunked_glosses() {
         read(&minted, &[held.clone(), unrelated, train_item.clone()]),
         [(16, 12), (14, 8), (12, 4)]
     );
-    let worst = d.validation.worst.as_ref().unwrap();
+    let worst = d.worst.as_ref().unwrap();
     assert_eq!(
         (worst.item.as_str(), worst.n, worst.covered, worst.novel),
         ("item:v:1", 2, 8, 11)
     );
-    assert_eq!(d.validation.items, 2);
-    assert_eq!(d.test.items, 0, "a model-written test item is in no split");
-    assert_eq!(d.test.max_chrf, None);
-    assert_eq!(d.test.worst, None);
+    assert_eq!(d.items, 2);
 
     let only_train = leak_diagnostic(&minted, &[train_item]);
-    assert_eq!(only_train.validation.items, 0);
-    assert_eq!(only_train.validation.max_chrf, None);
-    assert_eq!(only_train.validation.worst, None);
+    assert_eq!(only_train.items, 0);
+    assert_eq!(only_train.max_chrf, None);
+    assert_eq!(only_train.worst, None);
 
     let full = leak_diagnostic(&[HELD_OUT], &[held]);
-    assert_eq!(full.validation.coverage_by_n[2].share, Some(1.0));
-    assert!(full.validation.max_chrf.unwrap().chrf > 99.0);
+    assert_eq!(full.coverage_by_n[2].share, Some(1.0));
+    assert!(full.max_chrf.unwrap().chrf > 99.0);
 }
 
 #[test]
@@ -485,9 +475,9 @@ fn coverage_reads_joined_labels() {
         "kick the bucket",
     ] {
         let d = leak_diagnostic(&[label], &items);
-        let by_n = &d.validation.coverage_by_n;
+        let by_n = &d.coverage_by_n;
         assert_eq!((by_n[2].novel, by_n[2].covered), (3, 1), "{label}");
-        let worst = d.validation.worst.unwrap();
+        let worst = d.worst.unwrap();
         assert_eq!((worst.n, worst.covered), (2, 2), "{label}");
     }
 }
@@ -520,7 +510,7 @@ fn coverage_pooled_per_order() {
         "left", "group", "found", "place", "storm", "after", "warn", "leave", "harbor",
     ];
     let d = leak_diagnostic(&glosses, &items);
-    let by_n = &d.validation.coverage_by_n;
+    let by_n = &d.coverage_by_n;
     assert_eq!(by_n.iter().map(|c| c.n).collect::<Vec<_>>(), [1, 2, 3]);
     assert_eq!((by_n[0].novel, by_n[0].covered), (6, 5));
     assert!(by_n[0].share.unwrap() < 1.0);
@@ -528,7 +518,7 @@ fn coverage_pooled_per_order() {
         assert!(c.novel > 0);
         assert_eq!((c.covered, c.share), (0, Some(0.0)));
     }
-    assert_eq!(d.validation.worst, None);
+    assert_eq!(d.worst, None);
 
     // no novel n-gram reads None, never NaN; an empty split reads the same
     let items = [
@@ -536,16 +526,13 @@ fn coverage_pooled_per_order() {
         validation("item:v:1", "harbors guard the quiet"),
     ];
     let d = leak_diagnostic(&["anything at all"], &items);
-    for split in [&d.validation, &d.test] {
-        assert_eq!(split.coverage_by_n.len(), 3);
-        assert!(
-            split
-                .coverage_by_n
-                .iter()
-                .all(|c| (c.novel, c.share) == (0, None))
-        );
-        assert_eq!(split.worst, None);
-    }
+    assert_eq!(d.coverage_by_n.len(), 3);
+    assert!(
+        d.coverage_by_n
+            .iter()
+            .all(|c| (c.novel, c.share) == (0, None))
+    );
+    assert_eq!(d.worst, None);
 }
 
 #[test]
@@ -569,7 +556,6 @@ fn worst_item_rules() {
         validation("item:v:2", "delta epsilon"),
     ];
     let w = leak_diagnostic(&["alpha beta", "delta epsilon"], &items)
-        .validation
         .worst
         .unwrap();
     assert_eq!(
@@ -582,7 +568,6 @@ fn worst_item_rules() {
         validation("item:v:2", "alpha beta gamma"),
     ];
     let w = leak_diagnostic(&["alpha beta", "delta epsilon"], &items)
-        .validation
         .worst
         .unwrap();
     assert_eq!(w.item, "item:v:1");
@@ -592,7 +577,6 @@ fn worst_item_rules() {
         validation("item:v:2", "alpha beta gamma delta"),
     ];
     let w = leak_diagnostic(&["alpha beta gamma", "delta epsilon"], &items)
-        .validation
         .worst
         .unwrap();
     assert_eq!((w.item.as_str(), w.covered, w.novel), ("item:v:2", 2, 3));
@@ -601,17 +585,13 @@ fn worst_item_rules() {
         validation("item:v:1", "delta epsilon"),
         validation("item:v:2", "delta epsilon"),
     ];
-    let w = leak_diagnostic(&["delta epsilon"], &items)
-        .validation
-        .worst
-        .unwrap();
+    let w = leak_diagnostic(&["delta epsilon"], &items).worst.unwrap();
     assert_eq!(w.item, "item:v:1");
     let items = [
         validation("item:v:1", "alpha beta gamma"),
         train("item:t:1", "alpha beta"),
     ];
     let w = leak_diagnostic(&["alpha beta gamma"], &items)
-        .validation
         .worst
         .unwrap();
     assert_eq!((w.n, w.covered, w.novel), (2, 1, 1));
@@ -631,7 +611,7 @@ fn leak_diagnostic_reports_the_best_pair_and_the_first_of_ties() {
     let b = validation("item:v:2", HELD_OUT);
     // the better minted string comes second; equal items tie, the first is kept
     let d = leak_diagnostic(&["zzzzzz qqqqqq", HELD_OUT], &[a, b]);
-    let pair = d.validation.max_chrf.unwrap();
+    let pair = d.max_chrf.unwrap();
     assert_eq!(
         (pair.minted.as_str(), pair.item.as_str()),
         (HELD_OUT, "item:v:1")

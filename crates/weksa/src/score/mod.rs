@@ -12,9 +12,7 @@ mod words;
 use anyhow::{Result, ensure};
 
 pub use chrf::{CHRF_VERSION, chrf};
-pub use diagnostics::{
-    LeakDiagnostic, OrderCoverage, PairChrf, SplitLeak, WorstItem, leak_diagnostic,
-};
+pub use diagnostics::{OrderCoverage, PairChrf, SplitLeak, WorstItem, leak_diagnostic};
 pub use embed::{Embedder, OllamaEmbedder, cosine};
 
 use crate::corpus::CorpusItem;
@@ -115,7 +113,6 @@ pub struct SplitMean {
 pub struct Aggregate {
     pub train: SplitMean,
     pub validation: SplitMean,
-    pub test: SplitMean,
 }
 
 /// Groups scores by the item's derived split. Items in no split are counted
@@ -139,6 +136,5 @@ pub fn aggregate(scored: &[(&CorpusItem, ItemScore)]) -> Aggregate {
     Aggregate {
         train: mean(Split::Train),
         validation: mean(Split::Validation),
-        test: mean(Split::Test),
     }
 }

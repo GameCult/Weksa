@@ -56,12 +56,6 @@ pub struct SplitLeak {
     pub worst: Option<WorstItem>,
 }
 
-#[derive(Clone, Debug, PartialEq, Default)]
-pub struct LeakDiagnostic {
-    pub validation: SplitLeak,
-    pub test: SplitLeak,
-}
-
 /// The distinct word n-grams of a text for each order 1..=ORDERS, over its
 /// normalised word segments.
 fn grams(text: &str) -> Vec<HashSet<String>> {
@@ -153,7 +147,7 @@ fn split_leak(
 /// single-word glosses saturate n = 1, so the leak signature is pooled n >= 2
 /// and the worst item at n >= 2. Train items are not measured; items in no
 /// split are dropped.
-pub fn leak_diagnostic(minted: &[&str], items: &[CorpusItem]) -> LeakDiagnostic {
+pub fn leak_diagnostic(minted: &[&str], items: &[CorpusItem]) -> SplitLeak {
     let of = |want: Split| -> Vec<&CorpusItem> {
         items
             .iter()
@@ -162,8 +156,5 @@ pub fn leak_diagnostic(minted: &[&str], items: &[CorpusItem]) -> LeakDiagnostic 
     };
     let train = union(of(Split::Train).iter().map(|i| i.text.as_str()));
     let minted_grams = union(minted.iter().copied());
-    LeakDiagnostic {
-        validation: split_leak(minted, &train, &minted_grams, &of(Split::Validation)),
-        test: split_leak(minted, &train, &minted_grams, &of(Split::Test)),
-    }
+    split_leak(minted, &train, &minted_grams, &of(Split::Validation))
 }
