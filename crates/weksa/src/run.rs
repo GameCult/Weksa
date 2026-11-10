@@ -35,11 +35,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::context::{EditFeedback, EncoderOffer, Prompt, TrainItems};
-use crate::corpus::{CorpusItem, CorpusItemId};
+use crate::corpus::{CorpusItem, CorpusItemId, Source};
 use crate::encode::{EditDraft, LoweringDraft, PacketDraft, encoder_id};
 use crate::form::{is_attestation, is_slug};
 use crate::model::{ModelPort, PortError};
-use crate::score::{CHRF_VERSION, Embedder, ItemScore, ScoreInput, Scorer, SplitMean, aggregate};
+use crate::score::{CHRF_VERSION, chrf, Embedder, ItemScore, ScoreInput, Scorer, SplitMean, aggregate};
 use crate::split::{Split, SplitScheme, fnv1a64, fnv1a64_of, hex16};
 use crate::store::{
     CorpusStore, EntityStore, InventoryStore, PacketStore, StoreError, open_cache_over,
@@ -277,6 +277,7 @@ pub struct RoundRecord {
     /// The rules admission refused items under, in rule order; every Train
     /// and Validation item refused at `Stage::Admit` is counted once per rule.
     #[cultcache(key = 18)]
+    #[schemars(default)]
     admit_rules: Vec<RuleCount>,
 }
 
@@ -799,6 +800,105 @@ pub enum RoundOutcome {
         prompts: Vec<String>,
     },
     Recorded(RoundRecord),
+}
+
+/// A recall reading (`lowering-recall-diagnostic`): how closely a fresh model
+/// completes each public-domain item from its opening alone, chrF against the
+/// item's own second half. Recorded nowhere: the answers stay in `<root>/recall`.
+/// It is never a gate; a high reading says a round's scores on these items are
+/// recitation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecallReading {
+    /// Public-domain items probed, Train and Validation.
+    pub n: u32,
+    /// Items whose completion was a usable answer; a refused one counts 0.
+    pub answered: u32,
+    pub chrf: f64,
+}
+
+impl RecallReading {
+    pub fn line(&self) -> String {
+        format!(
+            "recall n={} answered={} chrf={:.2} (public-domain items, completion from the opening; a high chrf means round scores on them are recitation)",
+            self.n, self.answered, self.chrf
+        )
+    }
+}
+
+#[derive(Debug)]
+pub enum RecallOutcome {
+    Unanswered { prompts: Vec<String> },
+    Read(RecallReading),
+}
+
+/// The opening and the rest of `text`, split between words at about the
+/// middle; `None` when it has fewer than four words.
+fn recall_split(text: &str) -> Option<(String, String)> {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if words.len() < 4 {
+        return None;
+    }
+    let (head, tail) = words.split_at(words.len() / 2);
+    Some((head.join(" "), tail.join(" ")))
+}
+
+impl RunStores {
+    /// Probes every live public-domain Train and Validation item of the pinned
+    /// corpus once, through `model`.
+    pub fn recall(&self, model: &mut dyn ModelPort) -> Result<RecallOutcome, RunError> {
+        let store = |_| RunError::Store;
+        let mut probes = Vec::new();
+        for item in self.corpus.all().map_err(store)? {
+            let Source::PublicDomain {
+                work,
+                author,
+                translator,
+                ..
+            } = &item.source
+            else {
+                continue;
+            };
+            if EncoderOffer::for_round(&item).is_err() {
+                continue;
+            }
+            if let Some((opening, rest)) = recall_split(&item.text) {
+                let prompt = Prompt::recall(&item.id, work, author, translator, &opening);
+                probes.push((prompt, rest));
+            }
+        }
+        let mut unanswered = Vec::new();
+        let mut scores = Vec::new();
+        for (prompt, rest) in &probes {
+            match model.answer(prompt) {
+                Ok(answer) => {
+                    let text = LoweringDraft::parse(&answer)
+                        .ok()
+                        .filter(LoweringDraft::usable)
+                        .map(|d| d.text);
+                    scores.push(text.map(|t| chrf(&t, rest)));
+                }
+                Err(PortError::Unanswered) => unanswered.push(prompt.digest()),
+                Err(PortError::Io(ErrorKind::InvalidData)) => scores.push(None),
+                Err(PortError::Io(kind)) => return Err(RunError::Io(kind)),
+            }
+        }
+        if !unanswered.is_empty() {
+            return Ok(RecallOutcome::Unanswered { prompts: unanswered });
+        }
+        let n = scores.len() as u32;
+        let answered = scores.iter().flatten().count() as u32;
+        let chrf = if n == 0 {
+            0.0
+        } else {
+            scores.iter().map(|s| s.unwrap_or(0.0)).sum::<f64>() / f64::from(n)
+        };
+        Ok(RecallOutcome::Read(RecallReading { n, answered, chrf }))
+    }
+
+    /// `<root>/recall`, where a recall's prompts and answers live.
+    pub fn recall_dir(&self) -> PathBuf {
+        self.root.join("recall")
+    }
 }
 
 /// The distinct rule codes an admission refusal broke: validator rules by

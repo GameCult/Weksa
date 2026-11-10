@@ -2946,3 +2946,139 @@ fn admit_refusals_are_counted_by_rule_and_printed_with_the_label() {
     assert!(r.admit_rules().is_empty());
     assert!(!dao.run.round_line(&r).contains("admit-rules"));
 }
+
+/// Answers a recall probe from the corpus: the item's own second half, a
+/// fixed wrong text, or junk.
+struct Reciter {
+    corpus: weksa::store::CorpusStore,
+    answer: fn(&str) -> String,
+    /// An item whose text holds this gets an answer file that is not UTF-8.
+    unreadable: Option<&'static str>,
+    seen: Vec<String>,
+}
+
+impl ModelPort for Reciter {
+    fn model(&self) -> &str {
+        "reciter"
+    }
+    fn answer(&mut self, prompt: &Prompt) -> Result<String, PortError> {
+        self.seen.push(prompt.text().to_string());
+        let key = &prompt.item_keys()[0];
+        let item = self.corpus.get(key).unwrap().unwrap();
+        if self.unreadable.is_some_and(|t| item.text.contains(t)) {
+            return Err(PortError::Io(std::io::ErrorKind::InvalidData));
+        }
+        Ok((self.answer)(&item.text))
+    }
+}
+
+fn second_half(text: &str) -> String {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let draft = serde_json::json!({ "text": words[words.len() / 2..].join(" ") });
+    draft.to_string()
+}
+
+fn reciter(dao: &Dao, answer: fn(&str) -> String) -> Reciter {
+    Reciter {
+        corpus: weksa::store::CorpusStore::open(&dao.corpus).unwrap(),
+        answer,
+        unreadable: None,
+        seen: vec![],
+    }
+}
+
+#[test]
+fn a_recall_probe_asks_for_the_second_half_of_each_live_public_domain_item_and_never_shows_it() {
+    use weksa::run::RecallOutcome;
+    let dao = dao();
+    let mut perfect = reciter(&dao, second_half);
+    let RecallOutcome::Read(r) = dao.run.recall(&mut perfect).unwrap() else {
+        panic!("every prompt was answered");
+    };
+    // Items 1 (Train) and 2, 3 (Validation) are live; 4 and 5 are not offered.
+    assert_eq!((r.n, r.answered), (3, 3));
+    assert!((r.chrf - 100.0).abs() < 1e-9, "{}", r.chrf);
+    assert_eq!(perfect.seen.len(), 3);
+    for (text, key) in perfect.seen.iter().zip(["item:daodejing:1", "item:daodejing:2", "item:daodejing:3"]) {
+        let item = perfect.corpus.get(key).unwrap().unwrap();
+        let rest = item.text.split_whitespace().collect::<Vec<_>>();
+        let tail = rest[rest.len() / 2..].join(" ");
+        let head = rest[..rest.len() / 2].join(" ");
+        assert!(text.contains(&head), "{key}: the opening is shown");
+        assert!(!text.contains(&tail), "{key}: the held half is not shown");
+    }
+}
+
+#[test]
+fn a_recall_of_the_wrong_words_or_no_answer_reads_low_and_a_missing_answer_waits() {
+    use weksa::run::RecallOutcome;
+    let dao = dao();
+    let mut wrong = reciter(&dao, |_| r#"{"text":"zzz qqq xxx"}"#.to_string());
+    let RecallOutcome::Read(r) = dao.run.recall(&mut wrong).unwrap() else {
+        panic!("answered");
+    };
+    assert_eq!((r.n, r.answered), (3, 3));
+    assert!(r.chrf < 10.0, "{}", r.chrf);
+    let mut junk = reciter(&dao, |_| "not json".to_string());
+    let RecallOutcome::Read(r) = dao.run.recall(&mut junk).unwrap() else {
+        panic!("answered");
+    };
+    assert_eq!((r.n, r.answered, r.chrf), (3, 0, 0.0));
+    // With no answers on disk the files port waits on all three prompts.
+    let mut files = AnswerFiles::new(dao.run.recall_dir(), "m".into());
+    let RecallOutcome::Unanswered { prompts } = dao.run.recall(&mut files).unwrap() else {
+        panic!("nobody answered");
+    };
+    assert_eq!(prompts.len(), 3);
+    assert!(dao.run.recall_dir().join(format!("{}.prompt", prompts[0])).exists());
+}
+
+#[test]
+fn the_published_round_schema_does_not_require_a_field_older_records_lack() {
+    let (_, json) = weksa::schema::published()
+        .into_iter()
+        .find(|(name, _)| name.contains("loop_round"))
+        .expect("the round schema is published");
+    let schema: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let required = schema["required"].as_array().unwrap();
+    assert!(required.iter().any(|r| r == "inventory_digest"));
+    assert!(!required.iter().any(|r| r == "admit_rules"), "{required:?}");
+    assert!(schema["properties"]["admit_rules"].is_object());
+}
+
+#[test]
+fn a_recall_mean_is_over_every_probe_an_unreadable_answer_counts_0_and_only_live_public_domain_items_are_probed() {
+    use weksa::corpus::Source;
+    use weksa::run::RecallOutcome;
+    let dao = dao_over(|corpus, entities| {
+        let entities = weksa::EntityStore::open(entities).unwrap();
+        let mut store = weksa::CorpusStore::open(corpus).unwrap();
+        // The same words under other sources: not public domain, not probed.
+        let mut written = store.get("item:daodejing:2").unwrap().unwrap();
+        written.id = "item:written:1".into();
+        written.text = "A line of some other source with words enough to split.".into();
+        written.names = vec![];
+        written.prior_turns = vec![];
+        written.source = Source::OperatorWritten;
+        store.add(written, &entities).unwrap();
+        store.withdraw("item:daodejing:3").unwrap();
+    });
+    let both = |dao: &Dao, unreadable: Option<&'static str>| {
+        let mut m = reciter(dao, second_half);
+        m.unreadable = unreadable;
+        let RecallOutcome::Read(r) = dao.run.recall(&mut m).unwrap() else {
+            panic!("answered");
+        };
+        r
+    };
+    let full = both(&dao, None);
+    assert_eq!(
+        (full.n, full.answered),
+        (2, 2),
+        "neither the written item nor the withdrawn one is probed"
+    );
+    // One of two unreadable: the mean falls to a half.
+    let part = both(&dao, Some("Heaven is long-enduring"));
+    assert_eq!((part.n, part.answered), (2, 1));
+    assert!((part.chrf - full.chrf / 2.0).abs() < 1e-9, "{}", part.chrf);
+}

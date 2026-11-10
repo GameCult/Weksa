@@ -70,6 +70,13 @@ Every id is the inventory's listed below and every feature value is as listed. T
 A referent with an entity is named by one of that entity's forms on the entities line.
 Answer with one JSON object and nothing else: {\"text\": \"...\"}. No code fence, no commentary.";
 
+/// The instructions of a recall probe (`lowering-recall-diagnostic`): a
+/// completion of a public-domain passage from its opening, asked of a model
+/// that has no packet and no inventory. It measures recitation, not lowering.
+pub const RECALL_INSTRUCTIONS: &str = "\
+Below is the opening of a passage from a published public-domain translation. Continue it exactly as that translation words it, from memory, until the passage ends. If you do not remember it, give your best guess in the same voice.
+Answer with one JSON object and nothing else: {\"text\": \"...\"}, the continuation only, not the opening. No code fence, no commentary.";
+
 /// The live Train items of a corpus, in key order. The only input minting
 /// reads; it cannot be built from a slice, and no accessor returns text or an
 /// item.
@@ -538,6 +545,19 @@ impl Prompt {
             text,
             items: vec![item.as_str().to_string()],
         })
+    }
+
+    /// A recall probe: the work, author and translator of a public-domain item
+    /// and the `opening` of its text, nothing else. Only `RunStores::recall`
+    /// builds one.
+    pub(crate) fn recall(key: &str, work: &str, author: &str, translator: &str, opening: &str) -> Self {
+        Prompt {
+            text: format!(
+                "{RECALL_INSTRUCTIONS}\n\nwork: {work}\nauthor: {author}\ntranslator: {translator}\n\nopening: {}",
+                indented(opening)
+            ),
+            items: vec![key.to_string()],
+        }
     }
 
     /// 16 lowercase hex digits of FNV-1a 64 of the text: the name of the prompt

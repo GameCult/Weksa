@@ -11,7 +11,7 @@ use weksa::corpus::{CorpusItem, ModelFamily, NameSpan, Source, Turn};
 use weksa::entity::{Entity, EntityOrigin, LanguageForms, Pronunciation};
 use weksa::inventory::{proof_revision, seed};
 use weksa::packet::proof_packet;
-use weksa::run::{CycleOutcome, LowererReach, RoundOutcome, RunPaths, RunStores, cycle, round};
+use weksa::run::{CycleOutcome, LowererReach, RecallOutcome, RoundOutcome, RunPaths, RunStores, cycle, round};
 use weksa::score::ScoreInput;
 use weksa::{
     AnswerFiles, CorpusStore, EntityId, EntityStore, InventoryStore, OllamaEmbedder, PacketStore,
@@ -103,6 +103,11 @@ enum LoopCommand {
         #[arg(long, default_value = "http://127.0.0.1:11434")]
         ollama_url: String,
     },
+    /// Probe how closely a fresh model recites the run's public-domain items
+    /// from their openings (chrF of its completion against the item's second
+    /// half). Prompts and answers live in `<ROOT>/recall`; the command exits 3
+    /// until every prompt has an answer. A diagnostic, never a gate.
+    Recall { root: PathBuf },
     /// Run one edit-accept cycle of the run at ROOT. The stores are read only
     /// from the run's record. The editor's prompt, then the candidate round's
     /// encode prompts, then its lowering prompts are written in turn; the
@@ -772,6 +777,20 @@ fn main() -> Result<()> {
                     std::process::exit(3);
                 }
                 RoundOutcome::Recorded(r) => println!("{}", run.round_line(&r)),
+            }
+        }
+        Command::Loop(LoopCommand::Recall { root }) => {
+            let run = RunStores::open(&root)?;
+            let mut files = AnswerFiles::new(run.recall_dir(), run.record().model.clone());
+            match run.recall(&mut files)? {
+                RecallOutcome::Unanswered { prompts } => {
+                    for digest in &prompts {
+                        println!("unanswered {digest}");
+                    }
+                    println!("unanswered {} prompts", prompts.len());
+                    std::process::exit(3);
+                }
+                RecallOutcome::Read(reading) => println!("{}", reading.line()),
             }
         }
         Command::Loop(LoopCommand::Cycle { root, ollama_url }) => {
