@@ -11,10 +11,11 @@ use weksa::corpus::{CorpusItem, ModelFamily, NameSpan, Source, Turn};
 use weksa::entity::{Entity, EntityOrigin, LanguageForms, Pronunciation};
 use weksa::inventory::{proof_revision, seed};
 use weksa::packet::proof_packet;
+use weksa::run::{Outcome, RoundOutcome, RoundRecord, RunPaths, RunStores, round};
 use weksa::score::ScoreInput;
 use weksa::{
-    CorpusStore, EntityId, EntityStore, InventoryStore, OllamaEmbedder, PacketStore, Scorer,
-    SplitScheme, StoreError, lower, pronounce, validate,
+    AnswerFiles, CorpusStore, EntityId, EntityStore, InventoryStore, OllamaEmbedder, PacketStore,
+    Scorer, SplitScheme, StoreError, lower, pronounce, validate,
 };
 
 #[derive(Parser)]
@@ -66,10 +67,36 @@ enum Command {
     Score(ScoreArgs),
     /// Print the split of a corpus item.
     Split { item_key: String },
+    #[command(subcommand)]
+    Loop(LoopCommand),
     /// Write the published JSON Schemas.
     Schema {
         #[arg(long, default_value = "schemas/cultnet")]
         out: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum LoopCommand {
+    /// Pin the global --corpus, --inventory and --entities as a run at ROOT.
+    Open {
+        root: PathBuf,
+        #[arg(long)]
+        label: String,
+        /// The id of the model that answers prompts.
+        #[arg(long)]
+        answerer: String,
+        #[arg(long, default_value = "qwen3-embedding:0.6b")]
+        embed_model: String,
+    },
+    /// Run one round of the run at ROOT. The stores are read only from the
+    /// run's record: the global --corpus, --inventory and --entities are not
+    /// read. Prompts without answers are written to the round's directory and
+    /// the command exits 3; rerun after the `.answer` files exist.
+    Round {
+        root: PathBuf,
+        #[arg(long, default_value = "http://127.0.0.1:11434")]
+        ollama_url: String,
     },
 }
 
@@ -495,6 +522,35 @@ fn refused(e: StoreError) -> anyhow::Error {
     anyhow::anyhow!("{e}")
 }
 
+/// `none` for an absent mean.
+fn mean_text(value: Option<f64>, places: usize) -> String {
+    value.map_or("none".to_string(), |v| format!("{v:.places$}"))
+}
+
+/// The one line a recorded round prints.
+fn round_line(r: &RoundRecord) -> String {
+    let refused = r
+        .train()
+        .iter()
+        .filter(|row| matches!(row.outcome, Outcome::Refused(_)))
+        .count();
+    let (t, v, x) = (r.train_mean(), r.validation_mean(), r.validation_refused());
+    format!(
+        "round {} rev {} train n={} chrf={} meaning={} refused={refused} validation n={} chrf={} meaning={} refused parse={} admit={} lower={}",
+        r.n(),
+        r.inventory_rev(),
+        t.count,
+        mean_text(t.chrf, 2),
+        mean_text(t.meaning, 4),
+        v.count,
+        mean_text(v.chrf, 2),
+        mean_text(v.meaning, 4),
+        x.parse,
+        x.admit,
+        x.lower,
+    )
+}
+
 fn main() -> Result<()> {
     let cli = parse_cli();
     match cli.command {
@@ -691,6 +747,45 @@ fn main() -> Result<()> {
                 .get(&item_key)?
                 .context("no such item")?;
             println!("{}", split_text(&item));
+        }
+        Command::Loop(LoopCommand::Open {
+            root,
+            label,
+            answerer,
+            embed_model,
+        }) => {
+            let run = RunStores::create(
+                &root,
+                &label,
+                RunPaths {
+                    corpus: &cli.corpus,
+                    inventory: &cli.inventory,
+                    entities: &cli.entities,
+                },
+                &answerer,
+                &embed_model,
+            )?;
+            println!("opened run:{}", run.record().label);
+        }
+        Command::Loop(LoopCommand::Round { root, ollama_url }) => {
+            let unreadable = |_| anyhow::anyhow!("a store would not read");
+            let mut run = RunStores::open(&root)?;
+            let mut files = AnswerFiles::new(
+                run.next_round_dir().map_err(unreadable)?,
+                run.record().model.clone(),
+            );
+            let scorer = Scorer::new(OllamaEmbedder::new(&ollama_url, &run.record().embedder));
+            match round(&mut run, &mut files, &scorer)? {
+                RoundOutcome::Unanswered { prompts } => {
+                    for digest in &prompts {
+                        println!("unanswered {digest}");
+                    }
+                    let asked = run.offers().map_err(unreadable)?.len();
+                    println!("unanswered {} of {asked}", prompts.len());
+                    std::process::exit(3);
+                }
+                RoundOutcome::Recorded(r) => println!("{}", round_line(&r)),
+            }
         }
         Command::Schema { out } => {
             std::fs::create_dir_all(&out)?;
