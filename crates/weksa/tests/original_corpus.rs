@@ -99,7 +99,8 @@ fn the_recall_probe_covers_all_six_original_items_and_names_no_work() {
         },
         "m",
         "bag",
-        weksa::run::LowererReach::BriefedSubagent, ModelFamily::Unrecorded
+        weksa::run::LowererReach::BriefedSubagent,
+        ModelFamily::Unrecorded,
     )
     .unwrap();
     let mut model = Unrelated(vec![]);
@@ -121,10 +122,7 @@ impl weksa::model::ModelPort for Nope {
     fn model(&self) -> &str {
         "nope"
     }
-    fn answer(
-        &mut self,
-        _: &weksa::context::Prompt,
-    ) -> Result<String, weksa::model::PortError> {
+    fn answer(&mut self, _: &weksa::context::Prompt) -> Result<String, weksa::model::PortError> {
         Ok("not a draft".to_string())
     }
 }

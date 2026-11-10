@@ -48,7 +48,9 @@ fn a_run_pins_its_stores_and_refuses_drift() {
                 entities: &e,
             },
             model,
-            "bag", weksa::run::LowererReach::ToolLessRelay, ModelFamily::Unrecorded
+            "bag",
+            weksa::run::LowererReach::ToolLessRelay,
+            ModelFamily::Unrecorded,
         )
     };
 
@@ -149,7 +151,9 @@ fn a_run_works_on_its_own_copy_of_the_inventory() {
             entities: &e,
         },
         "fake-model",
-        "bag", weksa::run::LowererReach::ToolLessRelay, ModelFamily::Unrecorded
+        "bag",
+        weksa::run::LowererReach::ToolLessRelay,
+        ModelFamily::Unrecorded,
     )
     .unwrap();
 
@@ -224,7 +228,9 @@ fn create_refuses_a_root_that_holds_an_inventory_and_never_truncates_it() {
                 entities: &dao.entities,
             },
             "fake-model",
-            "bag", weksa::run::LowererReach::ToolLessRelay, ModelFamily::Unrecorded
+            "bag",
+            weksa::run::LowererReach::ToolLessRelay,
+            ModelFamily::Unrecorded,
         )
     };
 
@@ -269,7 +275,9 @@ fn a_create_that_fails_leaves_no_inventory_and_the_retry_succeeds() {
                 entities,
             },
             "fake-model",
-            "bag", weksa::run::LowererReach::ToolLessRelay, ModelFamily::Unrecorded
+            "bag",
+            weksa::run::LowererReach::ToolLessRelay,
+            ModelFamily::Unrecorded,
         )
     };
     // A directory opens for reading and fails mid-copy, after the destination exists.
@@ -382,14 +390,33 @@ fn a_store_changed_between_its_digest_and_its_open_is_drift() {
         entities: &e,
     };
     assert_eq!(
-        RunStores::create_between(&root, "t", paths(), "fake-model", "bag", weksa::run::LowererReach::ToolLessRelay, ModelFamily::Unrecorded, || more(&mut w)).err(),
+        RunStores::create_between(
+            &root,
+            "t",
+            paths(),
+            "fake-model",
+            "bag",
+            weksa::run::LowererReach::ToolLessRelay,
+            ModelFamily::Unrecorded,
+            || more(&mut w)
+        )
+        .err(),
         Some(RunError::Drift(DriftOf::Corpus))
     );
     assert!(!root.join("inventory.cc").exists());
     // Not the copy and not the lock the store's open left beside it.
     assert!(!root.join("inventory.cc.lock").exists());
     assert_eq!(RunStores::open(&root).err(), Some(RunError::NoRun));
-    RunStores::create(&root, "t", paths(), "fake-model", "bag", weksa::run::LowererReach::ToolLessRelay, ModelFamily::Unrecorded).unwrap();
+    RunStores::create(
+        &root,
+        "t",
+        paths(),
+        "fake-model",
+        "bag",
+        weksa::run::LowererReach::ToolLessRelay,
+        ModelFamily::Unrecorded,
+    )
+    .unwrap();
 }
 
 /// Runs `change` in the window between the pins and the open, at `open` and at
@@ -412,9 +439,16 @@ fn window(
         inventory: &i,
         entities: &e,
     };
-    let created = RunStores::create_between(&root, "t", paths, "fake-model", "bag", weksa::run::LowererReach::ToolLessRelay, ModelFamily::Unrecorded, || {
-        change(&mut w, &root)
-    })
+    let created = RunStores::create_between(
+        &root,
+        "t",
+        paths,
+        "fake-model",
+        "bag",
+        weksa::run::LowererReach::ToolLessRelay,
+        ModelFamily::Unrecorded,
+        || change(&mut w, &root),
+    )
     .err();
     let left = root.join("inventory.cc").exists() || root.join("inventory.cc.lock").exists();
     (opened, created, left, RunStores::open(&root).err())
@@ -829,7 +863,9 @@ fn dao_over(edit: impl FnOnce(&Path, &Path)) -> Dao {
             entities: &entities,
         },
         "fake-model",
-        "bag", weksa::run::LowererReach::ToolLessRelay, ModelFamily::Unrecorded
+        "bag",
+        weksa::run::LowererReach::ToolLessRelay,
+        ModelFamily::Unrecorded,
     )
     .unwrap();
     Dao {
@@ -1478,17 +1514,41 @@ fn errors_echo_no_input() {
         inventory: &missing,
         entities: &missing,
     };
-    let e = RunStores::create(&root, "ok", stores, "m", "bag", weksa::run::LowererReach::ToolLessRelay, ModelFamily::Unrecorded)
-        .err()
-        .unwrap();
+    let e = RunStores::create(
+        &root,
+        "ok",
+        stores,
+        "m",
+        "bag",
+        weksa::run::LowererReach::ToolLessRelay,
+        ModelFamily::Unrecorded,
+    )
+    .err()
+    .unwrap();
     note(&e, &e);
-    let e = RunStores::create(&root, &format!("{canary}!"), stores, "m", "bag", weksa::run::LowererReach::ToolLessRelay, ModelFamily::Unrecorded)
-        .err()
-        .unwrap();
+    let e = RunStores::create(
+        &root,
+        &format!("{canary}!"),
+        stores,
+        "m",
+        "bag",
+        weksa::run::LowererReach::ToolLessRelay,
+        ModelFamily::Unrecorded,
+    )
+    .err()
+    .unwrap();
     note(&e, &e);
-    let e = RunStores::create(&root, "ok", stores, &format!("{canary}\n"), "bag", weksa::run::LowererReach::ToolLessRelay, ModelFamily::Unrecorded)
-        .err()
-        .unwrap();
+    let e = RunStores::create(
+        &root,
+        "ok",
+        stores,
+        &format!("{canary}\n"),
+        "bag",
+        weksa::run::LowererReach::ToolLessRelay,
+        ModelFamily::Unrecorded,
+    )
+    .err()
+    .unwrap();
     note(&e, &e);
     let w = world();
     let run = run_over(w.dir.path());
@@ -1520,7 +1580,9 @@ fn errors_echo_no_input() {
             entities: &dao.entities,
         },
         "fake-model",
-        "bag", weksa::run::LowererReach::ToolLessRelay, ModelFamily::Unrecorded
+        "bag",
+        weksa::run::LowererReach::ToolLessRelay,
+        ModelFamily::Unrecorded,
     )
     .unwrap();
     let mut model = cycle_fake(&format!("{{\"{canary}\":1}}"));
@@ -2450,7 +2512,9 @@ fn a_changed_head_is_drift() {
             entities: &dao.entities,
         },
         "fake-model",
-        "bag", weksa::run::LowererReach::ToolLessRelay, ModelFamily::Unrecorded
+        "bag",
+        weksa::run::LowererReach::ToolLessRelay,
+        ModelFamily::Unrecorded,
     )
     .unwrap();
     assert_eq!(
@@ -2769,8 +2833,16 @@ fn a_summary_line_says_how_lowerings_were_answered() {
         inventory: &dao.inventory,
         entities: &dao.entities,
     };
-    RunStores::create(&root, "b", paths, "fake-model", "bag", LowererReach::BriefedSubagent, ModelFamily::Unrecorded)
-        .unwrap();
+    RunStores::create(
+        &root,
+        "b",
+        paths,
+        "fake-model",
+        "bag",
+        LowererReach::BriefedSubagent,
+        ModelFamily::Unrecorded,
+    )
+    .unwrap();
     let run = RunStores::open(&root).unwrap();
     assert_eq!(run.record().lowerer_reach, LowererReach::BriefedSubagent);
     assert_eq!(
@@ -3002,7 +3074,11 @@ fn parse_reasons_by_class() {
     for (code, answer) in cases {
         let (dao, r) = round_with_item_1(answer);
         assert_eq!(reasons(&r), [(code, 1)], "{code}");
-        assert_eq!(r.train()[0].outcome, Outcome::Refused(Stage::Parse), "{code}");
+        assert_eq!(
+            r.train()[0].outcome,
+            Outcome::Refused(Stage::Parse),
+            "{code}"
+        );
         let line = dao.run.round_line(&r);
         assert!(line.contains(&format!("parse-reasons={code}x1")), "{line}");
     }

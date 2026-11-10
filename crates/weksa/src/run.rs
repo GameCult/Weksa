@@ -587,7 +587,16 @@ impl RunStores {
         reach: LowererReach,
         answerer_family: ModelFamily,
     ) -> Result<Self, RunError> {
-        Self::create_between(root, label, paths, model, embedder, reach, answerer_family, || {})
+        Self::create_between(
+            root,
+            label,
+            paths,
+            model,
+            embedder,
+            reach,
+            answerer_family,
+            || {},
+        )
     }
 
     /// `create` with `between` run after the digests are taken and before the
@@ -2125,7 +2134,9 @@ mod tests {
                     entities: &entities,
                 },
                 "fake-model",
-                "bag", crate::run::LowererReach::ToolLessRelay, ModelFamily::Unrecorded
+                "bag",
+                crate::run::LowererReach::ToolLessRelay,
+                ModelFamily::Unrecorded,
             )
             .unwrap();
             let mut model = fake();
