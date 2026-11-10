@@ -6,6 +6,8 @@
 //! [`ENCODE_INSTRUCTIONS`], consts in this module, and nothing else: `mint` and
 //! `encode` take none, so no run-time text can become instructions.
 
+use std::marker::PhantomData;
+
 use crate::corpus::CorpusItem;
 use crate::packet::EntityId;
 use crate::split::{Checkpoint, Split, SplitScheme};
@@ -98,14 +100,42 @@ pub enum OfferRefusal {
 
 /// One item the encoder may be shown, with the entities a packet for it may
 /// cite. Built per item, so a call sees one item and nothing of its group.
-pub struct EncoderOffer {
+///
+/// An offer made under a [`Checkpoint`] borrows it, so it is dead before
+/// `TestReadings::at_checkpoint` can spend the checkpoint, and a Test offer is
+/// never encoded after (or beside) the reading. A round offer borrows nothing.
+///
+/// ```
+/// use weksa::context::{EncoderOffer, TrainItems};
+/// use weksa::split::Checkpoint;
+/// use weksa::{CorpusItem, score::TestReadings};
+/// fn f(mut c: Checkpoint, i: &CorpusItem, t: &TrainItems) {
+///     if let Ok(o) = EncoderOffer::for_checkpoint(i, &mut c) {
+///         let _ = weksa::context::Prompt::encode(&o, t);
+///     }
+///     let _ = TestReadings::at_checkpoint(c, &[], &[], &[]);
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use weksa::context::{EncoderOffer, TrainItems};
+/// use weksa::split::Checkpoint;
+/// use weksa::{CorpusItem, score::TestReadings};
+/// fn f(mut c: Checkpoint, i: &CorpusItem, t: &TrainItems) {
+///     let o = EncoderOffer::for_checkpoint(i, &mut c).unwrap();
+///     let _ = TestReadings::at_checkpoint(c, &[], &[], &[]);
+///     let _ = weksa::context::Prompt::encode(&o, t);
+/// }
+/// ```
+pub struct EncoderOffer<'cp> {
     item: CorpusItem,
     entities: Vec<EntityId>,
+    _checkpoint: PhantomData<&'cp mut Checkpoint>,
 }
 
-impl EncoderOffer {
+impl<'cp> EncoderOffer<'cp> {
     /// A round offers Train and Validation items.
-    pub fn for_round(item: &CorpusItem) -> Result<Self, OfferRefusal> {
+    pub fn for_round(item: &CorpusItem) -> Result<EncoderOffer<'static>, OfferRefusal> {
         match Self::gate(item)? {
             Split::Test => Err(OfferRefusal::TestBeforeCheckpoint),
             _ => Ok(Self::of(item)),
@@ -117,7 +147,7 @@ impl EncoderOffer {
     /// item records no key.
     pub fn for_checkpoint(
         item: &CorpusItem,
-        checkpoint: &mut Checkpoint,
+        checkpoint: &'cp mut Checkpoint,
     ) -> Result<Self, OfferRefusal> {
         Self::gate(item)?;
         if !checkpoint.first_offer(&item.id) {
@@ -133,13 +163,14 @@ impl EncoderOffer {
         SplitScheme::V1.live(item).ok_or(OfferRefusal::NoSplit)
     }
 
-    fn of(item: &CorpusItem) -> Self {
+    fn of<'a>(item: &CorpusItem) -> EncoderOffer<'a> {
         let mut entities: Vec<EntityId> = item.cited_entities().cloned().collect();
         entities.sort();
         entities.dedup();
-        Self {
+        EncoderOffer {
             item: item.clone(),
             entities,
+            _checkpoint: PhantomData,
         }
     }
 

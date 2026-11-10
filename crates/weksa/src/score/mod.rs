@@ -158,7 +158,7 @@ pub fn aggregate(scored: &[(&CorpusItem, ItemScore)]) -> Aggregate {
 /// The Test split's readings, scalars only: no item key, no minted string, no
 /// pair. The checkpoint decision (convergence-test) needs numbers; a key beside
 /// a minted string is the handle an edit step would act on. The only producer
-/// is `at_checkpoint`, which consumes a `Checkpoint`, which only the lib can make.
+/// is `at_checkpoint`, which consumes a `Checkpoint`; only the lib can make one.
 ///
 /// ```
 /// use weksa::score::TestReadings;

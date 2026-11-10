@@ -1,7 +1,11 @@
 //! The train/validation/test split is derived from an item's group and nothing
 //! else. No stored assignment exists, so no writer can reassign one. An item is
-//! read in its live split; Test is read only under a Checkpoint, and only the
-//! lib can make one (convergence-freeze adds the door).
+//! read in its live split. The round path (round records, prompts, `aggregate`,
+//! `leak_diagnostic`) carries no Test reading; a typed `TestReadings` and a Test
+//! `EncoderOffer` need a Checkpoint, and only the lib can make one
+//! (convergence-freeze adds the door). Operator tools (`weksa corpus dump`,
+//! `weksa score`, `CorpusStore`) read corpus text of any split; that is not
+//! gated here.
 
 use std::collections::BTreeSet;
 
@@ -66,14 +70,18 @@ impl SplitScheme {
     }
 }
 
-/// Permission to read Test once. Only the weksa lib can make one: there is no
-/// public constructor, so nothing outside it (the binary, a driver crate, a
-/// doctest, an integration test) can read Test. The one door is added by
+/// Permission to read Test once, as typed `TestReadings` or as Test
+/// `EncoderOffer`s. Only the weksa lib can make one: there is no public
+/// constructor, so no code outside it can obtain those. This is not a seal on
+/// corpus text: operator tools and `CorpusStore` can read any item, and the
+/// guarded invariant is that the round path holds no Test reading. The one door
+/// is added by
 /// convergence-freeze, which builds a `Checkpoint` from the convergence window
 /// over the run's persisted round records (convergence-test).
 /// `TestReadings::at_checkpoint` consumes it, so one `Checkpoint` buys one Test
 /// reading. One `Checkpoint` also offers each item at most once
-/// (`EncoderOffer::for_checkpoint`).
+/// (`EncoderOffer::for_checkpoint`), and an offer borrows its Checkpoint, so it
+/// cannot outlive the reading that spends it.
 ///
 /// ```
 /// fn f(c: &weksa::split::Checkpoint) -> u32 { c.round() }
@@ -83,6 +91,13 @@ impl SplitScheme {
 ///
 /// ```compile_fail
 /// let _ = weksa::split::Checkpoint::declare(1);
+/// ```
+///
+/// The test constructor is not exported (its name today; the door scan in
+/// `tests/checkpoint_door.rs` pins the shape under any name):
+///
+/// ```compile_fail
+/// let _ = weksa::split::Checkpoint::for_test(1);
 /// ```
 ///
 /// ```compile_fail
