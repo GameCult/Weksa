@@ -686,3 +686,32 @@ mod lowering {
         }
     }
 }
+
+/// First real rounds: five of six encoders wrote bare integers (`"concept": 7`)
+/// where the inventory lists `concept:7`, and the draft reader refused them.
+/// The prompt says the form outright, and the inventory lines it points to
+/// are spelled in that form.
+#[test]
+fn the_encode_prompt_states_the_id_form_the_inventory_lines_use() {
+    assert!(ENCODE.contains("family prefix included: concept:7, never 7"));
+    let w = world();
+    let run = run_over(w.dir.path());
+    let inv = run.inventory().inventory().unwrap();
+    let t = run.train().unwrap();
+    let offer = run.offer("item:nibu:1").unwrap().unwrap();
+    let text = Prompt::encode(&offer, &t, &inv, 4).text().to_string();
+    let listed: Vec<&str> = text
+        .split_once("inventory rev:4\n")
+        .unwrap()
+        .1
+        .split("\n\n")
+        .next()
+        .unwrap()
+        .lines()
+        .collect();
+    assert!(!listed.is_empty(), "the prompt lists entries");
+    for line in listed {
+        let id = line.split(": ").next().unwrap();
+        assert!(id.contains(':'), "an inventory line spells its id in full: {line}");
+    }
+}

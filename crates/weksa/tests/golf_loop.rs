@@ -2988,7 +2988,7 @@ fn reciter(dao: &Dao, answer: fn(&str) -> String) -> Reciter {
 }
 
 #[test]
-fn a_recall_probe_asks_for_the_second_half_of_each_live_public_domain_item_and_never_shows_it() {
+fn a_recall_probe_asks_for_the_second_half_of_each_live_item_and_never_shows_it() {
     use weksa::run::RecallOutcome;
     let dao = dao();
     let mut perfect = reciter(&dao, second_half);
@@ -3047,13 +3047,13 @@ fn the_published_round_schema_does_not_require_a_field_older_records_lack() {
 }
 
 #[test]
-fn a_recall_mean_is_over_every_probe_an_unreadable_answer_counts_0_and_only_live_public_domain_items_are_probed() {
+fn a_recall_mean_is_over_every_probe_an_unreadable_answer_counts_0_and_a_withdrawn_item_is_not_probed() {
     use weksa::corpus::Source;
     use weksa::run::RecallOutcome;
     let dao = dao_over(|corpus, entities| {
         let entities = weksa::EntityStore::open(entities).unwrap();
         let mut store = weksa::CorpusStore::open(corpus).unwrap();
-        // The same words under other sources: not public domain, not probed.
+        // Another source: probed too, but it names no work.
         let mut written = store.get("item:daodejing:2").unwrap().unwrap();
         written.id = "item:written:1".into();
         written.text = "A line of some other source with words enough to split.".into();
@@ -3074,11 +3074,17 @@ fn a_recall_mean_is_over_every_probe_an_unreadable_answer_counts_0_and_only_live
     let full = both(&dao, None);
     assert_eq!(
         (full.n, full.answered),
-        (2, 2),
-        "neither the written item nor the withdrawn one is probed"
+        (3, 3),
+        "the written item is probed, the withdrawn one is not"
     );
-    // One of two unreadable: the mean falls to a half.
+    // One of three unreadable: the mean falls to two thirds.
     let part = both(&dao, Some("Heaven is long-enduring"));
-    assert_eq!((part.n, part.answered), (2, 1));
-    assert!((part.chrf - full.chrf / 2.0).abs() < 1e-9, "{}", part.chrf);
+    assert_eq!((part.n, part.answered), (3, 2));
+    assert!((part.chrf - full.chrf * 2.0 / 3.0).abs() < 1e-9, "{}", part.chrf);
+    // A public-domain prompt names its work; any other says it is not published.
+    let mut m = reciter(&dao, second_half);
+    dao.run.recall(&mut m).unwrap();
+    let named = m.seen.iter().filter(|t| t.contains("translator: James Legge")).count();
+    let unnamed = m.seen.iter().filter(|t| t.contains("work: not published")).count();
+    assert_eq!((named, unnamed), (2, 1));
 }

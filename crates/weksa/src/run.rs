@@ -803,13 +803,13 @@ pub enum RoundOutcome {
 }
 
 /// A recall reading (`lowering-recall-diagnostic`): how closely a fresh model
-/// completes each public-domain item from its opening alone, chrF against the
+/// completes each live Train and Validation item from its opening alone, chrF against the
 /// item's own second half. Recorded nowhere: the answers stay in `<root>/recall`.
 /// It is never a gate; a high reading says a round's scores on these items are
 /// recitation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RecallReading {
-    /// Public-domain items probed, Train and Validation.
+    /// Items probed, Train and Validation.
     pub n: u32,
     /// Items whose completion was a usable answer; a refused one counts 0.
     pub answered: u32,
@@ -819,7 +819,7 @@ pub struct RecallReading {
 impl RecallReading {
     pub fn line(&self) -> String {
         format!(
-            "recall n={} answered={} chrf={:.2} (public-domain items, completion from the opening; a high chrf means round scores on them are recitation)",
+            "recall n={} answered={} chrf={:.2} (completion from the opening; unrelated English already scores chrf 14 to 20, so a reading near that floor is no recitation and one well above it is)",
             self.n, self.answered, self.chrf
         )
     }
@@ -843,26 +843,27 @@ fn recall_split(text: &str) -> Option<(String, String)> {
 }
 
 impl RunStores {
-    /// Probes every live public-domain Train and Validation item of the pinned
-    /// corpus once, through `model`.
+    /// Probes every live Train and Validation item of the pinned corpus once,
+    /// through `model`. A public-domain item names its work, author and
+    /// translator; any other says `work: not published`.
     pub fn recall(&self, model: &mut dyn ModelPort) -> Result<RecallOutcome, RunError> {
         let store = |_| RunError::Store;
         let mut probes = Vec::new();
         for item in self.corpus.all().map_err(store)? {
-            let Source::PublicDomain {
-                work,
-                author,
-                translator,
-                ..
-            } = &item.source
-            else {
-                continue;
+            let provenance = match &item.source {
+                Source::PublicDomain {
+                    work,
+                    author,
+                    translator,
+                    ..
+                } => format!("work: {work}\nauthor: {author}\ntranslator: {translator}"),
+                _ => "work: not published".to_string(),
             };
             if EncoderOffer::for_round(&item).is_err() {
                 continue;
             }
             if let Some((opening, rest)) = recall_split(&item.text) {
-                let prompt = Prompt::recall(&item.id, work, author, translator, &opening);
+                let prompt = Prompt::recall(&item.id, &provenance, &opening);
                 probes.push((prompt, rest));
             }
         }

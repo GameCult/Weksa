@@ -103,8 +103,8 @@ enum LoopCommand {
         #[arg(long, default_value = "http://127.0.0.1:11434")]
         ollama_url: String,
     },
-    /// Probe how closely a fresh model recites the run's public-domain items
-    /// from their openings (chrF of its completion against the item's second
+    /// Probe how closely a fresh model recites the run's items from their
+    /// openings (chrF of its completion against the item's second
     /// half). Prompts and answers live in `<ROOT>/recall`; the command exits 3
     /// until every prompt has an answer. A diagnostic, never a gate.
     Recall { root: PathBuf },

@@ -59,7 +59,7 @@ Fields:
 - predications: a list of {id, concept, frame, roles, features}; roles is a list of {role, filler}, filler a node id.
 - relations: a list of {relation, from, to, features}.
 - stance: {features}; the speaker's felt affect and restraint, never the affect the line displays.
-Node ids are n1, n2, and so on, one per referent and predication. Every other id comes from the inventory listed below and must be live at its revision. An entity comes only from the entities line.
+Node ids are n1, n2, and so on, one per referent and predication. Every other id comes from the inventory listed below and must be live at its revision. Write each id in full, exactly as the inventory lines spell it, family prefix included: concept:7, never 7. An entity comes only from the entities line.
 A feature is {feature, value}; value is {\"Grade\": 0 to 1000}, {\"Option\": label} or {\"Flag\": true or false}, as the inventory lists the feature's kind.";
 
 /// The instructions a lowering prompt starts with: the lowerer's whole brief.
@@ -71,10 +71,10 @@ A referent with an entity is named by one of that entity's forms on the entities
 Answer with one JSON object and nothing else: {\"text\": \"...\"}. No code fence, no commentary.";
 
 /// The instructions of a recall probe (`lowering-recall-diagnostic`): a
-/// completion of a public-domain passage from its opening, asked of a model
-/// that has no packet and no inventory. It measures recitation, not lowering.
+/// completion of a passage from its opening, asked of a model that has no
+/// packet and no inventory. It measures recitation, not lowering.
 pub const RECALL_INSTRUCTIONS: &str = "\
-Below is the opening of a passage from a published public-domain translation. Continue it exactly as that translation words it, from memory, until the passage ends. If you do not remember it, give your best guess in the same voice.
+Below is the opening of a passage, with what is known of where it comes from. Continue it exactly as its source words it, from memory, until the passage ends. If you do not remember it, give your best guess in the same voice.
 Answer with one JSON object and nothing else: {\"text\": \"...\"}, the continuation only, not the opening. No code fence, no commentary.";
 
 /// The live Train items of a corpus, in key order. The only input minting
@@ -547,13 +547,13 @@ impl Prompt {
         })
     }
 
-    /// A recall probe: the work, author and translator of a public-domain item
-    /// and the `opening` of its text, nothing else. Only `RunStores::recall`
-    /// builds one.
-    pub(crate) fn recall(key: &str, work: &str, author: &str, translator: &str, opening: &str) -> Self {
+    /// A recall probe: `provenance` (header lines saying where the item is
+    /// published, or that it is not) and the `opening` of its text, nothing
+    /// else. Only `RunStores::recall` builds one.
+    pub(crate) fn recall(key: &str, provenance: &str, opening: &str) -> Self {
         Prompt {
             text: format!(
-                "{RECALL_INSTRUCTIONS}\n\nwork: {work}\nauthor: {author}\ntranslator: {translator}\n\nopening: {}",
+                "{RECALL_INSTRUCTIONS}\n\n{provenance}\n\nopening: {}",
                 indented(opening)
             ),
             items: vec![key.to_string()],
