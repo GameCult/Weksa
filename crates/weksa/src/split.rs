@@ -25,22 +25,28 @@ pub enum SplitScheme {
 }
 
 pub const fn fnv1a64(bytes: &[u8]) -> u64 {
-    fnv1a64_of(&[bytes])
+    fnv1a64_fold(0xcbf2_9ce4_8422_2325, bytes)
 }
 
-/// FNV-1a 64 of the parts laid end to end.
+/// FNV-1a 64 of the parts, each preceded by its length as eight little-endian
+/// bytes, so no two different splits of the same bytes share a digest.
 pub const fn fnv1a64_of(parts: &[&[u8]]) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     let mut p = 0;
     while p < parts.len() {
-        let bytes = parts[p];
-        let mut i = 0;
-        while i < bytes.len() {
-            h ^= bytes[i] as u64;
-            h = h.wrapping_mul(0x0000_0100_0000_01b3);
-            i += 1;
-        }
+        h = fnv1a64_fold(h, &(parts[p].len() as u64).to_le_bytes());
+        h = fnv1a64_fold(h, parts[p]);
         p += 1;
+    }
+    h
+}
+
+const fn fnv1a64_fold(mut h: u64, bytes: &[u8]) -> u64 {
+    let mut i = 0;
+    while i < bytes.len() {
+        h ^= bytes[i] as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        i += 1;
     }
     h
 }

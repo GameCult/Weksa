@@ -40,8 +40,10 @@ use crate::store::{CorpusStore, EntityStore, InventoryStore, PacketStore, open_c
 
 /// The digest of the prompt builder's source: `context.rs`, then `split.rs`,
 /// whose scheme and digest function decide which lines the prompt holds as
-/// Train and name every prompt. Any edit to either, comments included, ends a
-/// run; code outside those files is not covered.
+/// Train and name every prompt. Each file enters the digest behind its length,
+/// so the pair cannot be re-cut into another pair with the same digest. Any
+/// edit to either, comments included, ends a run; code outside those files is
+/// not covered.
 pub const PROMPT_SOURCE_DIGEST: u64 =
     fnv1a64_of(&[include_bytes!("context.rs"), include_bytes!("split.rs")]);
 
@@ -349,6 +351,9 @@ impl fmt::Display for RunError {
             RunError::Exists => f.write_str("the root already holds a run"),
             RunError::NoRun => f.write_str("the root holds no run"),
             RunError::Malformed(what) => write!(f, "malformed {what}"),
+            RunError::Drift(DriftOf::Prompts) => f.write_str(
+                "drift in Prompts (the prompt source digest covers context.rs and split.rs)",
+            ),
             RunError::Drift(of) => write!(f, "drift in {of:?}"),
             RunError::NoInventory => f.write_str("the inventory holds no revision"),
             RunError::Io(kind) => write!(f, "io error {kind:?}"),
@@ -517,7 +522,7 @@ impl RunStores {
         let head = root.join(INVENTORY_FILE);
         copy_new(Path::new(&record.inventory), &head)?;
         // The copy is ours from here: any later failure takes it away again, or
-        // it would refuse every retry.
+        // it would refuse every retry, and so with the lock the open left beside it.
         let pinned = (|| {
             let record = RunRecord {
                 corpus_digest: file_digest(&record.corpus).ok_or(RunError::Store)?,
@@ -537,7 +542,7 @@ impl RunStores {
             Ok(run)
         })();
         if pinned.is_err() {
-            let _ = std::fs::remove_file(&head);
+            discard_inventory(root);
         }
         pinned
     }
@@ -1803,6 +1808,14 @@ mod tests {
                 "write {fail_at} refused"
             );
             assert_eq!(out.is_ok(), fail_at == 2);
+            if fail_at == 2 {
+                // The fixture accepts: a drifted literal that made it reject
+                // would write one round and one decision all the same.
+                match &out {
+                    Ok(CycleOutcome::Decided(d)) => assert_eq!(d.verdict(), Verdict::Accepted),
+                    _ => panic!("the second write was not a decided cycle"),
+                }
+            }
         }
     }
 }
