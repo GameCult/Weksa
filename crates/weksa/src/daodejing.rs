@@ -101,6 +101,14 @@ fn hex8(ascii: &str) -> String {
     ascii.bytes().map(|b| format!("{b:02x}")).collect()
 }
 
+/// `(node, concept gloss, frame gloss, [(role id, filler node)])`.
+type PredicationSpec = (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static [(&'static str, &'static str)],
+);
+
 struct Spec {
     /// Eight ASCII characters; the packet id is their hex.
     id: &'static str,
@@ -108,13 +116,7 @@ struct Spec {
     speech_act: &'static str,
     /// `(node, referent kind id, concept gloss)`.
     referents: &'static [(&'static str, &'static str, &'static str)],
-    /// `(node, concept gloss, frame gloss, [(role id, filler node)])`.
-    predications: &'static [(
-        &'static str,
-        &'static str,
-        &'static str,
-        &'static [(&'static str, &'static str)],
-    )],
+    predications: &'static [PredicationSpec],
     /// The author's reading of the speaker's felt state: `(feature gloss, permille)`.
     stance: &'static [(&'static str, u16)],
     note: &'static str,

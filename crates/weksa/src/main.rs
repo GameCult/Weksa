@@ -147,7 +147,7 @@ enum InventoryCommand {
 #[derive(Subcommand)]
 enum EntityCommand {
     /// Admit an entity, or append forms to a stored one.
-    Put(PutArgs),
+    Put(Box<PutArgs>),
     /// Text projection of the entity store for review; not a store.
     Dump,
 }
