@@ -746,7 +746,11 @@ fn refusal_stages_are_counted() {
 
     // Validation items 2 and 3 score a and b when both lower (the Dao bed:
     // 82.12 and 74.99). Refusing one halves the mean; it cannot raise it.
-    let full = run(good_answers().map(|(_, a)| a).try_into().unwrap());
+    let full = run([
+        good_answers()[0].1.clone(),
+        good_answers()[1].1.clone(),
+        good_answers()[2].1.clone(),
+    ]);
     let b_only = run([
         edited(1, unknown_concept),
         junk.clone(),
