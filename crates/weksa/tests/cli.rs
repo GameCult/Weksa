@@ -1696,11 +1696,27 @@ fn loop_ablate_waits_then_prints_one_line_per_split() {
     let second = ablate();
     assert!(second.status.success(), "{}", out(&second));
     let text = out(&second);
-    let lines: Vec<&str> = text.lines().collect();
-    assert_eq!(lines.len(), 2, "{text}");
-    assert!(lines[0].starts_with("train ablation n=1 "), "{text}");
-    assert!(lines[1].starts_with("validation ablation n=2 "), "{text}");
+    assert_eq!(
+        text,
+        "train ablation n=1 unusable=0 replay chrf=100.00 meaning=1.000 | drop n=1 chrf=100.00 meaning=1.000 moved=0 ref_gain_chrf=0.00 ref_gain_meaning=0.000 | permute n=0 chrf=none meaning=none moved=0 ref_gain_chrf=none ref_gain_meaning=none\nvalidation ablation n=2 unusable=0 replay chrf=100.00 meaning=1.000 | drop n=2 chrf=100.00 meaning=1.000 moved=0 ref_gain_chrf=0.00 ref_gain_meaning=0.000 | permute n=2 chrf=100.00 meaning=1.000 moved=0 ref_gain_chrf=0.00 ref_gain_meaning=0.000\n"
+    );
     for leaked in ["item:", "packet:", "highest excellence", "canaryroot"] {
         assert!(!text.contains(leaked), "{text}");
     }
+}
+
+#[test]
+fn loop_ablate_without_the_rounds_answers_says_so() {
+    let d = tempfile::tempdir().unwrap();
+    open_dao_run(d.path());
+    let url = fake_embedder();
+    let root = d.path().join("canaryroot");
+    let mut run = weksa::run::RunStores::open(&root).unwrap();
+    let scorer = weksa::Scorer::new(weksa::OllamaEmbedder::new(&url, &run.record().embedder));
+    weksa::run::round(&mut run, &mut DaoModel, &scorer).unwrap();
+    let o = weksa(d.path(), &["loop", "ablate", "canaryroot", "--round", "1", "--ollama-url", &url]);
+    assert!(!o.status.success());
+    let text = out(&o);
+    assert!(text.contains("holds no answer") && text.contains("head inventory"), "{text}");
+    assert!(!text.contains("would not read"), "{text}");
 }

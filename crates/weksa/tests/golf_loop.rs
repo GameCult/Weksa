@@ -3773,12 +3773,12 @@ fn a_lowerer_blind_to_stance_reads_no_movement_and_one_that_reads_it_does() {
     for (split, r) in one(blind) {
         assert_eq!(r.unusable, 0);
         assert_eq!((r.drop.moved, r.permute.moved), (0, 0), "{split:?}: {}", r.line());
-        assert!((r.replay.chrf - 100.0).abs() < 1e-9);
-        assert!((r.drop.chrf - r.replay.chrf).abs() < 1e-9);
+        assert!((r.replay.chrf.unwrap() - 100.0).abs() < 1e-9);
+        assert!((r.drop.chrf.unwrap() - r.replay.chrf.unwrap()).abs() < 1e-9);
         if r.permute.n > 0 {
-            assert!((r.permute.chrf - r.replay.chrf).abs() < 1e-9);
+            assert!((r.permute.chrf.unwrap() - r.replay.chrf.unwrap()).abs() < 1e-9);
         }
-        assert_eq!(r.drop.ref_gain_chrf, 0.0);
+        assert_eq!(r.drop.ref_gain_chrf, Some(0.0));
     }
     let reading = one(reader);
     let (train, validation) = (&reading[0].1, &reading[1].1);
@@ -3788,9 +3788,23 @@ fn a_lowerer_blind_to_stance_reads_no_movement_and_one_that_reads_it_does() {
     assert_eq!((train.permute.n, train.permute.moved), (0, 0));
     assert_eq!((validation.drop.n, validation.drop.moved), (3, 3));
     assert_eq!((validation.permute.n, validation.permute.moved), (3, 3));
-    assert!((validation.replay.chrf - 100.0).abs() < 1e-9);
-    assert!(validation.drop.chrf < validation.replay.chrf);
-    assert!(validation.permute.chrf < validation.replay.chrf);
+    // A lone Train item has no permute: no measurement, not total disagreement.
+    assert_eq!(
+        train.permute,
+        weksa::run::VariantReading::default(),
+        "{}",
+        train.line()
+    );
+    assert!(
+        train.line().contains(
+            "| permute n=0 chrf=none meaning=none moved=0 ref_gain_chrf=none ref_gain_meaning=none"
+        ),
+        "{}",
+        train.line()
+    );
+    assert!((validation.replay.chrf.unwrap() - 100.0).abs() < 1e-9);
+    assert!(validation.drop.chrf.unwrap() < validation.replay.chrf.unwrap());
+    assert!(validation.permute.chrf.unwrap() < validation.replay.chrf.unwrap());
 }
 
 #[test]
@@ -3801,15 +3815,15 @@ fn the_item_s_own_stance_helps_fidelity_only_for_a_lowerer_that_uses_it() {
         read(ablate(&dao, &mut rec, &mut model).unwrap())
     };
     for (split, r) in one(helped) {
-        assert!(r.drop.ref_gain_chrf > 10.0, "{split:?}: {}", r.line());
-        assert!(r.drop.ref_gain_meaning > 0.0, "{split:?}: {}", r.line());
+        assert!(r.drop.ref_gain_chrf.unwrap() > 10.0, "{split:?}: {}", r.line());
+        assert!(r.drop.ref_gain_meaning.unwrap() > 0.0, "{split:?}: {}", r.line());
         if r.permute.n > 0 {
-            assert!(r.permute.ref_gain_chrf > 10.0, "{split:?}: {}", r.line());
+            assert!(r.permute.ref_gain_chrf.unwrap() > 10.0, "{split:?}: {}", r.line());
         }
         assert_eq!(r.drop.moved, r.drop.n);
     }
     for (split, r) in one(blind) {
-        assert_eq!((r.drop.ref_gain_chrf, r.drop.ref_gain_meaning), (0.0, 0.0), "{split:?}");
+        assert_eq!((r.drop.ref_gain_chrf, r.drop.ref_gain_meaning), (Some(0.0), Some(0.0)), "{split:?}");
     }
 }
 
@@ -3962,10 +3976,14 @@ fn a_stance_ablation_refuses_a_cycle_round_and_missing_round_answers() {
         dao.run.stance_ablation(2, &mut rec, &mut model, &Scorer::new(Bag)),
         Err(RunError::Malformed("round"))
     ));
-    assert!(matches!(
-        ablate(&dao, &mut rec, &mut model),
-        Err(RunError::Store)
-    ));
+    let Err(missing) = ablate(&dao, &mut rec, &mut model) else {
+        panic!("a missing round answer is refused")
+    };
+    assert!(matches!(missing, RunError::Unrecorded));
+    // It says what happened, not that a store would not read.
+    let said = missing.to_string();
+    assert!(said.contains("holds no answer") && said.contains("digest") && said.contains("head inventory"), "{said}");
+    assert!(!said.contains("would not read"), "{said}");
     assert!(
         std::fs::read_dir(dao.root.join("round-1"))
             .unwrap()
@@ -4007,4 +4025,87 @@ fn a_stance_ablation_refuses_a_cycle_round() {
         Err(RunError::Malformed("round"))
     ));
     assert!(model.seen.is_empty() && rec.seen.is_empty());
+}
+
+/// The real sentence for the item's own stance, an empty text (not a usable
+/// lowering) for any other.
+fn mute_unless_own(key: &str, text: &str) -> String {
+    let said = helped(key, text);
+    if said == "zzz qqq xxx" { String::new() } else { said }
+}
+
+#[test]
+fn unusable_variant_answers_are_counted_and_read_as_none_not_zero() {
+    let (dao, _) = recorded_dao(|_| {});
+    let (mut rec, mut model) = (Lowerer::new(mute_unless_own), Lowerer::new(mute_unless_own));
+    let reading = read(ablate(&dao, &mut rec, &mut model).unwrap());
+    let (train, validation) = (&reading[0].1, &reading[1].1);
+    // Every variant answer is unusable: Train has one drop, Validation three
+    // drops and three permutes. The items themselves (replay) still read.
+    assert_eq!((train.n, train.unusable), (1, 1));
+    assert_eq!((validation.n, validation.unusable), (3, 6));
+    for r in [train, validation] {
+        assert!((r.replay.chrf.unwrap() - 100.0).abs() < 1e-9);
+        assert_eq!(r.drop.n, 0);
+        assert_eq!(r.permute.n, 0);
+        assert_eq!(r.drop, weksa::run::VariantReading::default());
+        assert_eq!(r.permute, weksa::run::VariantReading::default());
+    }
+    assert_eq!(
+        train.line(),
+        "ablation n=1 unusable=1 replay chrf=100.00 meaning=1.000 | drop n=0 chrf=none meaning=none moved=0 ref_gain_chrf=none ref_gain_meaning=none | permute n=0 chrf=none meaning=none moved=0 ref_gain_chrf=none ref_gain_meaning=none"
+    );
+}
+
+#[test]
+fn the_line_names_each_variant_with_its_own_n_and_the_splits_n() {
+    use weksa::run::{AblationReading, Agreement, VariantReading};
+    let reading = AblationReading {
+        n: 7,
+        unusable: 2,
+        replay: Agreement { chrf: Some(91.5), meaning: Some(0.9) },
+        drop: VariantReading {
+            n: 5,
+            chrf: Some(80.25),
+            meaning: Some(0.8),
+            moved: 4,
+            ref_gain_chrf: Some(3.5),
+            ref_gain_meaning: Some(-0.125),
+        },
+        permute: VariantReading {
+            n: 3,
+            chrf: Some(70.0),
+            meaning: None,
+            moved: 1,
+            ref_gain_chrf: None,
+            ref_gain_meaning: Some(0.5),
+        },
+    };
+    assert_eq!(
+        reading.line(),
+        "ablation n=7 unusable=2 replay chrf=91.50 meaning=0.900 | drop n=5 chrf=80.25 meaning=0.800 moved=4 ref_gain_chrf=3.50 ref_gain_meaning=-0.125 | permute n=3 chrf=70.00 meaning=none moved=1 ref_gain_chrf=none ref_gain_meaning=0.500"
+    );
+}
+
+fn nothing_usable(_: &str, _: &str) -> String {
+    String::new()
+}
+
+#[test]
+fn a_split_where_no_replay_is_usable_reads_none_throughout() {
+    let (dao, _) = recorded_dao(|_| {});
+    let (mut rec, mut model) = (Lowerer::new(reader), Lowerer::new(nothing_usable));
+    let reading = read(ablate(&dao, &mut rec, &mut model).unwrap());
+    // Train: the item and its drop; Validation: three items, three drops, three permutes.
+    assert_eq!((reading[0].1.n, reading[0].1.unusable), (0, 2));
+    assert_eq!((reading[1].1.n, reading[1].1.unusable), (0, 9));
+    for (_, r) in &reading {
+        assert_eq!(r.replay, weksa::run::Agreement::default());
+        assert_eq!(r.drop, weksa::run::VariantReading::default());
+        assert_eq!(r.permute, weksa::run::VariantReading::default());
+    }
+    assert_eq!(
+        reading[0].1.line(),
+        "ablation n=0 unusable=2 replay chrf=none meaning=none | drop n=0 chrf=none meaning=none moved=0 ref_gain_chrf=none ref_gain_meaning=none | permute n=0 chrf=none meaning=none moved=0 ref_gain_chrf=none ref_gain_meaning=none"
+    );
 }

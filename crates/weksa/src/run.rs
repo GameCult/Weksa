@@ -455,6 +455,9 @@ pub enum RunError {
     NoFloor,
     /// A round has no Validation reading.
     NoValidation,
+    /// The round holds no answer to a lowering prompt the ablation rebuilt: the
+    /// prompt's digest drifted or the head inventory moved since the round.
+    Unrecorded,
 }
 
 impl fmt::Display for RunError {
@@ -470,6 +473,9 @@ impl fmt::Display for RunError {
             RunError::NoInventory => f.write_str("the inventory holds no revision"),
             RunError::Io(kind) => write!(f, "io error {kind:?}"),
             RunError::Store => f.write_str("a store would not read or write"),
+            RunError::Unrecorded => f.write_str(
+                "the round holds no answer to a lowering prompt rebuilt now: the prompt digest drifted or the head inventory moved since the round",
+            ),
             RunError::Embed => f.write_str("the embedder failed"),
             RunError::NoFloor => f.write_str("the run has no noise floor: record two rounds first"),
             RunError::NoValidation => f.write_str("a reading has no validation item"),
@@ -969,10 +975,12 @@ pub struct AblationReading {
     pub permute: VariantReading,
 }
 
+/// Means over an empty set are `None`, printed `none`: no measurement, never
+/// a zero.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Agreement {
-    pub chrf: f64,
-    pub meaning: f64,
+    pub chrf: Option<f64>,
+    pub meaning: Option<f64>,
 }
 
 /// One variant's reading: agreement with the recorded lowering, pairs whose
@@ -981,27 +989,36 @@ pub struct Agreement {
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct VariantReading {
     pub n: u32,
-    pub chrf: f64,
-    pub meaning: f64,
+    pub chrf: Option<f64>,
+    pub meaning: Option<f64>,
     pub moved: u32,
-    pub ref_gain_chrf: f64,
-    pub ref_gain_meaning: f64,
+    pub ref_gain_chrf: Option<f64>,
+    pub ref_gain_meaning: Option<f64>,
+}
+
+fn show(x: Option<f64>, places: usize) -> String {
+    x.map_or("none".to_string(), |x| format!("{x:.places$}"))
 }
 
 impl AblationReading {
     pub fn line(&self) -> String {
         let variant = |name: &str, v: &VariantReading| {
             format!(
-                "{name} n={} chrf={:.2} meaning={:.3} moved={} ref_gain_chrf={:.2} ref_gain_meaning={:.3}",
-                v.n, v.chrf, v.meaning, v.moved, v.ref_gain_chrf, v.ref_gain_meaning
+                "{name} n={} chrf={} meaning={} moved={} ref_gain_chrf={} ref_gain_meaning={}",
+                v.n,
+                show(v.chrf, 2),
+                show(v.meaning, 3),
+                v.moved,
+                show(v.ref_gain_chrf, 2),
+                show(v.ref_gain_meaning, 3)
             )
         };
         format!(
-            "ablation n={} unusable={} replay chrf={:.2} meaning={:.3} | {} | {}",
+            "ablation n={} unusable={} replay chrf={} meaning={} | {} | {}",
             self.n,
             self.unusable,
-            self.replay.chrf,
-            self.replay.meaning,
+            show(self.replay.chrf, 2),
+            show(self.replay.meaning, 3),
             variant("drop", &self.drop),
             variant("permute", &self.permute),
         )
@@ -1034,9 +1051,9 @@ fn asked(port: &mut dyn ModelPort, prompt: &Prompt) -> Result<Asked, RunError> {
     }
 }
 
-fn mean(xs: impl Iterator<Item = f64>) -> f64 {
+fn mean(xs: impl Iterator<Item = f64>) -> Option<f64> {
     let (sum, n) = xs.fold((0.0, 0u32), |(s, n), x| (s + x, n + 1));
-    if n == 0 { 0.0 } else { sum / f64::from(n) }
+    (n > 0).then(|| sum / f64::from(n))
 }
 
 type Scored = (ItemScore, ItemScore);
@@ -1143,7 +1160,7 @@ impl RunStores {
                 }
                 // The round's own answer must exist; a missing one is not a gap to ask for.
                 let recorded_text = match asked(recorded, &base)? {
-                    Asked::Waiting => return Err(RunError::Store),
+                    Asked::Waiting => return Err(RunError::Unrecorded),
                     other => other,
                 };
                 let replay = asked(model, &base)?;
