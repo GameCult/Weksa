@@ -1,6 +1,7 @@
-//! The original corpus (`data/original`): passages written for the
-//! non-memorised golf-loop target. It holds no public-domain text, so a model
-//! cannot have it in pretraining, and every item says who wrote it.
+//! The original corpus (`data/original`): 28 passages written for the
+//! non-memorised golf-loop target (Train and Validation, all model-written)
+//! and 8 public-domain Test items, each with its full provenance. Test is only
+//! read at a checkpoint: no round or recall prompt over this store holds it.
 
 mod common;
 
@@ -24,20 +25,58 @@ fn stores() -> (CorpusStore, EntityStore) {
 }
 
 #[test]
-fn every_original_item_records_its_author_and_none_is_public_domain() {
+fn every_original_item_records_its_author_and_the_public_domain_ones_their_provenance() {
     let (corpus, entities) = stores();
     let items = corpus.all().unwrap();
-    assert_eq!(items.len(), 28);
+    assert_eq!(items.len(), 36);
+    let (mut model, mut public) = (0, 0);
     for item in &items {
         match &item.source {
             Source::ModelWritten {
                 family, generator, ..
             } => {
+                model += 1;
+                assert!(item.id.starts_with("item:original:"), "{}", item.id);
                 assert_eq!(*family, ModelFamily::Anthropic, "{}", item.id);
                 let generator = generator.as_deref().unwrap_or_default();
                 assert!(generator.contains("claude-sonnet-5-5"), "{}", item.id);
             }
-            other => panic!("{}: not model-written: {other:?}", item.id),
+            Source::PublicDomain {
+                work,
+                author,
+                edition_url,
+                licence,
+                jurisdiction,
+                translator,
+                edition_year,
+            } => {
+                public += 1;
+                assert!(item.id.starts_with("item:holdout:"), "{}", item.id);
+                // The edition is the page the text was taken from.
+                assert!(
+                    edition_url.starts_with("https://www.gutenberg.org/cache/epub/")
+                        && edition_url.ends_with(".txt"),
+                    "{}",
+                    item.id
+                );
+                assert!(licence.contains("Public domain"), "{}", item.id);
+                assert!(
+                    licence.contains("trademark or licence matter"),
+                    "{}",
+                    item.id
+                );
+                assert!(jurisdiction.starts_with("United States"), "{}", item.id);
+                assert!(
+                    [work, author, translator]
+                        .iter()
+                        .all(|s| !s.trim().is_empty()),
+                    "{}",
+                    item.id
+                );
+                // Every edition and every author is out of copyright by date.
+                assert!((1600..=1900).contains(edition_year), "{}", item.id);
+            }
+            other => panic!("{}: not model-written or public-domain: {other:?}", item.id),
         }
         assert!(
             entities.get(&item.speaker).unwrap().is_some(),
@@ -45,23 +84,66 @@ fn every_original_item_records_its_author_and_none_is_public_domain() {
             item.id
         );
     }
+    assert_eq!((model, public), (28, 8));
 }
 
 #[test]
-fn the_original_items_spread_over_train_and_validation_and_none_is_in_test() {
-    // Model-written items cannot be in Test (`SplitScheme::split` excludes a
-    // model-written item of a test group), so this store holds none.
+fn the_original_items_spread_over_train_and_validation_and_test_is_public_domain_only() {
+    // A model-written item of a Test group is in no split
+    // (`SplitScheme::split`), so Test holds the public-domain items alone.
     let (corpus, _) = stores();
-    let splits: Vec<Option<Split>> = corpus
+    let items = corpus.all().unwrap();
+    let in_split = |s| {
+        items
+            .iter()
+            .filter(|i| SplitScheme::V1.live(i) == Some(s))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(in_split(Split::Train).len(), 14);
+    assert_eq!(in_split(Split::Validation).len(), 14);
+    let test = in_split(Split::Test);
+    assert_eq!(test.len(), 8);
+    assert!(
+        test.iter()
+            .all(|i| matches!(i.source, Source::PublicDomain { .. }))
+    );
+    // Train and Validation hold no public-domain item.
+    for s in [Split::Train, Split::Validation] {
+        assert!(
+            in_split(s)
+                .iter()
+                .all(|i| matches!(i.source, Source::ModelWritten { .. }))
+        );
+    }
+}
+
+/// The 28 model-written items are byte-for-byte what they were before Test
+/// was added: id, text, group and source, folded in key order.
+#[test]
+fn the_28_model_written_items_are_unchanged() {
+    let (corpus, _) = stores();
+    let mut items: Vec<_> = corpus
         .all()
         .unwrap()
-        .iter()
-        .map(|i| SplitScheme::V1.live(i))
+        .into_iter()
+        .filter(|i| i.id.starts_with("item:original:"))
         .collect();
-    let count = |s| splits.iter().filter(|x| **x == Some(s)).count();
-    assert_eq!((count(Split::Train), count(Split::Validation)), (14, 14));
-    assert_eq!(count(Split::Test), 0);
+    items.sort_by(|a, b| a.id.cmp(&b.id));
+    assert_eq!(items.len(), 28);
+    let lines: Vec<String> = items
+        .iter()
+        .map(|i| format!("{}\n{}\n{}\n{:?}", i.id, i.text, i.group, i.source))
+        .collect();
+    let parts: Vec<&[u8]> = lines.iter().map(|l| l.as_bytes()).collect();
+    assert_eq!(
+        weksa::split::fnv1a64_of(&parts),
+        DIGEST_OF_THE_28,
+        "an original item changed"
+    );
 }
+
+/// Taken over the store at base da6bc7a, before any Test item existed.
+const DIGEST_OF_THE_28: u64 = 3803723767212018190;
 
 /// The first six items are the original golf-loop set; widening the store
 /// adds items after them and never edits them.
@@ -343,4 +425,109 @@ fn recall_probes_only_live_train_and_validation_items() {
     for hidden in ["gonemark", "modelmark", "publicmark"] {
         assert!(!shown(hidden), "recall showed {hidden}");
     }
+}
+
+/// Collects every prompt a round or recall shows the model; its answer is no
+/// draft and no recall.
+struct Record(Vec<String>);
+
+impl weksa::model::ModelPort for Record {
+    fn model(&self) -> &str {
+        "nope"
+    }
+    fn answer(&mut self, p: &weksa::context::Prompt) -> Result<String, weksa::model::PortError> {
+        self.0.push(p.text().to_string());
+        Ok(r#"{"text":"nothing"}"#.to_string())
+    }
+}
+
+/// The public-domain Test items are held out: no prompt of round 1 over
+/// `data/original`, no recall prompt, and no round record names one.
+#[test]
+fn no_test_item_is_offered_to_a_round_or_recall_or_recorded() {
+    use weksa::run::{LowererReach, RoundOutcome, RunPaths, RunStores, round};
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/original");
+    let tmp = tempfile::tempdir().unwrap();
+    for f in ["corpus.cc", "entity.cc", "inventory.cc"] {
+        std::fs::copy(src.join(f), tmp.path().join(f)).unwrap();
+    }
+    let p = |f: &str| tmp.path().join(f);
+    let mut run = RunStores::create(
+        &p("run"),
+        "orig",
+        RunPaths {
+            corpus: &p("corpus.cc"),
+            inventory: &p("inventory.cc"),
+            entities: &p("entity.cc"),
+        },
+        "nope",
+        "bag",
+        LowererReach::ToolLessRelay,
+        ModelFamily::Unrecorded,
+    )
+    .unwrap();
+    let items = CorpusStore::open(&p("corpus.cc")).unwrap().all().unwrap();
+    let held: Vec<_> = items
+        .iter()
+        .filter(|i| SplitScheme::V1.live(i) == Some(Split::Test))
+        .collect();
+    assert_eq!(held.len(), 8);
+    // A Test item's text, or any run of five of its words, in a prompt.
+    let leaks = |prompts: &[String], item: &weksa::corpus::CorpusItem| {
+        let w: Vec<&str> = item.text.split_whitespace().collect();
+        prompts
+            .iter()
+            .any(|t| t.contains(&item.text) || w.windows(5).any(|k| t.contains(&k.join(" "))))
+    };
+    let scorer = weksa::score::Scorer::new(Bag);
+    let mut model = Record(vec![]);
+    let RoundOutcome::Recorded(r) = round(&mut run, &mut model, &scorer).unwrap() else {
+        panic!("answered");
+    };
+    // The check bites: the round did show live items, 28 of them.
+    assert!(model.0.len() >= 28, "{}", model.0.len());
+    assert!(
+        items
+            .iter()
+            .filter(|i| matches!(SplitScheme::V1.live(i), Some(Split::Train)))
+            .any(|i| leaks(&model.0, i)),
+        "the probe cannot see a shown Train item"
+    );
+    for item in &held {
+        assert!(!leaks(&model.0, item), "round prompt held {}", item.id);
+        assert!(r.calls().iter().all(|c| !c.items.contains(&item.id)));
+        assert!(r.train().iter().all(|row| row.item != item.id));
+    }
+    let mut recall = Record(vec![]);
+    let weksa::run::RecallOutcome::Read(rr) = run.recall(&mut recall).unwrap() else {
+        panic!("answered");
+    };
+    assert_eq!((rr.n, rr.answered), (28, 28));
+    for item in &held {
+        assert!(!leaks(&recall.0, item), "recall prompt held {}", item.id);
+    }
+}
+
+/// The exclusion stands: a model-written item in a Test group is read in no
+/// split, and is not moved to Train or Validation.
+#[test]
+fn a_model_written_item_in_a_test_group_is_read_in_no_split() {
+    use common::{group_in_bucket, item_in, model};
+    for bucket in [80, 99] {
+        let item = item_in("item:f:1", "x opens", &group_in_bucket(bucket), model());
+        assert_eq!(SplitScheme::V1.split(&item), None, "bucket {bucket}");
+        assert_eq!(SplitScheme::V1.live(&item), None);
+    }
+    // The same group holds a public-domain item in Test.
+    let public = Source::PublicDomain {
+        work: "w".into(),
+        author: "a".into(),
+        edition_url: "https://example.org/e".into(),
+        licence: "l".into(),
+        jurisdiction: "US".into(),
+        translator: "none".into(),
+        edition_year: 1900,
+    };
+    let item = item_in("item:f:2", "x opens", &group_in_bucket(80), public);
+    assert_eq!(SplitScheme::V1.live(&item), Some(Split::Test));
 }
