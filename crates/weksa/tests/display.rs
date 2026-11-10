@@ -117,7 +117,6 @@ fn refusal_display_names_the_rule_and_no_identifier() {
             count: 4242,
             max: 4242,
         },
-        Refusal::V13SceneWithoutAddressee,
         Refusal::V14ConsentWithoutAddressee,
         Refusal::V14ConsentNotAPredication { id: node() },
         Refusal::V15ConsentSource {

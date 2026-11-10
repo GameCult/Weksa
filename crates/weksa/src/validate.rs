@@ -3,10 +3,9 @@
 //! returns `Ok(())` or the refusals. [`LoweringInput`], the only thing a
 //! lowerer sees, comes from `PacketStore::admit` alone, which builds it through
 //! the crate-private `admissible`. The stance is checked like every feature
-//! list, in slot `Stance`. The rules are V1..V8 and V10..V15: the shape of an id
-//! or a grade is its type's parse, not a rule, so V9 is retired and not
-//! renumbered. V13 guards the one other way features reach a lowering view:
-//! [`LoweringInput::with_scene`].
+//! list, in slot `Stance`. The rules are V1..V8, V10..V12 and V14..V15: the
+//! shape of an id or a grade is its type's parse, not a rule, so V9 is retired
+//! and not renumbered; V13 is retired too.
 //!
 //! `validate` owns form and capacity and makes no leak decision. A packet's one
 //! free text is its trace (`notes` and `rejected_readings`): `validate` does not
@@ -95,10 +94,6 @@ pub enum Refusal {
         count: usize,
         max: usize,
     },
-    /// V13: scene features were given for a packet with no addressee. They
-    /// state the speaker's relation to the addressee, so with none they
-    /// describe nobody.
-    V13SceneWithoutAddressee,
     /// V14: an addressee consent that no addressee can have given, or that
     /// names a node that is not a predication. It is what the addressee asked
     /// for or agreed to, an act, so a referent cannot be its object.
@@ -130,7 +125,6 @@ impl Refusal {
             | Refusal::V11DuplicateNodeRef { .. }
             | Refusal::V11DuplicateRole { .. } => "V11",
             Refusal::V12TooManyNodes { .. } => "V12",
-            Refusal::V13SceneWithoutAddressee => "V13",
             Refusal::V14ConsentWithoutAddressee | Refusal::V14ConsentNotAPredication { .. } => {
                 "V14"
             }
@@ -157,7 +151,6 @@ impl fmt::Display for Refusal {
             Refusal::V11DuplicateNodeRef { .. } => "a node id repeats in one list",
             Refusal::V11DuplicateRole { .. } => "a role id repeats in one predication",
             Refusal::V12TooManyNodes { .. } => "too many nodes",
-            Refusal::V13SceneWithoutAddressee => "scene features given without an addressee",
             Refusal::V14ConsentWithoutAddressee => "consent given without an addressee",
             Refusal::V14ConsentNotAPredication { .. } => "consent names no predication",
             Refusal::V15ConsentSource { .. } => "consent set by a source that only read wording",
@@ -592,40 +585,6 @@ impl LoweringInput {
             stance: p.stance.clone(),
             scene: Vec::new(),
         }
-    }
-
-    /// Adds the speaker's relation to the addressee: feature values of slot
-    /// `Scene`, checked like every feature list (V5 to V8, V11) at this view's
-    /// inventory revision. They state a relation, so the packet must name an
-    /// addressee (V13). Typed ids and grades only, never wording, so a scene
-    /// carries no text to the lowerer. The scene is not part of the packet: a
-    /// scene document supplies it, and replacing it replaces the earlier one.
-    pub fn with_scene(
-        mut self,
-        inventory: &Inventory,
-        scene: Vec<FeatureValue>,
-    ) -> Result<Self, Vec<Refusal>> {
-        let mut out = Vec::new();
-        if !inventory.has_revision(self.inventory_rev) {
-            out.push(Refusal::V10UnknownRevision {
-                rev: self.inventory_rev,
-            });
-        } else {
-            Inventoried {
-                inv: inventory,
-                rev: self.inventory_rev,
-                out: &mut out,
-            }
-            .features(&scene, Slot::Scene);
-        }
-        if !scene.is_empty() && self.discourse.addressee.is_none() {
-            out.push(Refusal::V13SceneWithoutAddressee);
-        }
-        if !out.is_empty() {
-            return Err(out);
-        }
-        self.scene = scene;
-        Ok(self)
     }
 
     pub fn inventory_rev(&self) -> u32 {

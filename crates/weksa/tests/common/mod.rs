@@ -34,7 +34,8 @@ pub const CONCEPT_LATE: &str = "concept:4";
 pub const FRAME: &str = "frame:1";
 /// An extension entry of value kind Grade, introduced at rev 2.
 pub const EXT: &str = "extension:1";
-/// A Grade feature introduced at rev 2 that sits in every slot.
+/// A Grade feature introduced at rev 2 in every content slot (Discourse,
+/// Referent, Predication, Relation).
 pub const FEAT_ALL: &str = "feature:50";
 
 pub const PACKET_ID: &str = "packet:0123456789abcdef";
@@ -218,7 +219,6 @@ pub fn world() -> World {
                         Slot::Referent,
                         Slot::Predication,
                         Slot::Relation,
-                        Slot::Stance,
                     ],
                 )
             },

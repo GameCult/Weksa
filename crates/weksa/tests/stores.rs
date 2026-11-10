@@ -1094,6 +1094,46 @@ fn revision_change_rules() {
 }
 
 #[test]
+fn speaker_state_slots_are_exclusive() {
+    let shape = "entry shape does not match its family";
+    let d = dir();
+    let mut store = seeded(&d.path().join("i.cc"));
+    for slots in [
+        &[Slot::Stance, Slot::Discourse][..],
+        &[Slot::Scene, Slot::Relation],
+        &[Slot::Discourse, Slot::Scene],
+        &[Slot::Scene, Slot::Scene],
+        &[Slot::Stance, Slot::Stance],
+    ] {
+        let rev = rev_with(vec![Change::Add(iv("feature:50"))], 2, Some(1));
+        let entries = vec![InventoryEntry {
+            introduced_rev: 2,
+            ..feature("feature:50", ValueKind::Flag, slots)
+        }];
+        assert_eq!(
+            refusal(store.admit_revision(rev, entries)),
+            malformed("feature:50", shape),
+            "{slots:?}"
+        );
+    }
+    assert_eq!(store.inventory().unwrap().latest().unwrap().n, 1);
+    // One slot alone, and several content slots, are admitted.
+    for (n, slots) in [
+        (2, &[Slot::Scene][..]),
+        (3, &[Slot::Stance]),
+        (4, &[Slot::Discourse, Slot::Predication]),
+    ] {
+        let id = format!("feature:{}", 50 + n);
+        let rev = rev_with(vec![Change::Add(iv(&id))], n, Some(n - 1));
+        let entries = vec![InventoryEntry {
+            introduced_rev: n,
+            ..feature(&id, ValueKind::Flag, slots)
+        }];
+        store.admit_revision(rev, entries).unwrap();
+    }
+}
+
+#[test]
 fn a_well_formed_extension_entry_is_admitted() {
     let d = dir();
     let mut store = seeded(&d.path().join("i.cc"));

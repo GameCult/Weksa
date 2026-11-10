@@ -520,9 +520,6 @@ fn v11_duplicate_feature_each_slot() {
         refusals(&relation),
         vec![v11(Some(Slot::Relation), FEAT_ALL)]
     );
-    let mut stance = good();
-    stance.stance.features = vec![grade_feature(1), grade_feature(2)];
-    assert_eq!(refusals(&stance), vec![v11(Some(Slot::Stance), FEAT_ALL)]);
     let mut felt = good();
     felt.stance
         .features

@@ -228,10 +228,21 @@ impl InventoryEntry {
     }
 
     /// Whether the entry's shape matches its family: features carry a value kind
-    /// and slots, extensions a value kind and no slots, nothing else either.
+    /// and slots, extensions a value kind and no slots, nothing else either. A
+    /// feature of slot `Stance` or `Scene` sits in that slot alone: each
+    /// speaker-state layer has one writer and one lifetime, so its features sit
+    /// nowhere else.
     pub fn well_formed(&self) -> bool {
         match self.family() {
-            Family::Feature => self.value_kind.is_some() && !self.applies_to.is_empty(),
+            Family::Feature => {
+                self.value_kind.is_some()
+                    && !self.applies_to.is_empty()
+                    && (self.applies_to.len() == 1
+                        || !self
+                            .applies_to
+                            .iter()
+                            .any(|s| matches!(s, Slot::Stance | Slot::Scene)))
+            }
             Family::Extension => self.value_kind.is_some() && self.applies_to.is_empty(),
             _ => self.value_kind.is_none() && self.applies_to.is_empty(),
         }
