@@ -79,7 +79,7 @@ Answer with one JSON object and nothing else: {\"text\": \"...\"}. No code fence
 /// # let p = |n: &str| dir.path().join(n);
 /// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
 /// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
-/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e").unwrap();
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay).unwrap();
 /// let t = run.train().unwrap();
 /// assert!(t.is_empty());
 /// ```
@@ -93,7 +93,7 @@ Answer with one JSON object and nothing else: {\"text\": \"...\"}. No code fence
 /// # let p = |n: &str| dir.path().join(n);
 /// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
 /// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
-/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e").unwrap();
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay).unwrap();
 /// let t = run.train().unwrap();
 /// let _u = t.clone();
 /// ```
@@ -104,7 +104,7 @@ Answer with one JSON object and nothing else: {\"text\": \"...\"}. No code fence
 /// # let p = |n: &str| dir.path().join(n);
 /// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
 /// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
-/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e").unwrap();
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay).unwrap();
 /// let t = run.train().unwrap();
 /// s(&t);
 /// ```
@@ -310,7 +310,7 @@ impl EditFeedback {
 /// # let p = |n: &str| dir.path().join(n);
 /// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
 /// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
-/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e").unwrap();
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay).unwrap();
 /// let t = run.train().unwrap();
 /// let inv = run.inventory().inventory().unwrap();
 /// let feedback = weksa::context::EditFeedback::none();
@@ -328,7 +328,7 @@ impl EditFeedback {
 /// # let p = |n: &str| dir.path().join(n);
 /// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
 /// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
-/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e").unwrap();
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay).unwrap();
 /// let t = run.train().unwrap();
 /// let inv = run.inventory().inventory().unwrap();
 /// let feedback = weksa::context::EditFeedback::none();
@@ -341,7 +341,7 @@ impl EditFeedback {
 /// # let p = |n: &str| dir.path().join(n);
 /// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
 /// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
-/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e").unwrap();
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay).unwrap();
 /// let t = run.train().unwrap();
 /// let inv = run.inventory().inventory().unwrap();
 /// let feedback = weksa::context::EditFeedback::none();
@@ -498,8 +498,11 @@ impl Prompt {
     /// [`LOWER_INSTRUCTIONS`], the meaning of `input` (no kind, constraints,
     /// scene, speaker or group), the en-US forms of every entity its referents
     /// cite, and the entries of `inventory` live at the view's revision. `item`
-    /// goes only to [`Prompt::item_keys`], never into the text. A cited entity
-    /// the port lacks, or one with no en-US form, is an error and no prompt.
+    /// goes only to [`Prompt::item_keys`], never into the text. The view's
+    /// speaker and group fields are never read; a speaker's entity id appears
+    /// only when the encoder cites that entity on a referent, which is naming a
+    /// cited entity like any other. A cited entity the port lacks, or one with
+    /// no en-US form, is an error and no prompt.
     pub fn lower(
         input: &LoweringInput,
         item: &CorpusItemId,

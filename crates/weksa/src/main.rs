@@ -11,7 +11,7 @@ use weksa::corpus::{CorpusItem, ModelFamily, NameSpan, Source, Turn};
 use weksa::entity::{Entity, EntityOrigin, LanguageForms, Pronunciation};
 use weksa::inventory::{proof_revision, seed};
 use weksa::packet::proof_packet;
-use weksa::run::{CycleOutcome, RoundOutcome, RunPaths, RunStores, cycle, round};
+use weksa::run::{CycleOutcome, LowererReach, RoundOutcome, RunPaths, RunStores, cycle, round};
 use weksa::score::ScoreInput;
 use weksa::{
     AnswerFiles, CorpusStore, EntityId, EntityStore, InventoryStore, OllamaEmbedder, PacketStore,
@@ -88,6 +88,10 @@ enum LoopCommand {
         answerer: String,
         #[arg(long, default_value = "qwen3-embedding:0.6b")]
         embed_model: String,
+        /// How lowering prompts will be answered: briefed-subagent (smoke
+        /// rounds only) or tool-less-relay. Pinned in the run's record.
+        #[arg(long)]
+        lowerer_reach: LowererReach,
     },
     /// Run one round of the run at ROOT. The stores are read only from the
     /// run's record: the global --corpus, --inventory and --entities are not
@@ -734,6 +738,7 @@ fn main() -> Result<()> {
             label,
             answerer,
             embed_model,
+            lowerer_reach,
         }) => {
             let run = RunStores::create(
                 &root,
@@ -745,6 +750,7 @@ fn main() -> Result<()> {
                 },
                 &answerer,
                 &embed_model,
+                lowerer_reach,
             )?;
             println!("opened run:{}", run.record().label);
         }
@@ -765,7 +771,7 @@ fn main() -> Result<()> {
                     println!("unanswered {} of {asked}", prompts.len());
                     std::process::exit(3);
                 }
-                RoundOutcome::Recorded(r) => println!("{}", r.summary_line()),
+                RoundOutcome::Recorded(r) => println!("{}", run.labelled(&r.summary_line())),
             }
         }
         Command::Loop(LoopCommand::Cycle { root, ollama_url }) => {
@@ -784,7 +790,9 @@ fn main() -> Result<()> {
                     println!("unanswered {} prompts", prompts.len());
                     std::process::exit(3);
                 }
-                CycleOutcome::Decided(decision) => println!("{}", decision.summary_line()),
+                CycleOutcome::Decided(decision) => {
+                    println!("{}", run.labelled(&decision.summary_line()))
+                }
             }
         }
         Command::Schema { out } => {

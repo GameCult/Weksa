@@ -46,7 +46,8 @@ use crate::validate::LoweringInput;
 /// The digest of the prompt builder's source: `context.rs`, then `split.rs`,
 /// whose scheme and digest function decide which lines the prompt holds as
 /// Train and name every prompt, then `lower.rs`, whose `TARGET_LANGUAGE` and
-/// `EntityForms` port the lowering prompt reads. Each file enters the digest
+/// `EntityForms` port the lowering prompt reads, then `packet.rs`, whose serde
+/// shapes the lowering prompt prints as the packet. Each file enters the digest
 /// behind its length, so the parts cannot be re-cut into other parts with the
 /// same digest. Any edit to any of them, comments included, ends a run; code
 /// outside those files is not covered.
@@ -54,6 +55,7 @@ pub const PROMPT_SOURCE_DIGEST: u64 = fnv1a64_of(&[
     include_bytes!("context.rs"),
     include_bytes!("split.rs"),
     include_bytes!("lower.rs"),
+    include_bytes!("packet.rs"),
 ]);
 
 /// The least composite gain an edit must show over item noise to be kept, and
@@ -99,6 +101,43 @@ pub struct RunRecord {
     /// 16 hex of the bytes `create` copied to `<root>/inventory.cc`.
     #[cultcache(key = 11)]
     pub inventory_digest: String,
+    /// How the run's lowering prompts are answered, set once at open.
+    #[cultcache(key = 12)]
+    pub lowerer_reach: LowererReach,
+}
+
+/// How a run's lowering prompts reach the model that answers them (rulings
+/// `lowerer-call-reach-toolless-relay`, `dao-round-seed-inventory`). The
+/// record says which, so a round lowered by a briefed subagent cannot pass as
+/// a tool-less one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum LowererReach {
+    /// A subagent briefed to read one prompt file: acceptable for smoke rounds
+    /// only.
+    BriefedSubagent,
+    /// The prompt passed inline to an agent with no file tools.
+    ToolLessRelay,
+}
+
+impl LowererReach {
+    /// The spelling `weksa loop open --lowerer-reach` takes and lines print.
+    pub fn label(self) -> &'static str {
+        match self {
+            LowererReach::BriefedSubagent => "briefed-subagent",
+            LowererReach::ToolLessRelay => "tool-less-relay",
+        }
+    }
+}
+
+impl std::str::FromStr for LowererReach {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        [LowererReach::BriefedSubagent, LowererReach::ToolLessRelay]
+            .into_iter()
+            .find(|r| r.label() == s)
+            .ok_or_else(|| "expected briefed-subagent or tool-less-relay".to_string())
+    }
 }
 
 /// Where a round refused: the first stage that did.
@@ -107,7 +146,8 @@ pub enum Stage {
     Parse,
     Admit,
     /// The lowering prompt could not be built, or its answer was not UTF-8, not
-    /// a `LoweringDraft`, or empty text.
+    /// a `LoweringDraft`, or text that is blank, over `MAX_LOWERING_BYTES` or
+    /// holds a control character.
     Lower,
 }
 
@@ -355,7 +395,7 @@ impl fmt::Display for RunError {
             RunError::NoRun => f.write_str("the root holds no run"),
             RunError::Malformed(what) => write!(f, "malformed {what}"),
             RunError::Drift(DriftOf::Prompts) => f.write_str(
-                "drift in Prompts (the prompt source digest covers context.rs, split.rs and lower.rs)",
+                "drift in Prompts (the prompt source digest covers context.rs, split.rs, lower.rs and packet.rs)",
             ),
             RunError::Drift(of) => write!(f, "drift in {of:?}"),
             RunError::NoInventory => f.write_str("the inventory holds no revision"),
@@ -479,8 +519,9 @@ impl RunStores {
         paths: RunPaths<'_>,
         model: &str,
         embedder: &str,
+        reach: LowererReach,
     ) -> Result<Self, RunError> {
-        Self::create_between(root, label, paths, model, embedder, || {})
+        Self::create_between(root, label, paths, model, embedder, reach, || {})
     }
 
     /// `create` with `between` run after the digests are taken and before the
@@ -492,6 +533,7 @@ impl RunStores {
         paths: RunPaths<'_>,
         model: &str,
         embedder: &str,
+        reach: LowererReach,
         between: impl FnOnce(),
     ) -> Result<Self, RunError> {
         if !is_slug(label) {
@@ -519,6 +561,7 @@ impl RunStores {
             embedder: embedder.to_string(),
             chrf_version: CHRF_VERSION.to_string(),
             inventory_digest: String::new(),
+            lowerer_reach: reach,
         };
         // The run works on its own copy; the caller's store is never opened again.
         let head = root.join(INVENTORY_FILE);
@@ -550,7 +593,7 @@ impl RunStores {
     }
 
     /// Reopens the run at `root` from its record, refusing when a pinned store
-    /// or the prompt or lowerer source no longer matches.
+    /// or the prompt source (`PROMPT_SOURCE_DIGEST`) no longer matches.
     pub fn open(root: &Path) -> Result<Self, RunError> {
         Self::open_between(root, || {})
     }
@@ -591,6 +634,18 @@ impl RunStores {
 
     pub fn record(&self) -> &RunRecord {
         &self.record
+    }
+
+    /// `line` (a round or cycle summary) with how this run's lowerings were
+    /// answered; a briefed-subagent run says its numbers are smoke-round only.
+    pub fn labelled(&self, line: &str) -> String {
+        let reach = self.record.lowerer_reach;
+        match reach {
+            LowererReach::BriefedSubagent => {
+                format!("{line} lowering={} (smoke-round only)", reach.label())
+            }
+            LowererReach::ToolLessRelay => format!("{line} lowering={}", reach.label()),
+        }
     }
 
     pub fn inventory(&self) -> &InventoryStore {
@@ -849,7 +904,7 @@ fn score_round<M: ModelPort, E: Embedder>(
         });
         fates[*at] = match model.answer(&prompt) {
             Ok(answer) => match LoweringDraft::parse(&answer) {
-                Ok(draft) if !draft.text.trim().is_empty() => {
+                Ok(draft) if draft.usable() => {
                     Fate::Lowered(draft.text, packet_key.clone())
                 }
                 _ => Fate::Refused(Stage::Lower, Some(packet_key.clone())),
@@ -858,7 +913,10 @@ fn score_round<M: ModelPort, E: Embedder>(
                 Fate::Refused(Stage::Lower, Some(packet_key.clone()))
             }
             Err(PortError::Unanswered) => {
-                unanswered.push(prompt.digest());
+                // Two views with one meaning share one prompt: name it once.
+                if !unanswered.contains(&prompt.digest()) {
+                    unanswered.push(prompt.digest());
+                }
                 continue;
             }
             Err(PortError::Io(kind)) => {
@@ -1633,6 +1691,7 @@ mod tests {
             embedder: String::new(),
             chrf_version: String::new(),
             inventory_digest: digest.to_string(),
+            lowerer_reach: LowererReach::ToolLessRelay,
         }
     }
 
@@ -1831,7 +1890,7 @@ mod tests {
                     entities: &entities,
                 },
                 "fake-model",
-                "bag",
+                "bag", crate::run::LowererReach::ToolLessRelay,
             )
             .unwrap();
             let mut model = fake();

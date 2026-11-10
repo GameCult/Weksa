@@ -47,7 +47,7 @@ fn a_run_pins_its_stores_and_refuses_drift() {
                 entities: &e,
             },
             model,
-            "bag",
+            "bag", weksa::run::LowererReach::ToolLessRelay,
         )
     };
 
@@ -148,7 +148,7 @@ fn a_run_works_on_its_own_copy_of_the_inventory() {
             entities: &e,
         },
         "fake-model",
-        "bag",
+        "bag", weksa::run::LowererReach::ToolLessRelay,
     )
     .unwrap();
 
@@ -223,7 +223,7 @@ fn create_refuses_a_root_that_holds_an_inventory_and_never_truncates_it() {
                 entities: &dao.entities,
             },
             "fake-model",
-            "bag",
+            "bag", weksa::run::LowererReach::ToolLessRelay,
         )
     };
 
@@ -268,7 +268,7 @@ fn a_create_that_fails_leaves_no_inventory_and_the_retry_succeeds() {
                 entities,
             },
             "fake-model",
-            "bag",
+            "bag", weksa::run::LowererReach::ToolLessRelay,
         )
     };
     // A directory opens for reading and fails mid-copy, after the destination exists.
@@ -381,14 +381,14 @@ fn a_store_changed_between_its_digest_and_its_open_is_drift() {
         entities: &e,
     };
     assert_eq!(
-        RunStores::create_between(&root, "t", paths(), "fake-model", "bag", || more(&mut w)).err(),
+        RunStores::create_between(&root, "t", paths(), "fake-model", "bag", weksa::run::LowererReach::ToolLessRelay, || more(&mut w)).err(),
         Some(RunError::Drift(DriftOf::Corpus))
     );
     assert!(!root.join("inventory.cc").exists());
     // Not the copy and not the lock the store's open left beside it.
     assert!(!root.join("inventory.cc.lock").exists());
     assert_eq!(RunStores::open(&root).err(), Some(RunError::NoRun));
-    RunStores::create(&root, "t", paths(), "fake-model", "bag").unwrap();
+    RunStores::create(&root, "t", paths(), "fake-model", "bag", weksa::run::LowererReach::ToolLessRelay).unwrap();
 }
 
 /// Runs `change` in the window between the pins and the open, at `open` and at
@@ -411,7 +411,7 @@ fn window(
         inventory: &i,
         entities: &e,
     };
-    let created = RunStores::create_between(&root, "t", paths, "fake-model", "bag", || {
+    let created = RunStores::create_between(&root, "t", paths, "fake-model", "bag", weksa::run::LowererReach::ToolLessRelay, || {
         change(&mut w, &root)
     })
     .err();
@@ -458,9 +458,14 @@ fn source_digests_cover_their_files() {
     let read = |name: &str| std::fs::read(src.join(name)).unwrap();
     let digest = |name: &str| fnv1a64(&read(name));
     // The prompt's partition and names come from split.rs, and the lowering
-    // prompt reads lower.rs's target language and entity port: all three are
-    // covered.
-    let (context, split, lower) = (read("context.rs"), read("split.rs"), read("lower.rs"));
+    // prompt reads lower.rs's target language and entity port and prints
+    // packet.rs's serde shapes: all four are covered.
+    let (context, split, lower, packet) = (
+        read("context.rs"),
+        read("split.rs"),
+        read("lower.rs"),
+        read("packet.rs"),
+    );
     // Each file enters behind its length, so the parts have one framing.
     let framed = [
         (context.len() as u64).to_le_bytes().as_slice(),
@@ -469,12 +474,14 @@ fn source_digests_cover_their_files() {
         &split,
         (lower.len() as u64).to_le_bytes().as_slice(),
         &lower,
+        (packet.len() as u64).to_le_bytes().as_slice(),
+        &packet,
     ]
     .concat();
     assert_eq!(weksa::run::PROMPT_SOURCE_DIGEST, fnv1a64(&framed));
     assert_ne!(
         weksa::run::PROMPT_SOURCE_DIGEST,
-        fnv1a64(&[context.clone(), split.clone(), lower.clone()].concat()),
+        fnv1a64(&[context.clone(), split.clone(), lower.clone(), packet.clone()].concat()),
         "bare concatenation is not the digest"
     );
     // Moving the boundary between the parts moves the digest.
@@ -821,7 +828,7 @@ fn dao_over(edit: impl FnOnce(&Path, &Path)) -> Dao {
             entities: &entities,
         },
         "fake-model",
-        "bag",
+        "bag", weksa::run::LowererReach::ToolLessRelay,
     )
     .unwrap();
     Dao {
@@ -1470,15 +1477,15 @@ fn errors_echo_no_input() {
         inventory: &missing,
         entities: &missing,
     };
-    let e = RunStores::create(&root, "ok", stores, "m", "bag")
+    let e = RunStores::create(&root, "ok", stores, "m", "bag", weksa::run::LowererReach::ToolLessRelay)
         .err()
         .unwrap();
     note(&e, &e);
-    let e = RunStores::create(&root, &format!("{canary}!"), stores, "m", "bag")
+    let e = RunStores::create(&root, &format!("{canary}!"), stores, "m", "bag", weksa::run::LowererReach::ToolLessRelay)
         .err()
         .unwrap();
     note(&e, &e);
-    let e = RunStores::create(&root, "ok", stores, &format!("{canary}\n"), "bag")
+    let e = RunStores::create(&root, "ok", stores, &format!("{canary}\n"), "bag", weksa::run::LowererReach::ToolLessRelay)
         .err()
         .unwrap();
     note(&e, &e);
@@ -1512,7 +1519,7 @@ fn errors_echo_no_input() {
             entities: &dao.entities,
         },
         "fake-model",
-        "bag",
+        "bag", weksa::run::LowererReach::ToolLessRelay,
     )
     .unwrap();
     let mut model = cycle_fake(&format!("{{\"{canary}\":1}}"));
@@ -1570,7 +1577,7 @@ fn errors_echo_no_input() {
     );
     // The Prompts text names the three files its digest covers.
     let prompts = RunError::Drift(DriftOf::Prompts).to_string();
-    assert!(["context.rs", "split.rs", "lower.rs"].iter().all(|f| prompts.contains(f)));
+    assert!(["context.rs", "split.rs", "lower.rs", "packet.rs"].iter().all(|f| prompts.contains(f)));
     assert_eq!(format!("{:?}", RunError::Drift(DriftOf::Prompts)), prompts);
 }
 
@@ -2442,7 +2449,7 @@ fn a_changed_head_is_drift() {
             entities: &dao.entities,
         },
         "fake-model",
-        "bag",
+        "bag", weksa::run::LowererReach::ToolLessRelay,
     )
     .unwrap();
     assert_eq!(
@@ -2670,6 +2677,13 @@ fn lowering_refusals_count_at_lower() {
         ("empty text", Ok(r#"{"text":""}"#.to_string())),
         ("blank text", Ok("{\"text\":\" \\n \"}".to_string())),
         ("non-UTF-8", Err(PortError::Io(std::io::ErrorKind::InvalidData))),
+        ("NUL", Ok(serde_json::json!({ "text": "The sage\u{0}acts." }).to_string())),
+        ("bell", Ok(serde_json::json!({ "text": "The sage \u{7}acts." }).to_string())),
+        (
+            "over length",
+            Ok(serde_json::json!({ "text": "a".repeat(weksa::encode::MAX_LOWERING_BYTES + 1) })
+                .to_string()),
+        ),
     ] {
         let r = run(raw);
         assert_eq!(r.train()[0].outcome, Outcome::Refused(Stage::Lower), "{what}");
@@ -2727,4 +2741,153 @@ fn an_added_entry_can_be_lowered() {
         candidate.train()[0].outcome,
         Outcome::Scored { .. }
     ));
+}
+
+#[test]
+fn a_summary_line_says_how_lowerings_were_answered() {
+    use weksa::run::LowererReach;
+    assert_eq!("briefed-subagent".parse(), Ok(LowererReach::BriefedSubagent));
+    assert_eq!("tool-less-relay".parse(), Ok(LowererReach::ToolLessRelay));
+    assert!("Tool-Less-Relay".parse::<LowererReach>().is_err());
+    let dao = dao();
+    assert_eq!(
+        dao.run.labelled("round 1"),
+        "round 1 lowering=tool-less-relay"
+    );
+    // A briefed-subagent run is pinned as one, in the record that reopens, and
+    // its lines say its numbers are smoke-round only.
+    let root = dao.root.join("briefed");
+    let paths = RunPaths {
+        corpus: &dao.corpus,
+        inventory: &dao.inventory,
+        entities: &dao.entities,
+    };
+    RunStores::create(&root, "b", paths, "fake-model", "bag", LowererReach::BriefedSubagent)
+        .unwrap();
+    let run = RunStores::open(&root).unwrap();
+    assert_eq!(run.record().lowerer_reach, LowererReach::BriefedSubagent);
+    assert_eq!(
+        run.labelled("cycle 1"),
+        "cycle 1 lowering=briefed-subagent (smoke-round only)"
+    );
+}
+
+#[test]
+fn lowering_text_at_the_bound_is_scored_and_line_breaks_are_text() {
+    for text in [
+        "a".repeat(weksa::encode::MAX_LOWERING_BYTES),
+        "The sage acts.\n\tThe sage rests.".to_string(),
+    ] {
+        let mut dao = dao();
+        let mut model = fake(&good_answers());
+        model.raw_lowering = Some(Ok(serde_json::json!({ "text": text }).to_string()));
+        let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+        assert_eq!(
+            (r.train_scored(), r.validation_scored()),
+            (1, 2),
+            "{}",
+            text.len()
+        );
+        assert_eq!(r.validation_refused(), Default::default());
+    }
+}
+
+/// Two canary items, one Train and one Validation, whose speaker is an entity
+/// with forms only in another language; each encodes to a packet citing it.
+#[test]
+fn a_lowering_prompt_that_cannot_be_built_refuses_at_lower_and_keeps_the_packet() {
+    use weksa::entity::{Entity, EntityOrigin, LanguageForms};
+    use weksa::packet::EntityId;
+    let id = EntityId::parse("entity:sagexx").unwrap();
+    let mut dao = dao_over(|corpus, entities| {
+        let mut entity_store = weksa::EntityStore::open(entities).unwrap();
+        entity_store
+            .put(Entity {
+                id: EntityId::parse("entity:sagexx").unwrap(),
+                forms: vec![LanguageForms {
+                    language: "sa-Latn".into(),
+                    forms: vec!["Sagexa".into()],
+                    pronunciation: None,
+                }],
+                origin: EntityOrigin::Cast {
+                    persona: "sage".into(),
+                    fixture: "f.yaml".into(),
+                },
+            })
+            .unwrap();
+        let mut store = weksa::CorpusStore::open(corpus).unwrap();
+        for (from, key) in [
+            ("item:daodejing:1", "item:cite:1"),
+            ("item:daodejing:2", "item:cite:2"),
+        ] {
+            let mut item = store.get(from).unwrap().unwrap();
+            item.id = key.into();
+            item.text = format!("A held-apart sentence for {key}.");
+            item.speaker = EntityId::parse("entity:sagexx").unwrap();
+            item.names = vec![];
+            item.prior_turns = vec![];
+            store.add(item, &entity_store).unwrap();
+        }
+    });
+    let citing = |n: usize| {
+        let mut d = draft_of(n);
+        d.referents[0].entity = Some(id.clone());
+        json(&d)
+    };
+    let mut model = fake(&good_answers());
+    model.answers.insert("item:cite:1".into(), citing(1));
+    model.answers.insert("item:cite:2".into(), citing(2));
+    let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    // Admitted, so the packet is on the Train row; refused at Lower, so no score.
+    let row = r.train().iter().find(|row| row.item == "item:cite:1").unwrap();
+    assert_eq!(row.outcome, Outcome::Refused(Stage::Lower));
+    let kept = row.packet.as_deref().expect("the admitted packet's key is kept");
+    let packets = PacketStore::open(&dao.root.join("round-1/packets.cc")).unwrap();
+    assert!(packets.get(kept).unwrap().is_some());
+    let v = r.validation_refused();
+    assert_eq!((v.parse, v.admit, v.lower), (0, 0, 1));
+    assert_eq!((r.train_scored(), r.validation_scored()), (1, 2));
+    // Five items encoded, three lowering prompts built and asked.
+    assert_eq!(r.calls().len(), 5 + 3);
+}
+
+#[test]
+fn a_port_failure_in_the_lowering_phase_discards_the_packets() {
+    let mut dao = dao();
+    let mut model = fake(&good_answers());
+    model.raw_lowering = Some(Err(PortError::Io(std::io::ErrorKind::PermissionDenied)));
+    assert_eq!(
+        round(&mut dao.run, &mut model, &Scorer::new(Bag)).err(),
+        Some(RunError::Io(std::io::ErrorKind::PermissionDenied))
+    );
+    assert!(!dao.root.join("round-1/packets.cc").exists());
+    assert!(dao.run.rounds().unwrap().is_empty());
+}
+
+#[test]
+fn views_with_one_meaning_share_one_unanswered_lowering_prompt() {
+    let mut dao = dao();
+    // Items 1 and 3 encode to the same meaning; item 2 differs.
+    let same = json(&draft_of(1));
+    let expected = prompts(&dao.run);
+    let round1 = dao.root.join("round-1");
+    std::fs::create_dir_all(&round1).unwrap();
+    for (key, p) in &expected {
+        let answer = match key.as_str() {
+            "item:daodejing:2" => json(&draft_of(2)),
+            _ => same.clone(),
+        };
+        std::fs::write(round1.join(format!("{}.answer", p.digest())), answer).unwrap();
+    }
+    let mut files = AnswerFiles::new(round1.clone(), "fake-model".into());
+    let RoundOutcome::Unanswered { prompts: asked } =
+        round(&mut dao.run, &mut files, &Scorer::new(Bag)).unwrap()
+    else {
+        panic!("answered lowering from nothing")
+    };
+    assert_eq!(asked.len(), 2, "{asked:?}");
+    let mut unique = asked.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), 2);
 }

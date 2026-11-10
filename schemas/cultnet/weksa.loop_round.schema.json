@@ -228,7 +228,7 @@
           ]
         },
         {
-          "description": "The lowering prompt could not be built, or its answer was not UTF-8, not\na `LoweringDraft`, or empty text.",
+          "description": "The lowering prompt could not be built, or its answer was not UTF-8, not\na `LoweringDraft`, or text that is blank, over `MAX_LOWERING_BYTES` or\nholds a control character.",
           "type": "string",
           "const": "Lower"
         }

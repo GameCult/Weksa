@@ -131,7 +131,7 @@ pub fn run_over(dir: &std::path::Path) -> weksa::run::RunStores {
             entities: &dir.join("entities.cc"),
         },
         "fake-model",
-        "bag",
+        "bag", weksa::run::LowererReach::ToolLessRelay,
     )
     .unwrap()
 }

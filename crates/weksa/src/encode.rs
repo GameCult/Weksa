@@ -53,7 +53,7 @@ impl fmt::Display for DraftError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "not a packet draft at line {} column {}",
+            "not a draft at line {} column {}",
             self.line, self.column
         )
     }
@@ -207,9 +207,25 @@ pub struct LoweringDraft {
     pub text: String,
 }
 
+/// The most bytes a lowering may hold: well over any one utterance, far under
+/// a megabyte the embedder would be asked to read.
+pub const MAX_LOWERING_BYTES: usize = 4096;
+
 impl LoweringDraft {
     pub fn parse(answer: &str) -> Result<Self, DraftError> {
         from_json(answer)
+    }
+
+    /// Whether the text can be scored as an utterance: something after trimming,
+    /// at most [`MAX_LOWERING_BYTES`], and no control character other than a
+    /// line break or tab. Nothing is judged about the words.
+    pub fn usable(&self) -> bool {
+        !self.text.trim().is_empty()
+            && self.text.len() <= MAX_LOWERING_BYTES
+            && !self
+                .text
+                .chars()
+                .any(|c| c.is_control() && !matches!(c, '\n' | '\t'))
     }
 }
 
@@ -347,7 +363,7 @@ mod tests {
     fn a_draft_error_is_a_position_and_echoes_no_token() {
         let err = PacketDraft::parse("{\n  \"confidence\": CANARYTOKEN").unwrap_err();
         assert_eq!((err.line, err.column), (2, 17));
-        assert_eq!(err.to_string(), "not a packet draft at line 2 column 17");
+        assert_eq!(err.to_string(), "not a draft at line 2 column 17");
         assert_eq!(format!("{err:?}"), err.to_string());
         let err = PacketDraft::parse(r#"{"confidence":500,"CANARYKEY":1}"#).unwrap_err();
         for text in [err.to_string(), format!("{err:?}")] {
