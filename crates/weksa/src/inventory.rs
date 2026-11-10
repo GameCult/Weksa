@@ -189,9 +189,11 @@ pub enum Slot {
     Predication,
     Relation,
     Stance,
-    /// The relation of the speaker to the addressee in the scene; see
-    /// `LoweringInput::with_scene`.
+    /// The speaker's relation to one party of the scene, held by `weksa.scene`
+    /// documents; see `LoweringInput::with_scene`.
     Scene,
+    /// The speaker's stable axes, held by `weksa.speaker` documents.
+    Speaker,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -229,7 +231,7 @@ impl InventoryEntry {
 
     /// Whether the entry's shape matches its family: features carry a value kind
     /// and slots, extensions a value kind and no slots, nothing else either. A
-    /// feature of slot `Stance` or `Scene` sits in that slot alone: each
+    /// feature of slot `Stance`, `Speaker` or `Scene` sits in that slot alone: each
     /// speaker-state layer has one writer and one lifetime, so its features sit
     /// nowhere else.
     pub fn well_formed(&self) -> bool {
@@ -241,7 +243,7 @@ impl InventoryEntry {
                         || !self
                             .applies_to
                             .iter()
-                            .any(|s| matches!(s, Slot::Stance | Slot::Scene)))
+                            .any(|s| matches!(s, Slot::Stance | Slot::Speaker | Slot::Scene)))
             }
             Family::Extension => self.value_kind.is_some() && self.applies_to.is_empty(),
             _ => self.value_kind.is_none() && self.applies_to.is_empty(),
@@ -534,28 +536,49 @@ pub fn proof_revision() -> (InventoryRevision, Vec<InventoryEntry>) {
     )
 }
 
-/// Revision 3: the speaker's relation to the addressee, features of slot
-/// `Scene`. Hand-seeded like [`proof_revision`] until the loop's minting round
-/// and cut `speaker-scene` own the Scene vocabulary. `relative_status` is the
-/// speaker's standing against the addressee's, not a register word:
-/// what it selects is each language's ontology's business. It mints the three
-/// Scene features after the seed's features.
-pub fn scene_revision() -> (InventoryRevision, Vec<InventoryEntry>) {
+/// Revision 3: the speaker-state vocabulary. First the Scene features, the
+/// speaker's relation to one party of a scene (slot `Scene`): `relative_status`
+/// is the speaker's standing against the addressee's, not a register word, what
+/// it selects is each language's ontology's business. Then the Speaker features
+/// (slot `Speaker`): `socioeconomic_standing` is standing in the speaker's own
+/// society, 0 lowest; `education` is formal schooling against that society;
+/// `age_cohort` is a life stage. Origin and community are not features; they
+/// arrive as community ids with cut `language-ontology`. Hand-seeded like
+/// [`proof_revision`] until the loop's minting round owns the vocabulary; the
+/// features take the ids after the seed's.
+pub fn speaker_scene_revision() -> (InventoryRevision, Vec<InventoryEntry>) {
     let taken = seed()
         .1
         .iter()
         .filter(|e| e.family() == Family::Feature)
         .count() as u32;
-    let labels = ["below", "level", "above"]
-        .map(|l| OptionLabel::parse(l).expect("seed labels are well formed"));
-    let relative_status = ValueKind::Options(
-        OptionSet::new(labels.to_vec()).expect("seed option sets are well formed"),
-    );
+    let options = |labels: &[&str]| {
+        ValueKind::Options(
+            OptionSet::new(
+                labels
+                    .iter()
+                    .map(|l| OptionLabel::parse(l).expect("seed labels are well formed"))
+                    .collect(),
+            )
+            .expect("seed option sets are well formed"),
+        )
+    };
     let mut entries = Vec::new();
-    for (i, (gloss, kind)) in [
-        ("relative_status", relative_status),
-        ("intimacy", ValueKind::Grade),
-        ("in_group", ValueKind::Flag),
+    for (i, (gloss, kind, slot)) in [
+        (
+            "relative_status",
+            options(&["below", "level", "above"]),
+            Slot::Scene,
+        ),
+        ("intimacy", ValueKind::Grade, Slot::Scene),
+        ("in_group", ValueKind::Flag, Slot::Scene),
+        ("socioeconomic_standing", ValueKind::Grade, Slot::Speaker),
+        ("education", ValueKind::Grade, Slot::Speaker),
+        (
+            "age_cohort",
+            options(&["child", "adolescent", "young_adult", "adult", "elder"]),
+            Slot::Speaker,
+        ),
     ]
     .into_iter()
     .enumerate()
@@ -564,7 +587,7 @@ pub fn scene_revision() -> (InventoryRevision, Vec<InventoryEntry>) {
             id: Family::Feature.id(NonZeroU32::MIN.saturating_add(taken + i as u32)),
             gloss: gloss.to_string(),
             value_kind: Some(kind),
-            applies_to: vec![Slot::Scene],
+            applies_to: vec![slot],
             introduced_rev: 3,
             retired_rev: None,
         });

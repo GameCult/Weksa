@@ -15,7 +15,7 @@ plus a separately recorded chosen gloss per lowering).
 - `data/daodejing/`: its own stores (inventory revisions 1 to 3, one entity, five
   corpus items, five packets), apart from the production stores in `data/`.
   Revision 3 is `weksa::daodejing::revision()`; the packets are
-  `weksa::daodejing::packets()`. The scene revision (`scene_revision()`, also
+  `weksa::daodejing::packets()`. The scene revision (`speaker_scene_revision()`, also
   numbered 3) is not applied in these stores and will need renumbering when it
   is applied anywhere both meet.
 - Rebuild: `weksa --corpus C --inventory I --entities E` with `inventory seed`,

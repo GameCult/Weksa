@@ -81,9 +81,14 @@
           ]
         },
         {
-          "description": "The relation of the speaker to the addressee in the scene; see\n`LoweringInput::with_scene`.",
+          "description": "The speaker's relation to one party of the scene, held by `weksa.scene`\ndocuments; see `LoweringInput::with_scene`.",
           "type": "string",
           "const": "Scene"
+        },
+        {
+          "description": "The speaker's stable axes, held by `weksa.speaker` documents.",
+          "type": "string",
+          "const": "Speaker"
         }
       ]
     },

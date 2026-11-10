@@ -213,6 +213,25 @@ affect and restraint to its own register. A held-back feeling is not a claim
 about the world, so it is never a predication. An empty stance is valid. The
 stance reaches the lowerer in the lowering view.
 
+### Speaker and scene documents
+
+Two documents outside the packet hold the speaker's standing, in the store that
+owns them (`SpeakerStateStore`). `weksa.speaker` (key `speaker:<entity slug>@<n>`)
+holds one entity's stable axes as feature values of slot `Speaker`.
+`weksa.scene` (key `scene:<group>@<n>`) holds a corpus group's participants and,
+per ordered pair, the speaker's relation to a party (slot `Scene`); the party is
+a named participant or `Party::Unnamed`, an addressee the scene does not name,
+such as the player or a crowd. A revision appends and never edits: `n` is the
+latest plus one, and the latest revision is the highest `n`. Each carries an
+`Annotator`, `Operator` or `Model` with an attestation string for its generator.
+Both hold typed feature values only, never text. A feature of slot `Stance`,
+`Speaker` or `Scene` sits in that slot alone (each layer has one writer and one
+lifetime), which `admit_revision` enforces. `LoweringInput::with_scene` takes a
+scene document and the speaker; the speaker must be a participant (V16), and
+the relation selected is the speaker's to the entity of the addressee referent
+(to `Unnamed` when that referent has no entity, to nothing when the packet has
+no addressee). V13 is retired.
+
 ### `referents`
 
 Entities, groups, places, abstractions and the rest. `kind` is a referent-kind

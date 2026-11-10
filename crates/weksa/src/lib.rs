@@ -14,6 +14,7 @@ pub mod packet;
 pub mod phones;
 pub mod schema;
 pub mod score;
+pub mod speaker;
 pub mod split;
 pub mod store;
 pub mod validate;
@@ -26,14 +27,15 @@ pub use inventory::{
     Slot, ValueKind,
 };
 pub use lower::{EntityForms, LowerError, PhoneLine, TARGET_LANGUAGE, lower, phones, pronounce};
-pub use phones::{Phone, PhoneInventory, SegmentError, Stress};
 pub use packet::{
     EncoderId, EntityId, Grade, NodeId, Packet, PacketId, PacketKind, SCHEMA_VERSION, Stance,
 };
+pub use phones::{Phone, PhoneInventory, SegmentError, Stress};
 pub use score::{Embedder, ItemScore, OllamaEmbedder, Scorer, chrf};
+pub use speaker::{Annotator, PairRelation, Party, Scene, Speaker};
 pub use split::{Split, SplitScheme};
 pub use store::{
-    AddOutcome, CorpusStore, EntityBound, EntityStore, InventoryStore, PacketStore, StoreError,
-    StoreRefusal,
+    AddOutcome, CorpusStore, EntityBound, EntityStore, InventoryStore, PacketStore,
+    SpeakerStateStore, StoreError, StoreRefusal,
 };
 pub use validate::{LoweringInput, Refusal, validate};

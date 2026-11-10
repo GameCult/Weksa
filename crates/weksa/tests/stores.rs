@@ -1103,6 +1103,10 @@ fn speaker_state_slots_are_exclusive() {
         &[Slot::Scene, Slot::Relation],
         &[Slot::Discourse, Slot::Scene],
         &[Slot::Scene, Slot::Scene],
+        &[Slot::Speaker, Slot::Scene],
+        &[Slot::Speaker, Slot::Stance],
+        &[Slot::Speaker, Slot::Relation],
+        &[Slot::Speaker, Slot::Speaker],
         &[Slot::Stance, Slot::Stance],
     ] {
         let rev = rev_with(vec![Change::Add(iv("feature:50"))], 2, Some(1));
@@ -1121,7 +1125,8 @@ fn speaker_state_slots_are_exclusive() {
     for (n, slots) in [
         (2, &[Slot::Scene][..]),
         (3, &[Slot::Stance]),
-        (4, &[Slot::Discourse, Slot::Predication]),
+        (4, &[Slot::Speaker]),
+        (5, &[Slot::Discourse, Slot::Predication]),
     ] {
         let id = format!("feature:{}", 50 + n);
         let rev = rev_with(vec![Change::Add(iv(&id))], n, Some(n - 1));

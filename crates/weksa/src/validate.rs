@@ -3,9 +3,11 @@
 //! returns `Ok(())` or the refusals. [`LoweringInput`], the only thing a
 //! lowerer sees, comes from `PacketStore::admit` alone, which builds it through
 //! the crate-private `admissible`. The stance is checked like every feature
-//! list, in slot `Stance`. The rules are V1..V8, V10..V12 and V14..V15: the
+//! list, in slot `Stance`. The rules are V1..V8, V10..V12 and V14..V16: the
 //! shape of an id or a grade is its type's parse, not a rule, so V9 is retired
-//! and not renumbered; V13 is retired too.
+//! and not renumbered; V13 is retired too. [`LoweringInput::with_scene`] takes
+//! a [`Scene`](crate::speaker::Scene) document, and `feature_refusals` is the
+//! one feature check it and the speaker-state store share.
 //!
 //! `validate` owns form and capacity and makes no leak decision. A packet's one
 //! free text is its trace (`notes` and `rejected_readings`): `validate` does not
@@ -27,9 +29,10 @@ use std::fmt;
 
 use crate::inventory::{Family, InvId, Inventory, InventoryEntry, Slot, ValueKind};
 use crate::packet::{
-    Constraints, Context, Discourse, Extension, FeatValue, FeatureValue, NodeId, Packet,
+    Constraints, Context, Discourse, EntityId, Extension, FeatValue, FeatureValue, NodeId, Packet,
     PacketKind, Predication, ProvenanceSource, Referent, Relation, SCHEMA_VERSION, Stance,
 };
+use crate::speaker::Scene;
 
 /// A broken rule, named.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -107,6 +110,8 @@ pub enum Refusal {
     V15ConsentSource {
         source: ProvenanceSource,
     },
+    /// V16: `with_scene` was given a speaker the scene does not list.
+    V16SpeakerNotInScene,
 }
 
 impl Refusal {
@@ -129,6 +134,7 @@ impl Refusal {
                 "V14"
             }
             Refusal::V15ConsentSource { .. } => "V15",
+            Refusal::V16SpeakerNotInScene => "V16",
         }
     }
 }
@@ -154,6 +160,7 @@ impl fmt::Display for Refusal {
             Refusal::V14ConsentWithoutAddressee => "consent given without an addressee",
             Refusal::V14ConsentNotAPredication { .. } => "consent names no predication",
             Refusal::V15ConsentSource { .. } => "consent set by a source that only read wording",
+            Refusal::V16SpeakerNotInScene => "the speaker is not a participant of the scene",
         };
         write!(f, "{}: {what}", self.rule())
     }
@@ -465,6 +472,29 @@ impl<'a> Inventoried<'a> {
     }
 }
 
+/// The one feature check of the speaker-state documents and `with_scene`: V10
+/// when `rev` has no record, else the rules the packet's own check applies to a
+/// feature list in `slot` (V5 to V8, V11).
+pub(crate) fn feature_refusals(
+    inventory: &Inventory,
+    rev: u32,
+    features: &[FeatureValue],
+    slot: Slot,
+) -> Vec<Refusal> {
+    let mut out = Vec::new();
+    if !inventory.has_revision(rev) {
+        out.push(Refusal::V10UnknownRevision { rev });
+    } else {
+        Inventoried {
+            inv: inventory,
+            rev,
+            out: &mut out,
+        }
+        .features(features, slot);
+    }
+    out
+}
+
 fn fits(kind: Option<&ValueKind>, value: &FeatValue) -> bool {
     match (kind, value) {
         (Some(ValueKind::Grade), FeatValue::Grade(_)) => true,
@@ -530,6 +560,27 @@ fn fits(kind: Option<&ValueKind>, value: &FeatValue) -> bool {
 /// fn read(l: weksa::LoweringInput) { let _ = l.scene; }
 /// ```
 ///
+/// Scene values come only from a `weksa.scene` document: the raw-values door
+/// is gone. The first block is the same call with a document; the second hands
+/// it feature values and fails for that alone.
+///
+/// ```
+/// fn pick(
+///     l: weksa::LoweringInput,
+///     i: &weksa::Inventory,
+///     s: &weksa::speaker::Scene,
+///     e: &weksa::EntityId,
+/// ) {
+///     let _ = l.with_scene(i, s, e);
+/// }
+/// ```
+///
+/// ```compile_fail
+/// fn pick(l: weksa::LoweringInput, i: &weksa::Inventory) {
+///     let _ = l.with_scene(i, vec![]);
+/// }
+/// ```
+///
 /// The constructor is private: a call from outside the crate compiles only if
 /// `LoweringInput::of` is `pub`. The first block is the same code without the
 /// call, so the second fails for that call and nothing else.
@@ -587,6 +638,39 @@ impl LoweringInput {
         }
     }
 
+    /// Adds the speaker's relation to the addressee, the only path for scene
+    /// values into a view; they come only from a `weksa.scene` document. The
+    /// speaker must be a participant of `scene` (V16). With no addressee, or
+    /// one that names no referent, nothing is selected; otherwise the relation
+    /// from the speaker to the addressee referent's entity (to `Unnamed` when
+    /// the referent has none) is checked like every feature list, in slot
+    /// `Scene` at this view's inventory revision, and replaces any earlier
+    /// scene. The English lowerer ignores it.
+    pub fn with_scene(
+        mut self,
+        inventory: &Inventory,
+        scene: &Scene,
+        speaker: &EntityId,
+    ) -> Result<Self, Vec<Refusal>> {
+        if !scene.participants.contains(speaker) {
+            return Err(vec![Refusal::V16SpeakerNotInScene]);
+        }
+        let addressee = self
+            .discourse
+            .addressee
+            .as_ref()
+            .and_then(|id| self.referents.iter().find(|r| &r.id == id));
+        let selected = addressee
+            .map(|r| scene.relation(speaker, r.entity.as_ref()))
+            .unwrap_or_default();
+        let out = feature_refusals(inventory, self.inventory_rev, selected, Slot::Scene);
+        if !out.is_empty() {
+            return Err(out);
+        }
+        self.scene = selected.to_vec();
+        Ok(self)
+    }
+
     pub fn inventory_rev(&self) -> u32 {
         self.inventory_rev
     }
@@ -617,7 +701,8 @@ impl LoweringInput {
     pub fn stance(&self) -> &Stance {
         &self.stance
     }
-    /// The speaker's relation to the addressee; empty until `with_scene`.
+    /// The features of the scene relation from the speaker to the addressee;
+    /// empty until `with_scene`, or when the scene holds none.
     pub fn scene(&self) -> &[FeatureValue] {
         &self.scene
     }
