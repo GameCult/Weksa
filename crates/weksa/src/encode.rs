@@ -1,7 +1,8 @@
-//! The encoder and editor steps: what a model's answer becomes. This is the one
-//! place JSON is read (the xenos boundary): a model answers in JSON,
-//! `PacketDraft::parse` or `EditDraft::parse` reads it (both through
-//! `from_json`), and nothing is stored as JSON. The encoder writes meaning
+//! The encoder, editor and lowerer steps: what a model's answer becomes. This is
+//! the one place JSON is read (the xenos boundary): a model answers in JSON,
+//! `PacketDraft::parse`, `EditDraft::parse` or `LoweringDraft::parse` reads it
+//! (all through `from_json`), and nothing is stored as JSON. The lowerer writes
+//! `text` only. The encoder writes meaning
 //! only; `into_packet` sets the id, schema version, inventory revision, kind,
 //! provenance, constraints and extensions, and an empty trace, so a model that
 //! saw a Validation item cannot hand its words to whoever reads packets. The
@@ -52,7 +53,7 @@ impl fmt::Display for DraftError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "not a packet draft at line {} column {}",
+            "not a draft at line {} column {}",
             self.line, self.column
         )
     }
@@ -199,6 +200,35 @@ impl EditDraft {
     }
 }
 
+/// A lowering as the lowerer writes it: the English text, nothing else.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LoweringDraft {
+    pub text: String,
+}
+
+/// The most bytes a lowering may hold: well over any one utterance, far under
+/// a megabyte the embedder would be asked to read.
+pub const MAX_LOWERING_BYTES: usize = 4096;
+
+impl LoweringDraft {
+    pub fn parse(answer: &str) -> Result<Self, DraftError> {
+        from_json(answer)
+    }
+
+    /// Whether the text can be scored as an utterance: something after trimming,
+    /// at most [`MAX_LOWERING_BYTES`], and no control character other than a
+    /// line break or tab. Nothing is judged about the words.
+    pub fn usable(&self) -> bool {
+        !self.text.trim().is_empty()
+            && self.text.len() <= MAX_LOWERING_BYTES
+            && !self
+                .text
+                .chars()
+                .any(|c| c.is_control() && !matches!(c, '\n' | '\t'))
+    }
+}
+
 /// `encoder:<hex16>`, a digest of the model id and the prompt digest.
 pub fn encoder_id(model: &str, prompt_digest: &str) -> EncoderId {
     let digest = fnv1a64(format!("weksa-encoder-v1:{model}:{prompt_digest}").as_bytes());
@@ -274,6 +304,24 @@ mod tests {
     }
 
     #[test]
+    fn lowering_draft_parse() {
+        let draft = LoweringDraft::parse("\n {\"text\":\"a\"} \n").unwrap();
+        assert_eq!(draft.text, "a");
+        for bad in [
+            r#"{"text":"a","trace":"b"}"#,
+            r#"{}"#,
+            r#"{"text":1}"#,
+            "the sage acts",
+            "",
+        ] {
+            let err = LoweringDraft::parse(bad).unwrap_err();
+            // Position only: no answer bytes in either rendering.
+            let shown = format!("{err} {err:?}");
+            assert!(!shown.contains("sage") && !shown.contains("trace"), "{shown}");
+        }
+    }
+
+    #[test]
     fn parse_reads_a_draft_and_trims() {
         let draft = PacketDraft::of(&packets()[0]);
         let json = serde_json::to_string(&draft).unwrap();
@@ -315,7 +363,7 @@ mod tests {
     fn a_draft_error_is_a_position_and_echoes_no_token() {
         let err = PacketDraft::parse("{\n  \"confidence\": CANARYTOKEN").unwrap_err();
         assert_eq!((err.line, err.column), (2, 17));
-        assert_eq!(err.to_string(), "not a packet draft at line 2 column 17");
+        assert_eq!(err.to_string(), "not a draft at line 2 column 17");
         assert_eq!(format!("{err:?}"), err.to_string());
         let err = PacketDraft::parse(r#"{"confidence":500,"CANARYKEY":1}"#).unwrap_err();
         for text in [err.to_string(), format!("{err:?}")] {

@@ -11,7 +11,7 @@ use weksa::corpus::{CorpusItem, ModelFamily, NameSpan, Source, Turn};
 use weksa::entity::{Entity, EntityOrigin, LanguageForms, Pronunciation};
 use weksa::inventory::{proof_revision, seed};
 use weksa::packet::proof_packet;
-use weksa::run::{CycleOutcome, RoundOutcome, RunPaths, RunStores, cycle, round};
+use weksa::run::{CycleOutcome, LowererReach, RoundOutcome, RunPaths, RunStores, cycle, round};
 use weksa::score::ScoreInput;
 use weksa::{
     AnswerFiles, CorpusStore, EntityId, EntityStore, InventoryStore, OllamaEmbedder, PacketStore,
@@ -88,20 +88,25 @@ enum LoopCommand {
         answerer: String,
         #[arg(long, default_value = "qwen3-embedding:0.6b")]
         embed_model: String,
+        /// How lowering prompts will be answered: briefed-subagent (smoke
+        /// rounds only) or tool-less-relay. Pinned in the run's record.
+        #[arg(long)]
+        lowerer_reach: LowererReach,
     },
     /// Run one round of the run at ROOT. The stores are read only from the
     /// run's record: the global --corpus, --inventory and --entities are not
-    /// read. Prompts without answers are written to the round's directory and
-    /// the command exits 3; rerun after the `.answer` files exist.
+    /// read. Encode prompts are written first; once they are answered a rerun
+    /// writes the lowering prompts. The command exits 3 each time until every
+    /// prompt has an answer.
     Round {
         root: PathBuf,
         #[arg(long, default_value = "http://127.0.0.1:11434")]
         ollama_url: String,
     },
     /// Run one edit-accept cycle of the run at ROOT. The stores are read only
-    /// from the run's record. Prompts without answers are written to the
-    /// cycle's directory and the command exits 3; rerun after the `.answer`
-    /// files exist.
+    /// from the run's record. The editor's prompt, then the candidate round's
+    /// encode prompts, then its lowering prompts are written in turn; the
+    /// command exits 3 each time until every prompt has an answer.
     Cycle {
         root: PathBuf,
         #[arg(long, default_value = "http://127.0.0.1:11434")]
@@ -733,6 +738,7 @@ fn main() -> Result<()> {
             label,
             answerer,
             embed_model,
+            lowerer_reach,
         }) => {
             let run = RunStores::create(
                 &root,
@@ -744,6 +750,7 @@ fn main() -> Result<()> {
                 },
                 &answerer,
                 &embed_model,
+                lowerer_reach,
             )?;
             println!("opened run:{}", run.record().label);
         }
@@ -764,7 +771,7 @@ fn main() -> Result<()> {
                     println!("unanswered {} of {asked}", prompts.len());
                     std::process::exit(3);
                 }
-                RoundOutcome::Recorded(r) => println!("{}", r.summary_line()),
+                RoundOutcome::Recorded(r) => println!("{}", run.labelled(&r.summary_line())),
             }
         }
         Command::Loop(LoopCommand::Cycle { root, ollama_url }) => {
@@ -783,7 +790,9 @@ fn main() -> Result<()> {
                     println!("unanswered {} prompts", prompts.len());
                     std::process::exit(3);
                 }
-                CycleOutcome::Decided(decision) => println!("{}", decision.summary_line()),
+                CycleOutcome::Decided(decision) => {
+                    println!("{}", run.labelled(&decision.summary_line()))
+                }
             }
         }
         Command::Schema { out } => {

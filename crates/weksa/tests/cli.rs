@@ -1344,6 +1344,8 @@ fn loop_open_and_unanswered_round() {
                 "smoke",
                 "--answerer",
                 "fake-model",
+                "--lowerer-reach",
+                "tool-less-relay",
             ],
         )
     };
@@ -1393,7 +1395,7 @@ fn loop_open_and_unanswered_round() {
     assert!(second.status.success(), "{}", out(&second));
     assert_eq!(
         out(&second),
-        "round 1 rev 3 train n=1 scored=0 chrf=0.00 meaning=0.0000 refused=1 validation n=2 scored=0 chrf=0.00 meaning=0.0000 refused parse=2 admit=0 lower=0\n"
+        "round 1 rev 3 train n=1 scored=0 chrf=0.00 meaning=0.0000 refused=1 validation n=2 scored=0 chrf=0.00 meaning=0.0000 refused parse=2 admit=0 lower=0 lowering=tool-less-relay\n"
     );
 
     // The global store flags are not read by loop round: a drifted store is refused.
@@ -1420,6 +1422,8 @@ fn open_dao_run(d: &std::path::Path) {
             "smoke",
             "--answerer",
             "fake-model",
+            "--lowerer-reach",
+            "tool-less-relay",
         ],
     );
     assert!(o.status.success(), "{}", out(&o));
@@ -1481,7 +1485,7 @@ fn loop_cycle_asks_then_decides() {
     assert!(done.status.success(), "{}", out(&done));
     assert_eq!(
         out(&done),
-        "cycle 1 rev 3->none base=0.0000 candidate=none floor=0.0000 threshold=0.0050 rejected edit-parse\n"
+        "cycle 1 rev 3->none base=0.0000 candidate=none floor=0.0000 threshold=0.0050 rejected edit-parse lowering=tool-less-relay\n"
     );
 
     // The next cycle asks afresh in its own directory.
@@ -1520,6 +1524,8 @@ fn loop_errors_echo_no_input() {
             "CANARYLABEL",
             "--answerer",
             "m",
+            "--lowerer-reach",
+            "tool-less-relay",
         ],
         vec![
             "loop",
@@ -1529,6 +1535,8 @@ fn loop_errors_echo_no_input() {
             "ok",
             "--answerer",
             "CANARY\n",
+            "--lowerer-reach",
+            "tool-less-relay",
         ],
     ] {
         let o = weksa(d.path(), &args);
@@ -1548,9 +1556,39 @@ fn loop_errors_echo_no_input() {
             "ok",
             "--answerer",
             "m",
+            "--lowerer-reach",
+            "tool-less-relay",
         ])
         .output()
         .unwrap();
     assert!(!o.status.success());
     assert!(!out(&o).to_uppercase().contains("CANARY"), "{}", out(&o));
+}
+
+#[test]
+fn loop_open_requires_the_lowerer_reach_and_pins_it() {
+    let d = tempfile::tempdir().unwrap();
+    dao_stores(d.path());
+    let base = ["loop", "open", "canaryroot", "--label", "smoke", "--answerer", "m"];
+    // No default: the record says how lowerings are answered, or there is no run.
+    let o = weksa(d.path(), &base);
+    assert!(!o.status.success());
+    assert!(out(&o).contains("--lowerer-reach"), "{}", out(&o));
+    // A value outside the two names is refused without being echoed.
+    let mut args = base.to_vec();
+    args.extend(["--lowerer-reach", "CANARYREACH"]);
+    let o = weksa(d.path(), &args);
+    assert!(!o.status.success());
+    assert!(!out(&o).to_uppercase().contains("CANARY"), "{}", out(&o));
+    assert!(!d.path().join("canaryroot/run.cc").exists());
+    // Either name opens, and the record keeps it.
+    let mut args = base.to_vec();
+    args.extend(["--lowerer-reach", "briefed-subagent"]);
+    let o = weksa(d.path(), &args);
+    assert!(o.status.success(), "{}", out(&o));
+    let run = weksa::run::RunStores::open(&d.path().join("canaryroot")).unwrap();
+    assert_eq!(
+        run.record().lowerer_reach,
+        weksa::run::LowererReach::BriefedSubagent
+    );
 }

@@ -32,9 +32,11 @@ measured.
 - `settings/`: setting-specific proving grounds for language projects.
 
 **Live versus planned.** Live: docs, fixtures, examples, ontology data and the
-packet crate `crates/weksa`, including lowering, `weksa lower` and `weksa score`,
-and the golf loop's round and edit-accept cycle (`weksa loop open|round|cycle`).
-Planned: a model lowerer, Score documents and the other panel languages. No
+packet crate `crates/weksa`, including `weksa lower` (the template lowerer for
+proof fixtures) and `weksa score`, and the golf loop's round and edit-accept
+cycle (`weksa loop open|round|cycle`), which encodes and lowers through the
+model (a prompted Claude subagent, per staged-distill).
+Planned: Score and lowering documents and the other panel languages. No
 daemon runs; the earlier Node daemon is parked at tag `parked/weksa-node-body`.
 
 ## Ownership Model

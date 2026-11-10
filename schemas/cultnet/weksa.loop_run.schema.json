@@ -36,8 +36,9 @@
     "label": {
       "type": "string"
     },
-    "lowerer_digest": {
-      "type": "string"
+    "lowerer_reach": {
+      "description": "How the run's lowering prompts are answered, set once at open.",
+      "$ref": "#/$defs/LowererReach"
     },
     "model": {
       "description": "The answering model.",
@@ -55,10 +56,27 @@
     "corpus_digest",
     "entity_digest",
     "prompt_digest",
-    "lowerer_digest",
     "model",
     "embedder",
     "chrf_version",
-    "inventory_digest"
-  ]
+    "inventory_digest",
+    "lowerer_reach"
+  ],
+  "$defs": {
+    "LowererReach": {
+      "description": "How a run's lowering prompts reach the model that answers them (rulings\n`lowerer-call-reach-toolless-relay`, `dao-round-seed-inventory`). The\nrecord says which, so a round lowered by a briefed subagent cannot pass as\na tool-less one.",
+      "oneOf": [
+        {
+          "description": "A subagent briefed to read one prompt file: acceptable for smoke rounds\nonly.",
+          "type": "string",
+          "const": "BriefedSubagent"
+        },
+        {
+          "description": "The prompt passed inline to an agent with no file tools.",
+          "type": "string",
+          "const": "ToolLessRelay"
+        }
+      ]
+    }
+  }
 }
