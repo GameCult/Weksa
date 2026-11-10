@@ -922,16 +922,24 @@ pub fn threshold(floor: &Reading) -> f64 {
     floor.composite.max(LADDER_STEP)
 }
 
+/// A reading difference in billionths. [`decide`] compares whole numbers, so a
+/// gain of exactly one [`LADDER_STEP`] is a tie on every baseline of the grid
+/// instead of a coin the last bits of `0.505 - 0.5` toss; differences under a
+/// billionth are not told apart.
+fn nano(x: f64) -> i64 {
+    (x * 1e9).round() as i64
+}
+
 /// The accept rule. A metric that falls by more than its tolerance (the floor,
 /// at least one step) rejects; otherwise the composite must gain strictly more
 /// than [`threshold`]. Means count a refused Validation item as 0, so refusing a
-/// weak item cannot raise a reading.
+/// weak item cannot raise a reading. Differences are compared in billionths.
 pub fn decide(base: &Reading, candidate: &Reading, floor: &Reading) -> Verdict {
-    if candidate.chrf - base.chrf < -floor.chrf.max(100.0 * LADDER_STEP) {
+    if nano(candidate.chrf - base.chrf) < -nano(floor.chrf.max(100.0 * LADDER_STEP)) {
         Verdict::Rejected(Why::Regressed(Metric::Chrf))
-    } else if candidate.meaning - base.meaning < -floor.meaning.max(LADDER_STEP) {
+    } else if nano(candidate.meaning - base.meaning) < -nano(floor.meaning.max(LADDER_STEP)) {
         Verdict::Rejected(Why::Regressed(Metric::Meaning))
-    } else if candidate.composite - base.composite > threshold(floor) {
+    } else if nano(candidate.composite - base.composite) > nano(threshold(floor)) {
         Verdict::Accepted
     } else {
         Verdict::Rejected(Why::NoGain)
@@ -1430,6 +1438,45 @@ mod tests {
         assert_eq!(decide(&base, &gain(0.7501), &floor), Verdict::Accepted);
         assert_eq!(decide(&base, &gain(0.506), &floor), rejected(Why::NoGain));
     }
+
+    #[test]
+    fn a_gain_of_exactly_one_step_is_no_gain_on_every_baseline_of_the_grid() {
+        let zero = reading(0.0, 0.0, 0.0);
+        let at = |i: u32| reading(50.0, 0.5, f64::from(i) * LADDER_STEP);
+        for i in 0..400 {
+            assert_eq!(
+                decide(&at(i), &at(i + 1), &zero),
+                Verdict::Rejected(Why::NoGain),
+                "{i}"
+            );
+            // Two steps clears one; a step and a hair over clears it too.
+            assert_eq!(decide(&at(i), &at(i + 2), &zero), Verdict::Accepted, "{i}");
+            let hair = reading(50.0, 0.5, f64::from(i + 1) * LADDER_STEP + 1e-6);
+            assert_eq!(decide(&at(i), &hair, &zero), Verdict::Accepted, "{i}");
+        }
+        // The floor is a tie at its own value on the grid, as the step is.
+        let floor = reading(0.0, 0.0, 3.0 * LADDER_STEP);
+        for i in 0..400 {
+            assert_eq!(
+                decide(&at(i), &at(i + 3), &floor),
+                Verdict::Rejected(Why::NoGain),
+                "{i}"
+            );
+            assert_eq!(decide(&at(i), &at(i + 4), &floor), Verdict::Accepted, "{i}");
+        }
+        // The regression tolerance is a tie at its own value, on both metrics.
+        for i in 0..400 {
+            let chrf = 20.0 + f64::from(i) * 0.5;
+            let base = reading(chrf, 0.5, 0.5);
+            let drop = reading(chrf - 100.0 * LADDER_STEP, 0.5, 0.5);
+            assert_eq!(decide(&base, &drop, &zero), Verdict::Rejected(Why::NoGain));
+            let meaning = f64::from(i + 1) * LADDER_STEP;
+            let base = reading(50.0, meaning, 0.5);
+            let drop = reading(50.0, meaning - LADDER_STEP, 0.5);
+            assert_eq!(decide(&base, &drop, &zero), Verdict::Rejected(Why::NoGain));
+        }
+    }
+
     fn replicate(n: u32, digest: &str, chrf: f64, meaning: f64) -> RoundRecord {
         RoundRecord {
             n,
