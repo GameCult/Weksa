@@ -1662,6 +1662,43 @@ fn two_accepts_make_the_latest_the_head_and_a_reject_after_them_is_told_so() {
 }
 
 #[test]
+fn a_rejection_leaves_no_candidate_inventory_from_an_earlier_attempt() {
+    for (name, rewrite, why) in [
+        ("zero changes", "{}", Why::EditAdmit),
+        ("not json", "not json", Why::EditParse),
+    ] {
+        let mut dao = dao();
+        two_rounds(&mut dao);
+        let scorer = Scorer::new(Bag);
+        let ask = |dao: &mut Dao| {
+            let mut files =
+                AnswerFiles::new(dao.run.next_cycle_dir().unwrap(), "fake-model".into());
+            cycle(&mut dao.run, &mut files, &scorer).unwrap()
+        };
+        let dir = dao.root.join("cycle-1");
+        let CycleOutcome::Unanswered { prompts } = ask(&mut dao) else {
+            panic!("{name}: answered from nothing")
+        };
+        let answer = dir.join(format!("{}.answer", prompts[0]));
+        std::fs::write(&answer, ONE_CONCEPT).unwrap();
+
+        // The candidate round is unanswered, which leaves the candidate inventory.
+        let CycleOutcome::Unanswered { .. } = ask(&mut dao) else {
+            panic!("{name}: answered the candidate round from nothing")
+        };
+        assert!(dir.join("inventory.cc").is_file(), "{name}");
+
+        // The editor's answer is replaced by one the door refuses.
+        std::fs::write(&answer, rewrite).unwrap();
+        let d = decided(ask(&mut dao));
+        assert_eq!(d.verdict(), Verdict::Rejected(why), "{name}");
+        assert!(!dir.join("inventory.cc").exists(), "{name}");
+        assert!(!dir.join("inventory.cc.lock").exists(), "{name}");
+        assert_eq!(head_rev(&dao.root), 3, "{name}");
+    }
+}
+
+#[test]
 fn unanswered_cycle_writes_nothing() {
     let mut dao = dao();
     two_rounds(&mut dao);

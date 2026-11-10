@@ -1175,7 +1175,9 @@ pub fn cycle<M: ModelPort, E: Embedder>(
         verdict,
     };
     let decision_key = format!("run:{}:cycle:{k}", run.record.label);
+    // A rejection leaves no candidate inventory behind, whichever attempt built it.
     let reject = |run: &mut RunStores, why: Why| -> Result<CycleOutcome, RunError> {
+        discard_inventory(&dir);
         let d = blank(Verdict::Rejected(why));
         run.cache.put(decision_key.clone(), &d).map_err(store)?;
         Ok(CycleOutcome::Decided(d))
@@ -1199,7 +1201,6 @@ pub fn cycle<M: ModelPort, E: Embedder>(
     let mut candidate_store = InventoryStore::open(&candidate_file).map_err(store)?;
     if candidate_store.admit_revision(revision, entries).is_err() {
         drop(candidate_store);
-        discard_inventory(&dir);
         return reject(run, Why::EditAdmit);
     }
     let candidate_digest = file_digest_at(&candidate_file).ok_or(RunError::Store)?;
