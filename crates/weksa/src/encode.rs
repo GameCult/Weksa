@@ -47,6 +47,67 @@ pub struct PacketDraft {
 pub struct DraftError {
     pub line: usize,
     pub column: usize,
+    /// What kind of reading failure, from serde's own fixed vocabulary. It
+    /// never holds a token of the answer.
+    pub class: DraftClass,
+}
+
+/// Why an answer is not a draft: a closed set of classes, never the offending
+/// text, so a record may keep it for a held-out item.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DraftClass {
+    /// Not JSON.
+    Syntax,
+    /// JSON that ends early.
+    Eof,
+    MissingField,
+    UnknownField,
+    /// A value of the wrong JSON type, such as a bare integer for an id.
+    InvalidType,
+    /// A value of the right type that is not one of the field's: a node id
+    /// spelled `entity:x`, a number out of range.
+    InvalidValue,
+    Other,
+}
+
+impl DraftClass {
+    /// The code a round record keeps.
+    pub fn code(self) -> &'static str {
+        match self {
+            DraftClass::Syntax => "syntax",
+            DraftClass::Eof => "eof",
+            DraftClass::MissingField => "missing-field",
+            DraftClass::UnknownField => "unknown-field",
+            DraftClass::InvalidType => "invalid-type",
+            DraftClass::InvalidValue => "invalid-value",
+            DraftClass::Other => "other",
+        }
+    }
+
+    fn of(e: &serde_json::Error) -> Self {
+        use serde_json::error::Category;
+        match e.classify() {
+            Category::Syntax => DraftClass::Syntax,
+            Category::Eof => DraftClass::Eof,
+            Category::Io => DraftClass::Other,
+            // Only the leading words of serde's message are read, and only to
+            // pick one of these classes; the message is not kept.
+            Category::Data => {
+                let msg = e.to_string();
+                if msg.starts_with("missing field") {
+                    DraftClass::MissingField
+                } else if msg.starts_with("unknown field") {
+                    DraftClass::UnknownField
+                } else if msg.starts_with("invalid type") {
+                    DraftClass::InvalidType
+                } else if msg.starts_with("invalid value") {
+                    DraftClass::InvalidValue
+                } else {
+                    DraftClass::Other
+                }
+            }
+        }
+    }
 }
 
 impl fmt::Display for DraftError {
@@ -72,6 +133,7 @@ fn from_json<T: DeserializeOwned>(answer: &str) -> Result<T, DraftError> {
     serde_json::from_str(answer.trim()).map_err(|e| DraftError {
         line: e.line(),
         column: e.column(),
+        class: DraftClass::of(&e),
     })
 }
 

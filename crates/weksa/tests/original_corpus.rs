@@ -99,7 +99,7 @@ fn the_recall_probe_covers_all_six_original_items_and_names_no_work() {
         },
         "m",
         "bag",
-        weksa::run::LowererReach::BriefedSubagent,
+        weksa::run::LowererReach::BriefedSubagent, ModelFamily::Unrecorded
     )
     .unwrap();
     let mut model = Unrelated(vec![]);

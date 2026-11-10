@@ -2059,7 +2059,7 @@ mod tests {
                     entities: &entities,
                 },
                 "fake-model",
-                "bag", crate::run::LowererReach::ToolLessRelay,
+                "bag", crate::run::LowererReach::ToolLessRelay, ModelFamily::Unrecorded
             )
             .unwrap();
             let mut model = fake();
