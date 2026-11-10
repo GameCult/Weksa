@@ -104,6 +104,13 @@ fn train_items_are_in_key_order() {
         t.keys().collect::<Vec<_>>(),
         ["item:a:1", "item:m:1", "item:z:1"]
     );
+    assert_eq!((t.len(), t.is_empty()), (3, false));
+    let dir = tempfile::tempdir().unwrap();
+    let none = CorpusStore::open(&dir.path().join("c.cc")).unwrap();
+    let none = TrainItems::from_corpus(&none).unwrap();
+    assert_eq!((none.len(), none.is_empty()), (0, true));
+    assert_eq!(Prompt::mint(MINT, &none).text(), MINT);
+    assert!(Prompt::mint(MINT, &none).item_keys().is_empty());
 }
 
 #[test]
