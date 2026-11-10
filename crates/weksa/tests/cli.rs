@@ -309,6 +309,7 @@ fn schema_writes_the_published_files() {
             "weksa.interlingua_packet.schema.json",
             "weksa.inventory_entry.schema.json",
             "weksa.inventory_revision.schema.json",
+            "weksa.loop_decision.schema.json",
             "weksa.loop_round.schema.json",
             "weksa.loop_run.schema.json",
             "weksa.scene.schema.json",
@@ -1404,6 +1405,102 @@ fn loop_open_and_unanswered_round() {
         out(&drifted).contains("drift in Entities"),
         "{}",
         out(&drifted)
+    );
+}
+
+fn open_dao_run(d: &std::path::Path) {
+    dao_stores(d);
+    let o = weksa(
+        d,
+        &[
+            "loop",
+            "open",
+            "canaryroot",
+            "--label",
+            "smoke",
+            "--answerer",
+            "fake-model",
+        ],
+    );
+    assert!(o.status.success(), "{}", out(&o));
+}
+
+#[test]
+fn loop_cycle_needs_a_floor() {
+    let d = tempfile::tempdir().unwrap();
+    open_dao_run(d.path());
+    let o = weksa(d.path(), &["loop", "cycle", "canaryroot"]);
+    assert!(!o.status.success());
+    let text = out(&o);
+    assert!(
+        text.contains("the run has no noise floor: record two rounds first"),
+        "{text}"
+    );
+    for echoed in ["canaryroot", d.path().to_str().unwrap()] {
+        assert!(!text.contains(echoed), "{text}");
+    }
+    assert!(!d.path().join("canaryroot/cycle-1").exists());
+}
+
+#[test]
+fn loop_cycle_asks_then_decides() {
+    let d = tempfile::tempdir().unwrap();
+    open_dao_run(d.path());
+    // Two rounds of refusals: a floor of 0 and a base of 0.
+    for n in 1..=2 {
+        let first = weksa(d.path(), &["loop", "round", "canaryroot"]);
+        assert_eq!(first.status.code(), Some(3), "{}", out(&first));
+        for entry in std::fs::read_dir(d.path().join(format!("canaryroot/round-{n}"))).unwrap() {
+            let path = entry.unwrap().path();
+            std::fs::write(path.with_extension("answer"), "not json").unwrap();
+        }
+        let second = weksa(d.path(), &["loop", "round", "canaryroot"]);
+        assert!(second.status.success(), "{}", out(&second));
+    }
+
+    // The editor is asked first: one digest, a count, exit 3, the prompt on disk.
+    let ask = weksa(d.path(), &["loop", "cycle", "canaryroot"]);
+    assert_eq!(ask.status.code(), Some(3), "{}", out(&ask));
+    let text = out(&ask);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 2, "{text}");
+    let digest = lines[0].strip_prefix("unanswered ").unwrap();
+    assert_eq!(digest.len(), 16, "{text}");
+    assert_eq!(lines[1], "unanswered 1 prompts");
+    for echoed in ["canaryroot", d.path().to_str().unwrap()] {
+        assert!(!text.contains(echoed), "{text}");
+    }
+    let dir = d.path().join("canaryroot/cycle-1");
+    let prompt = std::fs::read_to_string(dir.join(format!("{digest}.prompt"))).unwrap();
+    assert!(prompt.starts_with(weksa::context::MINT_INSTRUCTIONS));
+
+    // An answer that is not an edit closes the cycle as a rejection, with no
+    // embed call and no echo of the answer.
+    std::fs::write(dir.join(format!("{digest}.answer")), "CANARYANSWER").unwrap();
+    let done = weksa(d.path(), &["loop", "cycle", "canaryroot"]);
+    assert!(done.status.success(), "{}", out(&done));
+    assert_eq!(
+        out(&done),
+        "cycle 1 rev 3->none base=0.0000 candidate=none floor=0.0000 threshold=0.0050 rejected edit-parse\n"
+    );
+
+    // The next cycle asks afresh in its own directory.
+    let next = weksa(d.path(), &["loop", "cycle", "canaryroot"]);
+    assert_eq!(next.status.code(), Some(3), "{}", out(&next));
+    let text = out(&next);
+    assert!(text.ends_with("unanswered 1 prompts\n"), "{text}");
+    assert!(!text.to_uppercase().contains("CANARY"), "{text}");
+    let asked = text
+        .lines()
+        .next()
+        .unwrap()
+        .strip_prefix("unanswered ")
+        .unwrap();
+    assert_ne!(asked, digest);
+    assert!(
+        d.path()
+            .join(format!("canaryroot/cycle-2/{asked}.prompt"))
+            .is_file()
     );
 }
 

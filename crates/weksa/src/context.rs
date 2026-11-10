@@ -263,8 +263,6 @@ impl EditFeedback {
         }
     }
 
-    // Called by run::cycle (cut commit 5 of golf-loop-edit-accept).
-    #[allow(dead_code)]
     /// `last`: whether the previous edit was accepted; `head`: the composite at
     /// the current inventory, rounded here to the nearest [`LADDER_STEP`].
     pub(crate) fn new(last: Option<bool>, head: Option<f64>) -> Self {

@@ -11,7 +11,7 @@ use weksa::corpus::{CorpusItem, ModelFamily, NameSpan, Source, Turn};
 use weksa::entity::{Entity, EntityOrigin, LanguageForms, Pronunciation};
 use weksa::inventory::{proof_revision, seed};
 use weksa::packet::proof_packet;
-use weksa::run::{RoundOutcome, RunPaths, RunStores, round};
+use weksa::run::{CycleOutcome, RoundOutcome, RunPaths, RunStores, cycle, round};
 use weksa::score::ScoreInput;
 use weksa::{
     AnswerFiles, CorpusStore, EntityId, EntityStore, InventoryStore, OllamaEmbedder, PacketStore,
@@ -94,6 +94,15 @@ enum LoopCommand {
     /// read. Prompts without answers are written to the round's directory and
     /// the command exits 3; rerun after the `.answer` files exist.
     Round {
+        root: PathBuf,
+        #[arg(long, default_value = "http://127.0.0.1:11434")]
+        ollama_url: String,
+    },
+    /// Run one edit-accept cycle of the run at ROOT. The stores are read only
+    /// from the run's record. Prompts without answers are written to the
+    /// cycle's directory and the command exits 3; rerun after the `.answer`
+    /// files exist.
+    Cycle {
         root: PathBuf,
         #[arg(long, default_value = "http://127.0.0.1:11434")]
         ollama_url: String,
@@ -756,6 +765,25 @@ fn main() -> Result<()> {
                     std::process::exit(3);
                 }
                 RoundOutcome::Recorded(r) => println!("{}", r.summary_line()),
+            }
+        }
+        Command::Loop(LoopCommand::Cycle { root, ollama_url }) => {
+            let unreadable = |_| anyhow::anyhow!("a store would not read");
+            let mut run = RunStores::open(&root)?;
+            let mut files = AnswerFiles::new(
+                run.next_cycle_dir().map_err(unreadable)?,
+                run.record().model.clone(),
+            );
+            let scorer = Scorer::new(OllamaEmbedder::new(&ollama_url, &run.record().embedder));
+            match cycle(&mut run, &mut files, &scorer)? {
+                CycleOutcome::Unanswered { prompts } => {
+                    for digest in &prompts {
+                        println!("unanswered {digest}");
+                    }
+                    println!("unanswered {} prompts", prompts.len());
+                    std::process::exit(3);
+                }
+                CycleOutcome::Decided(decision) => println!("{}", decision.summary_line()),
             }
         }
         Command::Schema { out } => {
