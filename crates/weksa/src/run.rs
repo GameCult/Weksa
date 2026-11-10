@@ -1232,7 +1232,6 @@ pub fn cycle<M: ModelPort, E: Embedder>(
         candidate_inventory_digest: Some(candidate_digest),
         candidate_round: Some(record.n),
         candidate: Some(candidate),
-        verdict,
         ..blank(verdict)
     };
     let staged = vec![
