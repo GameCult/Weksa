@@ -23,6 +23,7 @@
 //! uses the template table. The prompt source pin covers `context.rs`,
 //! `split.rs` and `lower.rs`.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -40,7 +41,9 @@ use crate::form::{is_attestation, is_slug};
 use crate::model::{ModelPort, PortError};
 use crate::score::{CHRF_VERSION, Embedder, ItemScore, ScoreInput, Scorer, SplitMean, aggregate};
 use crate::split::{Split, SplitScheme, fnv1a64, fnv1a64_of, hex16};
-use crate::store::{CorpusStore, EntityStore, InventoryStore, PacketStore, open_cache_over};
+use crate::store::{
+    CorpusStore, EntityStore, InventoryStore, PacketStore, StoreError, open_cache_over,
+};
 use crate::validate::LoweringInput;
 
 /// The digest of the prompt builder's source: `context.rs`, then `split.rs`,
@@ -164,6 +167,14 @@ pub struct Call {
     pub items: Vec<String>,
 }
 
+/// How many items one admission rule refused, over both splits: a rule code
+/// (`V5`, `UnknownEntity`) and a count, never an identifier or text.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RuleCount {
+    pub rule: String,
+    pub count: u32,
+}
+
 /// A Train item's row. Validation has no rows.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TrainRow {
@@ -212,6 +223,7 @@ pub struct RefusalCounts {
 ///         validation_refused: RefusalCounts::default(),
 ///         inventory_digest: String::new(),
 ///         cycle: None,
+///         admit_rules: vec![],
 ///     }
 /// }
 /// ```
@@ -262,6 +274,10 @@ pub struct RoundRecord {
     /// `Some(k)` for the candidate round of cycle `k`.
     #[cultcache(key = 17)]
     cycle: Option<u32>,
+    /// The rules admission refused items under, in rule order; every Train
+    /// and Validation item refused at `Stage::Admit` is counted once per rule.
+    #[cultcache(key = 18)]
+    admit_rules: Vec<RuleCount>,
 }
 
 impl RoundRecord {
@@ -316,6 +332,9 @@ impl RoundRecord {
     pub fn cycle(&self) -> Option<u32> {
         self.cycle
     }
+    pub fn admit_rules(&self) -> &[RuleCount] {
+        &self.admit_rules
+    }
 
     /// The round line, unlabelled: [`RunStores::round_line`] adds how the run was lowered. `n` is every item of the split,
     /// `scored` those that lowered; a mean counts a refused item as 0.
@@ -333,7 +352,7 @@ impl RoundRecord {
             &self.validation_mean,
             self.validation_refused,
         );
-        format!(
+        let line = format!(
             "round {} rev {} train n={} scored={} chrf={} meaning={} refused={refused} validation n={} scored={} chrf={} meaning={} refused parse={} admit={} lower={}",
             self.n,
             self.inventory_rev,
@@ -348,7 +367,17 @@ impl RoundRecord {
             x.parse,
             x.admit,
             x.lower,
-        )
+        );
+        if self.admit_rules.is_empty() {
+            line
+        } else {
+            let rules: Vec<String> = self
+                .admit_rules
+                .iter()
+                .map(|r| format!("{}x{}", r.rule, r.count))
+                .collect();
+            format!("{line} admit-rules={}", rules.join(","))
+        }
     }
 }
 
@@ -772,6 +801,25 @@ pub enum RoundOutcome {
     Recorded(RoundRecord),
 }
 
+/// The rule codes an admission refusal broke, each once: validator rules by
+/// code, a store refusal by its variant name. Nothing from the packet or the
+/// stores is kept; an I/O failure is `io`.
+fn admit_rule_codes(e: &StoreError) -> Vec<String> {
+    let mut codes: Vec<String> = match e {
+        StoreError::Invalid(rs) => rs.iter().map(|r| r.rule().to_string()).collect(),
+        StoreError::Refused(r) => vec![r
+            .to_string()
+            .split([' ', ':'])
+            .next()
+            .unwrap_or_default()
+            .to_string()],
+        StoreError::Io(_) => vec!["io".to_string()],
+    };
+    codes.sort();
+    codes.dedup();
+    codes
+}
+
 /// How one item fared: where it was refused, or the text it lowered to, with
 /// the key of the packet that was admitted for it.
 enum Fate {
@@ -876,6 +924,7 @@ fn score_round<M: ModelPort, E: Embedder>(
     let encoder = encoder_id(model.model(), &run.record.prompt_digest);
     let mut items: Vec<CorpusItem> = Vec::new();
     let mut fates: Vec<Fate> = Vec::new();
+    let mut admit_rules: BTreeMap<String, u32> = BTreeMap::new();
     // Phase 1 ends at admission: each admitted view waits for its lowering.
     let mut admitted: Vec<(usize, CorpusItemId, String, LoweringInput)> = Vec::new();
     for (key, answer) in &answers {
@@ -887,7 +936,12 @@ fn score_round<M: ModelPort, E: Embedder>(
                 let packet = draft.into_packet(&id, rev, &encoder);
                 let packet_key = packet.id.to_string();
                 match packets.admit(packet, inventory_store, &run.corpus, &run.entities) {
-                    Err(_) => Fate::Refused(Stage::Admit, None),
+                    Err(e) => {
+                        for rule in admit_rule_codes(&e) {
+                            *admit_rules.entry(rule).or_default() += 1;
+                        }
+                        Fate::Refused(Stage::Admit, None)
+                    }
                     Ok(view) => {
                         admitted.push((fates.len(), id, packet_key, view));
                         // Replaced below by what the lowering answers.
@@ -1038,6 +1092,10 @@ fn score_round<M: ModelPort, E: Embedder>(
         validation_scored,
         inventory_digest: inventory_digest.to_string(),
         cycle,
+        admit_rules: admit_rules
+            .into_iter()
+            .map(|(rule, count)| RuleCount { rule, count })
+            .collect(),
     };
     Ok(RoundOutcome::Recorded(record))
 }
@@ -1470,6 +1528,7 @@ mod tests {
             validation_refused: RefusalCounts::default(),
             inventory_digest: String::new(),
             cycle: None,
+            admit_rules: vec![],
         };
         assert_eq!(r.n(), 1);
     }
@@ -1685,6 +1744,7 @@ mod tests {
             validation_refused: RefusalCounts::default(),
             inventory_digest: digest.to_string(),
             cycle: None,
+            admit_rules: vec![],
         }
     }
 

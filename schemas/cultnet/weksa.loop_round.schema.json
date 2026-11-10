@@ -1,9 +1,16 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "RoundRecord",
-  "description": "One scored round. It holds no text and no Test reading: per-item rows for\nTrain only, Validation only as means and refusal counts by stage. Only\n`run::round` builds one.\n\n```\nfn f(r: &weksa::run::RoundRecord) -> u32 { r.n() }\n```\n\nEvery field is given, so the literal below fails only on privacy; its twin\nis the same literal in the unit test `a_round_record_literal_compiles_in_the_lib`.\n\n```compile_fail,E0451\nuse weksa::run::{RefusalCounts, RoundRecord};\nuse weksa::score::SplitMean;\nfn f() -> RoundRecord {\n    RoundRecord {\n        n: 1,\n        inventory_rev: 1,\n        prompt_digest: String::new(),\n        corpus_digest: String::new(),\n        entity_digest: String::new(),\n        model: String::new(),\n        embedder: String::new(),\n        chrf_version: String::new(),\n        calls: vec![],\n        train: vec![],\n        train_mean: SplitMean::default(),\n        train_scored: 0,\n        validation_mean: SplitMean::default(),\n        validation_scored: 0,\n        validation_refused: RefusalCounts::default(),\n        inventory_digest: String::new(),\n        cycle: None,\n    }\n}\n```",
+  "description": "One scored round. It holds no text and no Test reading: per-item rows for\nTrain only, Validation only as means and refusal counts by stage. Only\n`run::round` builds one.\n\n```\nfn f(r: &weksa::run::RoundRecord) -> u32 { r.n() }\n```\n\nEvery field is given, so the literal below fails only on privacy; its twin\nis the same literal in the unit test `a_round_record_literal_compiles_in_the_lib`.\n\n```compile_fail,E0451\nuse weksa::run::{RefusalCounts, RoundRecord};\nuse weksa::score::SplitMean;\nfn f() -> RoundRecord {\n    RoundRecord {\n        n: 1,\n        inventory_rev: 1,\n        prompt_digest: String::new(),\n        corpus_digest: String::new(),\n        entity_digest: String::new(),\n        model: String::new(),\n        embedder: String::new(),\n        chrf_version: String::new(),\n        calls: vec![],\n        train: vec![],\n        train_mean: SplitMean::default(),\n        train_scored: 0,\n        validation_mean: SplitMean::default(),\n        validation_scored: 0,\n        validation_refused: RefusalCounts::default(),\n        inventory_digest: String::new(),\n        cycle: None,\n        admit_rules: vec![],\n    }\n}\n```",
   "type": "object",
   "properties": {
+    "admit_rules": {
+      "description": "The rules admission refused items under, in rule order; every Train\nand Validation item refused at `Stage::Admit` is counted once per rule.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RuleCount"
+      }
+    },
     "calls": {
       "description": "The encode calls, then the lowering calls, each with its prompt digest\nand one item key.",
       "type": "array",
@@ -96,7 +103,8 @@
     "validation_refused",
     "train_scored",
     "validation_scored",
-    "inventory_digest"
+    "inventory_digest",
+    "admit_rules"
   ],
   "$defs": {
     "Call": {
@@ -185,6 +193,24 @@
         "parse",
         "admit",
         "lower"
+      ]
+    },
+    "RuleCount": {
+      "description": "How many items one admission rule refused, over both splits: a rule code\n(`V5`, `UnknownEntity`) and a count, never an identifier or text.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "rule": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule",
+        "count"
       ]
     },
     "SplitMean": {
