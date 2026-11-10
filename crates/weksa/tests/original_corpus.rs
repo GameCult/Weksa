@@ -2,6 +2,8 @@
 //! non-memorised golf-loop target. It holds no public-domain text, so a model
 //! cannot have it in pretraining, and every item says who wrote it.
 
+mod common;
+
 use std::path::Path;
 
 use weksa::corpus::{ModelFamily, Source};
@@ -252,5 +254,93 @@ fn own_family_counts_and_labels() {
         let (run, r) = original_round(family);
         assert_eq!(r.own_family(), 0);
         assert!(!run.round_line(&r).contains("own-family"));
+    }
+}
+
+/// Over a fixture store whose items are not all live: recall probes the live
+/// Train and Validation items and no others (a withdrawn item, a model-written
+/// item of a test group, a public-domain Test item).
+#[test]
+fn recall_probes_only_live_train_and_validation_items() {
+    use common::{cast, entities_in, group_in_bucket, item_in, run_over};
+    use weksa::model::{ModelPort, PortError};
+    use weksa::run::RecallOutcome;
+    struct Record(Vec<String>);
+    impl ModelPort for Record {
+        fn model(&self) -> &str {
+            "record"
+        }
+        fn answer(&mut self, p: &weksa::context::Prompt) -> Result<String, PortError> {
+            self.0.push(p.text().to_string());
+            Ok(r#"{"text":"nothing"}"#.to_string())
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let entities = entities_in(dir.path());
+    let mut store = CorpusStore::open(&dir.path().join("c.cc")).unwrap();
+    let public = Source::PublicDomain {
+        work: "A Work".into(),
+        author: "An Author".into(),
+        edition_url: "https://example.org/e".into(),
+        licence: "CC0".into(),
+        jurisdiction: "US".into(),
+        translator: "A Translator".into(),
+        edition_year: 1900,
+    };
+    let rows = [
+        (
+            "item:f:1",
+            "trainmark opens here and goes on",
+            10,
+            cast(),
+            false,
+        ),
+        (
+            "item:f:2",
+            "validmark opens here and goes on",
+            50,
+            cast(),
+            false,
+        ),
+        (
+            "item:f:3",
+            "gonemark opens here and goes on",
+            10,
+            cast(),
+            true,
+        ),
+        (
+            "item:f:4",
+            "modelmark opens here and goes on",
+            90,
+            common::model(),
+            false,
+        ),
+        (
+            "item:f:5",
+            "publicmark opens here and goes on",
+            90,
+            public,
+            false,
+        ),
+    ];
+    for (id, text, bucket, source, withdrawn) in rows {
+        let item = item_in(id, text, &group_in_bucket(bucket), source);
+        store.add(item, &entities).unwrap();
+        if withdrawn {
+            store.withdraw(id).unwrap();
+        }
+    }
+    drop(store);
+    let run = run_over(dir.path());
+    let mut m = Record(vec![]);
+    let RecallOutcome::Read(r) = run.recall(&mut m).unwrap() else {
+        panic!("answered");
+    };
+    assert_eq!(r.n, 2);
+    let shown = |mark: &str| m.0.iter().any(|t| t.contains(mark));
+    assert!(shown("trainmark") && shown("validmark"));
+    for hidden in ["gonemark", "modelmark", "publicmark"] {
+        assert!(!shown(hidden), "recall showed {hidden}");
     }
 }
