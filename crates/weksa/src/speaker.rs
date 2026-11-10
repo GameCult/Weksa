@@ -83,9 +83,14 @@ pub struct Scene {
 
 impl Scene {
     /// The features of the relation from `speaker` to the named `addressee`, or
-    /// to `Unnamed` when there is none; empty when the scene holds no such
-    /// relation. A named addressee the scene lacks never falls back to `Unnamed`.
-    pub fn relation(&self, speaker: &EntityId, addressee: Option<&EntityId>) -> &[FeatureValue] {
+    /// to `Unnamed` when there is none; `None` when the scene holds no such
+    /// relation (a relation with no features is `Some(&[])`). A named
+    /// addressee the scene lacks never falls back to `Unnamed`.
+    pub fn relation(
+        &self,
+        speaker: &EntityId,
+        addressee: Option<&EntityId>,
+    ) -> Option<&[FeatureValue]> {
         self.relations
             .iter()
             .find(|r| {
@@ -96,7 +101,7 @@ impl Scene {
                         _ => false,
                     }
             })
-            .map_or(&[], |r| r.features.as_slice())
+            .map(|r| r.features.as_slice())
     }
 }
 

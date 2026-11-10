@@ -38,4 +38,4 @@ pub use store::{
     AddOutcome, CorpusStore, EntityBound, EntityStore, InventoryStore, PacketStore,
     SpeakerStateStore, StoreError, StoreRefusal,
 };
-pub use validate::{LoweringInput, Refusal, validate};
+pub use validate::{LoweringInput, Refusal, SceneRead, validate};

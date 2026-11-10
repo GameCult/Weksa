@@ -499,6 +499,28 @@ fn fits(kind: Option<&ValueKind>, value: &FeatValue) -> bool {
     }
 }
 
+/// What `with_scene` found for a view: the scene revision `rev` it read, or why
+/// it selected no relation. Each case is distinct so a missing annotation or a
+/// store at the wrong path cannot look like a scene that held nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SceneRead {
+    /// `with_scene` has not run.
+    Unread,
+    /// The store holds no scene for the item's group.
+    NoScene,
+    /// The scene was read and the packet names no addressee.
+    NoAddressee { rev: u32 },
+    /// The addressee referent is the speaker themself.
+    SelfAddressed { rev: u32 },
+    /// The scene holds no relation from the speaker to this addressee.
+    NoRelation { rev: u32 },
+    /// The relation was found; its features may be none.
+    Selected {
+        rev: u32,
+        features: Vec<FeatureValue>,
+    },
+}
+
 /// What the lowerer sees: a validated packet's meaning, with no packet id, no
 /// provenance (so no corpus item key, encoder or source) and no trace. Its
 /// fields are private and the constructor is crate-private, called only by
@@ -623,7 +645,7 @@ pub struct LoweringInput {
     /// only source of whose relation `with_scene` selects, and from which scene.
     speaker: EntityId,
     group: String,
-    scene: Vec<FeatureValue>,
+    scene: SceneRead,
 }
 
 impl LoweringInput {
@@ -642,44 +664,61 @@ impl LoweringInput {
             stance: p.stance.clone(),
             speaker: item.speaker.clone(),
             group: item.group.clone(),
-            scene: Vec::new(),
+            scene: SceneRead::Unread,
         }
     }
 
-    /// Adds the speaker's relation to the addressee, the only path for scene
+    /// Reads the speaker's relation to the addressee, the only path for scene
     /// values into a view. The speaker is the item's speaker and the scene is
     /// the latest the store holds for the item's group; the caller names
-    /// neither. No scene for the group selects nothing; a scene that does not
-    /// list the item's speaker is V16. With no addressee nothing is selected;
-    /// otherwise the relation from the speaker to the addressee referent's
-    /// entity (to `Unnamed` when the referent has none) is checked like every
-    /// feature list, in slot `Scene` at this view's inventory revision, and
-    /// replaces any earlier scene. The English lowerer ignores it.
+    /// neither. A scene that does not list the item's speaker is V16, with or
+    /// without an addressee. What the read found is recorded on the view as a
+    /// [`SceneRead`], never an empty feature list standing for five cases:
+    /// no scene for the group, no addressee, an addressee who is the speaker,
+    /// no such relation, or the relation from the speaker to the addressee
+    /// referent's entity (to `Unnamed` when the referent has none), whose
+    /// features are checked like every feature list in slot `Scene` at this
+    /// view's inventory revision. A read replaces any earlier one. The English
+    /// lowerer ignores it.
     pub fn with_scene(
         mut self,
         inventory: &Inventory,
         state: &SpeakerStateStore,
     ) -> Result<Self, StoreError> {
-        self.scene = Vec::new();
+        self.scene = SceneRead::Unread;
         let Some(scene) = state.scene(&self.group)? else {
+            self.scene = SceneRead::NoScene;
             return Ok(self);
         };
+        let rev = scene.n;
         if !scene.participants.contains(&self.speaker) {
             return Err(StoreError::Invalid(vec![Refusal::V16SpeakerNotInScene]));
         }
-        let selected = self
-            .discourse
-            .addressee
-            .as_ref()
-            .and_then(|a| self.referents.iter().find(|r| &r.id == a))
-            .map_or(&[][..], |r| {
-                scene.relation(&self.speaker, r.entity.as_ref())
-            });
-        let out = feature_refusals(inventory, self.inventory_rev, selected, Slot::Scene);
+        let Some(addressee) = self.discourse.addressee.as_ref() else {
+            self.scene = SceneRead::NoAddressee { rev };
+            return Ok(self);
+        };
+        let entity = self
+            .referents
+            .iter()
+            .find(|r| &r.id == addressee)
+            .and_then(|r| r.entity.as_ref());
+        if entity == Some(&self.speaker) {
+            self.scene = SceneRead::SelfAddressed { rev };
+            return Ok(self);
+        }
+        let Some(features) = scene.relation(&self.speaker, entity) else {
+            self.scene = SceneRead::NoRelation { rev };
+            return Ok(self);
+        };
+        let out = feature_refusals(inventory, self.inventory_rev, features, Slot::Scene);
         if !out.is_empty() {
             return Err(StoreError::Invalid(out));
         }
-        self.scene = selected.to_vec();
+        self.scene = SceneRead::Selected {
+            rev,
+            features: features.to_vec(),
+        };
         Ok(self)
     }
 
@@ -716,6 +755,13 @@ impl LoweringInput {
     /// The features of the scene relation from the speaker to the addressee;
     /// empty until `with_scene`, or when the scene holds none.
     pub fn scene(&self) -> &[FeatureValue] {
+        match &self.scene {
+            SceneRead::Selected { features, .. } => features,
+            _ => &[],
+        }
+    }
+    /// What `with_scene` read; `Unread` until it ran.
+    pub fn scene_read(&self) -> &SceneRead {
         &self.scene
     }
 }

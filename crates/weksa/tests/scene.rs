@@ -11,7 +11,7 @@ use weksa::packet::{FeatValue, FeatureValue, Packet, proof_packet};
 use weksa::speaker::{Annotator, PairRelation, Party, Scene};
 use weksa::{
     CorpusStore, EntityStore, Inventory, InventoryStore, LoweringInput, NameSpan, PacketStore,
-    Refusal, SpeakerStateStore, StoreError, lower,
+    Refusal, SceneRead, SpeakerStateStore, StoreError, lower,
 };
 
 struct W {
@@ -121,9 +121,15 @@ fn put(w: &mut W, s: Scene) {
 /// The line of `item:nibu:1` at `rev`, its addressee node `addressee` (`n1`
 /// has no entity, `n3` is Brokkr), through the packet door.
 fn view_of(w: &W, rev: u32, addressee: Option<&str>) -> LoweringInput {
+    view_to(w, rev, addressee, "brokkr")
+}
+
+/// As `view_of`, with referent `n3` naming `entity` (Nibu is the item's
+/// speaker, so he may be named on the line; Brokkr is named by its text).
+fn view_to(w: &W, rev: u32, addressee: Option<&str>, entity: &str) -> LoweringInput {
     let mut p: Packet = proof_packet();
     p.inventory_rev = rev;
-    p.referents[2].entity = Some(eid("brokkr"));
+    p.referents[2].entity = Some(eid(entity));
     p.discourse.addressee = addressee.map(nd);
     // A packet key holds its packet for good, so each view gets a fresh store.
     let scratch = tempfile::tempdir().unwrap();
@@ -140,14 +146,27 @@ fn rules(r: Result<LoweringInput, StoreError>) -> Vec<&'static str> {
     }
 }
 
+fn read(w: &W, view: LoweringInput) -> SceneRead {
+    view.with_scene(&inv(w), &w.state)
+        .unwrap()
+        .scene_read()
+        .clone()
+}
+
+fn selected(rev: u32, features: Vec<FeatureValue>) -> SceneRead {
+    SceneRead::Selected { rev, features }
+}
+
 #[test]
 fn a_scene_relation_reaches_the_lowering_view_and_changes_no_english() {
     let mut w = world();
     put(&mut w, standard("g", 1));
     let plain = view_of(&w, 3, Some("n3"));
+    assert_eq!(plain.scene_read(), &SceneRead::Unread);
     assert!(plain.scene().is_empty());
     let with = plain.clone().with_scene(&inv(&w), &w.state).unwrap();
     assert_eq!(with.scene(), status().as_slice());
+    assert_eq!(with.scene_read(), &selected(1, status()));
     assert_eq!(
         lower(&with, &inv(&w), &w.entities).unwrap(),
         lower(&plain, &inv(&w), &w.entities).unwrap()
@@ -155,23 +174,54 @@ fn a_scene_relation_reaches_the_lowering_view_and_changes_no_english() {
 }
 
 #[test]
-fn with_scene_selects_by_addressee() {
+fn with_scene_says_which_of_five_things_it_found() {
     let mut w = world();
+    // No scene for the group.
+    assert_eq!(read(&w, view_of(&w, 3, Some("n3"))), SceneRead::NoScene);
     put(&mut w, standard("g", 1));
-    let take = |w: &W, addressee| {
-        view_of(w, 3, addressee)
-            .with_scene(&inv(w), &w.state)
-            .unwrap()
-            .scene()
-            .to_vec()
-    };
     // A referent with an entity selects the relation to that entity; a
     // referent without one, the relation to an unnamed party; and the
     // speaker's relation, never Brokkr's to Nibu.
-    assert_eq!(take(&w, Some("n3")), status());
-    assert_eq!(take(&w, Some("n1")), intimacy(7));
-    // No addressee selects nothing.
-    assert!(take(&w, None).is_empty());
+    assert_eq!(read(&w, view_of(&w, 3, Some("n3"))), selected(1, status()));
+    assert_eq!(
+        read(&w, view_of(&w, 3, Some("n1"))),
+        selected(1, intimacy(7))
+    );
+    // The scene was read and the packet names no addressee.
+    assert_eq!(
+        read(&w, view_of(&w, 3, None)),
+        SceneRead::NoAddressee { rev: 1 }
+    );
+    // The addressee is the speaker.
+    assert_eq!(
+        read(&w, view_to(&w, 3, Some("n3"), "nibu")),
+        SceneRead::SelfAddressed { rev: 1 }
+    );
+    // The scene holds no relation to this addressee.
+    put(
+        &mut w,
+        scene(
+            "g",
+            2,
+            &["nibu", "brokkr"],
+            vec![relation("nibu", Party::Unnamed, intimacy(7))],
+        ),
+    );
+    assert_eq!(
+        read(&w, view_of(&w, 3, Some("n3"))),
+        SceneRead::NoRelation { rev: 2 }
+    );
+    // A relation with no features is found, not absent.
+    put(
+        &mut w,
+        scene(
+            "g",
+            3,
+            &["nibu", "brokkr"],
+            vec![relation("nibu", Party::Named(eid("brokkr")), vec![])],
+        ),
+    );
+    assert_eq!(read(&w, view_of(&w, 3, Some("n3"))), selected(3, vec![]));
 }
 
 #[test]
@@ -187,10 +237,10 @@ fn a_named_addressee_the_scene_lacks_never_falls_back_to_unnamed() {
             vec![relation("nibu", Party::Unnamed, intimacy(7))],
         ),
     );
-    let got = view_of(&w, 3, Some("n3"))
-        .with_scene(&inv(&w), &w.state)
-        .unwrap();
-    assert!(got.scene().is_empty());
+    assert_eq!(
+        read(&w, view_of(&w, 3, Some("n3"))),
+        SceneRead::NoRelation { rev: 1 }
+    );
     // A participant without a relation behaves the same.
     put(
         &mut w,
@@ -201,10 +251,32 @@ fn a_named_addressee_the_scene_lacks_never_falls_back_to_unnamed() {
             vec![relation("nibu", Party::Unnamed, intimacy(7))],
         ),
     );
-    let got = view_of(&w, 3, Some("n3"))
-        .with_scene(&inv(&w), &w.state)
-        .unwrap();
-    assert!(got.scene().is_empty());
+    assert_eq!(
+        read(&w, view_of(&w, 3, Some("n3"))),
+        SceneRead::NoRelation { rev: 2 }
+    );
+}
+
+#[test]
+fn the_speaker_is_the_items_not_the_first_participant() {
+    let mut w = world();
+    // Brokkr is listed first and has an unnamed relation of his own.
+    put(
+        &mut w,
+        scene(
+            "g",
+            1,
+            &["brokkr", "nibu"],
+            vec![
+                relation("brokkr", Party::Unnamed, intimacy(99)),
+                relation("nibu", Party::Unnamed, intimacy(7)),
+            ],
+        ),
+    );
+    assert_eq!(
+        read(&w, view_of(&w, 3, Some("n1"))),
+        selected(1, intimacy(7))
+    );
 }
 
 #[test]
@@ -220,11 +292,8 @@ fn the_scene_is_the_items_group_and_its_latest_revision() {
             vec![relation("nibu", Party::Named(eid("brokkr")), intimacy(1))],
         ),
     );
-    // No scene for the item's group selects nothing, whatever other groups hold.
-    let got = view_of(&w, 3, Some("n3"))
-        .with_scene(&inv(&w), &w.state)
-        .unwrap();
-    assert!(got.scene().is_empty());
+    // No scene for the item's group, whatever other groups hold.
+    assert_eq!(read(&w, view_of(&w, 3, Some("n3"))), SceneRead::NoScene);
     // Revisions: the highest n is read.
     put(&mut w, standard("g", 1));
     let mut second = standard("g", 2);
@@ -233,10 +302,12 @@ fn the_scene_is_the_items_group_and_its_latest_revision() {
     let got = view_of(&w, 3, Some("n3"))
         .with_scene(&inv(&w), &w.state)
         .unwrap();
+    assert_eq!(got.scene_read(), &selected(2, intimacy(5)));
     assert_eq!(got.scene(), intimacy(5).as_slice());
-    // A replacement replaces: a store without the scene clears the selection.
+    // A read replaces the earlier one: a store without the scene says so.
     let empty = SpeakerStateStore::open(&w.dir.path().join("empty.cc")).unwrap();
     let cleared = got.with_scene(&inv(&w), &empty).unwrap();
+    assert_eq!(cleared.scene_read(), &SceneRead::NoScene);
     assert!(cleared.scene().is_empty());
 }
 
@@ -262,13 +333,21 @@ fn with_scene_refusals() {
             &w.entities,
         )
         .unwrap();
-    let mut p = proof_packet();
-    p.inventory_rev = 3;
-    p.provenance.corpus_item = weksa::CorpusItemId::parse("item:nibu:3").unwrap();
-    p.referents[2].entity = Some(eid("nibu"));
-    let view = PacketStore::open(&w.dir.path().join("p3.cc"))
-        .unwrap()
-        .admit(p, &w.inventory, &w.corpus, &w.entities)
-        .unwrap();
-    assert_eq!(rules(view.with_scene(&inv(&w), &w.state)), ["V16"]);
+    for addressee in [Some("n3"), None] {
+        let mut p = proof_packet();
+        p.inventory_rev = 3;
+        p.provenance.corpus_item = weksa::CorpusItemId::parse("item:nibu:3").unwrap();
+        p.referents[2].entity = Some(eid("nibu"));
+        p.discourse.addressee = addressee.map(nd);
+        let scratch = tempfile::tempdir().unwrap();
+        let view = PacketStore::open(&scratch.path().join("p.cc"))
+            .unwrap()
+            .admit(p, &w.inventory, &w.corpus, &w.entities)
+            .unwrap();
+        assert_eq!(
+            rules(view.with_scene(&inv(&w), &w.state)),
+            ["V16"],
+            "{addressee:?}"
+        );
+    }
 }
