@@ -470,6 +470,7 @@ fn round_over_the_dao_stores_scores_train_and_validation() {
     assert!((v.chrf.unwrap() - 78.56).abs() < 0.01, "{:?}", v.chrf);
     assert!(v.meaning.is_some());
     assert_eq!(r.validation_refused(), Default::default());
+    assert_eq!((r.train_scored(), r.validation_scored()), (1, 2));
 
     // The record carries the run's pins.
     assert_eq!(r.prompt_digest(), pinned.prompt_digest);
