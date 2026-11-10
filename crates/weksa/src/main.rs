@@ -4,16 +4,18 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
+use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use unicode_normalization::UnicodeNormalization;
 use weksa::corpus::{CorpusItem, ModelFamily, NameSpan, Source, Turn};
 use weksa::entity::{Entity, EntityOrigin, LanguageForms, Pronunciation};
 use weksa::inventory::{proof_revision, seed};
 use weksa::packet::proof_packet;
+use weksa::run::{CycleOutcome, LowererReach, RecallOutcome, RoundOutcome, RunPaths, RunStores, cycle, round};
 use weksa::score::ScoreInput;
 use weksa::{
-    CorpusStore, EntityId, EntityStore, InventoryStore, OllamaEmbedder, PacketStore, Scorer,
-    SplitScheme, StoreError, lower, pronounce, validate,
+    AnswerFiles, CorpusStore, EntityId, EntityStore, InventoryStore, OllamaEmbedder, PacketStore,
+    Scorer, SplitScheme, StoreError, lower, pronounce, validate,
 };
 
 #[derive(Parser)]
@@ -53,13 +55,20 @@ enum Command {
         key: String,
         /// Print the ruled IPA of each entity the packet cites, one per line,
         /// instead of the text; refused for an entity with no ruled pronunciation.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "phones")]
         ipa: bool,
+        /// Print the phones line of each entity the packet cites, one JSON
+        /// object per line ({language, source, phones: [{ipa, stress}]}),
+        /// instead of the text; refused for a phone the inventory lacks.
+        #[arg(long)]
+        phones: bool,
     },
     /// Score output text (stdin, or --output) against corpus items, one embed call.
     Score(ScoreArgs),
     /// Print the split of a corpus item.
     Split { item_key: String },
+    #[command(subcommand)]
+    Loop(LoopCommand),
     /// Write the published JSON Schemas.
     Schema {
         #[arg(long, default_value = "schemas/cultnet")]
@@ -68,9 +77,58 @@ enum Command {
 }
 
 #[derive(Subcommand)]
+enum LoopCommand {
+    /// Pin the global --corpus, --inventory and --entities as a run at ROOT.
+    Open {
+        root: PathBuf,
+        #[arg(long)]
+        label: String,
+        /// The id of the model that answers prompts.
+        #[arg(long)]
+        answerer: String,
+        #[arg(long, default_value = "qwen3-embedding:0.6b")]
+        embed_model: String,
+        /// How lowering prompts will be answered: briefed-subagent (smoke
+        /// rounds only) or tool-less-relay. Pinned in the run's record.
+        #[arg(long)]
+        lowerer_reach: LowererReach,
+        /// The family of the answering model; rounds count the corpus items
+        /// that family wrote. Defaults to unrecorded.
+        #[arg(long, default_value = "unrecorded")]
+        answerer_family: ModelFamilyArg,
+    },
+    /// Run one round of the run at ROOT. The stores are read only from the
+    /// run's record: the global --corpus, --inventory and --entities are not
+    /// read. Encode prompts are written first; once they are answered a rerun
+    /// writes the lowering prompts. The command exits 3 each time until every
+    /// prompt has an answer.
+    Round {
+        root: PathBuf,
+        #[arg(long, default_value = "http://127.0.0.1:11434")]
+        ollama_url: String,
+    },
+    /// Probe how closely a fresh model recites the run's items from their
+    /// openings (chrF of its completion against the item's second
+    /// half). Prompts and answers live in `<ROOT>/recall`; the command exits 3
+    /// until every prompt has an answer. A diagnostic, never a gate.
+    Recall { root: PathBuf },
+    /// Run one edit-accept cycle of the run at ROOT. The stores are read only
+    /// from the run's record. The editor's prompt, then the candidate round's
+    /// encode prompts, then its lowering prompts are written in turn; the
+    /// command exits 3 each time until every prompt has an answer.
+    Cycle {
+        root: PathBuf,
+        #[arg(long, default_value = "http://127.0.0.1:11434")]
+        ollama_url: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum PacketCommand {
     /// Admit the nibu-proof-001 packet through `PacketStore::admit`.
     Proof { store: PathBuf },
+    /// Admit the Dao De Jing slice's packets through `PacketStore::admit`.
+    Dao { store: PathBuf },
 }
 
 #[derive(Args)]
@@ -105,12 +163,14 @@ enum InventoryCommand {
     Seed,
     /// Admit revision 2, the concepts and frames the nibu-proof-001 packet names.
     Proof,
+    /// Admit revision 3 of the Dao De Jing test bed stores (after seed and proof).
+    Dao,
 }
 
 #[derive(Subcommand)]
 enum EntityCommand {
     /// Admit an entity, or append forms to a stored one.
-    Put(PutArgs),
+    Put(Box<PutArgs>),
     /// Text projection of the entity store for review; not a store.
     Dump,
 }
@@ -180,9 +240,7 @@ impl PutArgs {
             let lf = forms
                 .iter_mut()
                 .find(|lf| lf.language == language)
-                .with_context(|| {
-                    format!("--pronunciation names {language}, which has no --form")
-                })?;
+                .context("--pronunciation names a language that has no --form")?;
             lf.pronunciation = Some(Pronunciation {
                 ipa: ipa.nfc().collect(),
                 ruled_by: need(self.ruled_by.clone(), "ruled-by")?,
@@ -283,6 +341,16 @@ struct AddArgs {
     author: Option<String>,
     #[arg(long)]
     edition_url: Option<String>,
+    /// The edition's licence, for `public-domain`.
+    #[arg(long)]
+    licence: Option<String>,
+    /// Where the public-domain status is asserted, for `public-domain`.
+    #[arg(long)]
+    jurisdiction: Option<String>,
+    #[arg(long)]
+    translator: Option<String>,
+    #[arg(long)]
+    edition_year: Option<u16>,
     #[arg(long = "model-family", value_enum)]
     family: Option<ModelFamilyArg>,
     /// The generator string the fixture or run wrote, verbatim.
@@ -290,10 +358,57 @@ struct AddArgs {
     generator: Option<String>,
     #[arg(long)]
     prompt_digest: Option<String>,
-    #[arg(long)]
+    /// `YYYY-MM-DD`, a real calendar date.
+    #[arg(long, value_parser = parse_date)]
     admitted_on: String,
     #[arg(long)]
     supersedes: Option<String>,
+}
+
+fn parse_date(s: &str) -> std::result::Result<String, String> {
+    if weksa::form::is_calendar_date(s) {
+        Ok(s.to_string())
+    } else {
+        Err("not a YYYY-MM-DD calendar date".into())
+    }
+}
+
+/// Parses the command line. A rejected value is reported by the flag that took
+/// it and the reason, never by the value: values are the caller's identifiers.
+/// The same holds for the unknown flags and subcommands clap would quote.
+fn parse_cli() -> Cli {
+    use std::error::Error;
+    match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e)
+            if matches!(
+                e.kind(),
+                ErrorKind::InvalidValue | ErrorKind::ValueValidation
+            ) =>
+        {
+            let arg = match e.get(ContextKind::InvalidArg) {
+                Some(ContextValue::String(a)) => {
+                    a.split_whitespace().next().unwrap_or("").to_string()
+                }
+                _ => String::new(),
+            };
+            let reason = e.source().map(|s| format!(": {s}")).unwrap_or_default();
+            eprintln!("error: invalid value for {arg}{reason}");
+            std::process::exit(2);
+        }
+        Err(e) => match e.kind() {
+            ErrorKind::UnknownArgument => refuse_cli("unknown argument"),
+            ErrorKind::InvalidSubcommand => refuse_cli("unknown subcommand"),
+            _ => e.exit(),
+        },
+    }
+}
+
+/// A clap error that would quote the caller's token, as a fixed message that
+/// names the kind only. Usage is `--help`'s to print.
+fn refuse_cli(what: &str) -> ! {
+    eprintln!("error: {what}\n\nFor more information, try '--help'.");
+    std::process::exit(2);
 }
 
 fn need(value: Option<String>, flag: &str) -> Result<String> {
@@ -307,7 +422,15 @@ impl AddArgs {
             SourceKind::CastAuthored => &["persona", "fixture", "author"],
             SourceKind::OperatorWritten => &[],
             SourceKind::OperatorApproved => &["note"],
-            SourceKind::PublicDomain => &["work", "author", "edition-url"],
+            SourceKind::PublicDomain => &[
+                "work",
+                "author",
+                "edition-url",
+                "licence",
+                "jurisdiction",
+                "translator",
+                "edition-year",
+            ],
             SourceKind::ModelWritten => &["model-family", "generator", "prompt-digest"],
         };
         let given = [
@@ -317,6 +440,10 @@ impl AddArgs {
             ("note", self.note.is_some()),
             ("work", self.work.is_some()),
             ("edition-url", self.edition_url.is_some()),
+            ("licence", self.licence.is_some()),
+            ("jurisdiction", self.jurisdiction.is_some()),
+            ("translator", self.translator.is_some()),
+            ("edition-year", self.edition_year.is_some()),
             ("model-family", self.family.is_some()),
             ("generator", self.generator.is_some()),
             ("prompt-digest", self.prompt_digest.is_some()),
@@ -343,6 +470,12 @@ impl AddArgs {
                 work: get(&self.work, "work")?,
                 author: get(&self.author, "author")?,
                 edition_url: get(&self.edition_url, "edition-url")?,
+                licence: get(&self.licence, "licence")?,
+                jurisdiction: get(&self.jurisdiction, "jurisdiction")?,
+                translator: get(&self.translator, "translator")?,
+                edition_year: self
+                    .edition_year
+                    .context("this source needs --edition-year")?,
             },
             SourceKind::ModelWritten => Source::ModelWritten {
                 family: self
@@ -413,17 +546,13 @@ fn refused(e: StoreError) -> anyhow::Error {
 }
 
 fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let cli = parse_cli();
     match cli.command {
         Command::Validate { store, key } => {
             let inventory = InventoryStore::open(&cli.inventory)?.inventory()?;
             let packets = PacketStore::open(&store)?;
             let packets = match key {
-                Some(key) => vec![
-                    packets
-                        .get(&key)?
-                        .with_context(|| format!("no packet {key}"))?,
-                ],
+                Some(key) => vec![packets.get(&key)?.context("no such packet")?],
                 None => packets.all()?,
             };
             let mut bad = 0;
@@ -514,6 +643,27 @@ fn main() -> Result<()> {
                 .map_err(refused)?;
             println!("admitted rev:2 with {count} entries");
         }
+        Command::Inventory(InventoryCommand::Dao) => {
+            let (rev, entries) = weksa::daodejing::revision();
+            let count = entries.len();
+            InventoryStore::open(&cli.inventory)?
+                .admit_revision(rev, entries)
+                .map_err(refused)?;
+            println!("admitted rev:3 with {count} entries");
+        }
+        Command::Packet(PacketCommand::Dao { store }) => {
+            let mut packets = PacketStore::open(&store)?;
+            let inventory = InventoryStore::open(&cli.inventory)?;
+            let corpus = CorpusStore::open(&cli.corpus)?;
+            let entities = EntityStore::open(&cli.entities)?;
+            for packet in weksa::daodejing::packets() {
+                let key = packet.id.to_string();
+                packets
+                    .admit(packet, &inventory, &corpus, &entities)
+                    .map_err(refused)?;
+                println!("admitted {key}");
+            }
+        }
         Command::Packet(PacketCommand::Proof { store }) => {
             let packet = proof_packet();
             let key = packet.id.to_string();
@@ -527,13 +677,16 @@ fn main() -> Result<()> {
                 .map_err(refused)?;
             println!("admitted {key}");
         }
-        Command::Lower { store, key, ipa } => {
+        Command::Lower {
+            store,
+            key,
+            ipa,
+            phones,
+        } => {
             let inventory_store = InventoryStore::open(&cli.inventory)?;
             let inventory = inventory_store.inventory()?;
             let mut packets = PacketStore::open(&store)?;
-            let packet = packets
-                .get(&key)?
-                .with_context(|| format!("no packet {key}"))?;
+            let packet = packets.get(&key)?.context("no such packet")?;
             // Admission is the only source of a LoweringInput; re-admitting the
             // stored packet is a no-op write that re-runs every door check.
             let view = packets
@@ -549,6 +702,10 @@ fn main() -> Result<()> {
                 for line in pronounce(&view, &entities)? {
                     println!("{line}");
                 }
+            } else if phones {
+                for line in weksa::phones(&view, &entities)? {
+                    println!("{}", serde_json::to_string(&line)?);
+                }
             } else {
                 println!("{}", lower(&view, &inventory, &entities)?);
             }
@@ -562,12 +719,7 @@ fn main() -> Result<()> {
             let references = args
                 .items
                 .iter()
-                .map(|key| {
-                    Ok(corpus
-                        .get(key)?
-                        .with_context(|| format!("no item {key}"))?
-                        .text)
-                })
+                .map(|key| Ok(corpus.get(key)?.context("no such item")?.text))
                 .collect::<Result<Vec<_>>>()?;
             let inputs: Vec<ScoreInput> = references
                 .iter()
@@ -587,8 +739,86 @@ fn main() -> Result<()> {
         Command::Split { item_key } => {
             let item = CorpusStore::open(&cli.corpus)?
                 .get(&item_key)?
-                .with_context(|| format!("no item {item_key}"))?;
+                .context("no such item")?;
             println!("{}", split_text(&item));
+        }
+        Command::Loop(LoopCommand::Open {
+            root,
+            label,
+            answerer,
+            embed_model,
+            lowerer_reach,
+            answerer_family,
+        }) => {
+            let run = RunStores::create(
+                &root,
+                &label,
+                RunPaths {
+                    corpus: &cli.corpus,
+                    inventory: &cli.inventory,
+                    entities: &cli.entities,
+                },
+                &answerer,
+                &embed_model,
+                lowerer_reach,
+                answerer_family.into(),
+            )?;
+            println!("opened run:{}", run.record().label);
+        }
+        Command::Loop(LoopCommand::Round { root, ollama_url }) => {
+            let unreadable = |_| anyhow::anyhow!("a store would not read");
+            let mut run = RunStores::open(&root)?;
+            let mut files = AnswerFiles::new(
+                run.next_round_dir().map_err(unreadable)?,
+                run.record().model.clone(),
+            );
+            let scorer = Scorer::new(OllamaEmbedder::new(&ollama_url, &run.record().embedder));
+            match round(&mut run, &mut files, &scorer)? {
+                RoundOutcome::Unanswered { prompts } => {
+                    for digest in &prompts {
+                        println!("unanswered {digest}");
+                    }
+                    let asked = run.offers().map_err(unreadable)?.len();
+                    println!("unanswered {} of {asked}", prompts.len());
+                    std::process::exit(3);
+                }
+                RoundOutcome::Recorded(r) => println!("{}", run.round_line(&r)),
+            }
+        }
+        Command::Loop(LoopCommand::Recall { root }) => {
+            let run = RunStores::open(&root)?;
+            let mut files = AnswerFiles::new(run.recall_dir(), run.record().model.clone());
+            match run.recall(&mut files)? {
+                RecallOutcome::Unanswered { prompts } => {
+                    for digest in &prompts {
+                        println!("unanswered {digest}");
+                    }
+                    println!("unanswered {} prompts", prompts.len());
+                    std::process::exit(3);
+                }
+                RecallOutcome::Read(reading) => println!("{}", reading.line()),
+            }
+        }
+        Command::Loop(LoopCommand::Cycle { root, ollama_url }) => {
+            let unreadable = |_| anyhow::anyhow!("a store would not read");
+            let mut run = RunStores::open(&root)?;
+            let mut files = AnswerFiles::new(
+                run.next_cycle_dir().map_err(unreadable)?,
+                run.record().model.clone(),
+            );
+            let scorer = Scorer::new(OllamaEmbedder::new(&ollama_url, &run.record().embedder));
+            match cycle(&mut run, &mut files, &scorer)? {
+                CycleOutcome::Unanswered { prompts } => {
+                    for digest in &prompts {
+                        println!("unanswered {digest}");
+                    }
+                    println!("unanswered {} prompts", prompts.len());
+                    std::process::exit(3);
+                }
+                CycleOutcome::Decided(decision) => {
+                    println!("{}", run.cycle_line(&decision))
+                }
+            }
         }
         Command::Schema { out } => {
             std::fs::create_dir_all(&out)?;

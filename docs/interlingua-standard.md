@@ -163,6 +163,7 @@ names the rule.
 - V15: an `addressee_consent` is set only by provenance `Authored` or
   `GameTelemetry`; a decomposition of text or imported corpus text cannot mint
   it.
+- V17: an `addressee` names a referent, not a predication.
 
 V9 is retired and not renumbered: the form of a key or a grade is its type, and
 an extension key's family is V6. `PacketStore::admit` returns the lowering view of a
@@ -190,14 +191,15 @@ ids.
 
 ### `discourse`
 
-Why the packet is said: `speech_act` is a speech-act id, `addressee` a node id,
+Why the packet is said: `speech_act` is a speech-act id, `addressee` a referent's node id (V17),
 and `features` carry source-side nuance on content (hedge, certainty, irony and
 whatever the inventory grows). This is source-side communicative pressure, not
 target-language register. `addressee_consent` is no feature: it names the
 predication the addressee asked for or agreed to, a fact about what the
-addressee did. The English lowerer renders no consent and refuses a packet that
-carries one; a row that speaks for the request ("you asked her to") reads it
-and refuses without it.
+addressee did. The English lowerer's request row (`frame:3`, "{agent} asked
+{patient} to stop") reads it: the consent must name that predication and its
+agent must be the addressee, else `ConsentMissing` or `AskerNotAddressee`. A
+consent naming any other predication is refused as unrendered.
 
 ### `stance`
 
@@ -211,6 +213,29 @@ restrained one leaks, are cultural, and each language's ontology maps felt
 affect and restraint to its own register. A held-back feeling is not a claim
 about the world, so it is never a predication. An empty stance is valid. The
 stance reaches the lowerer in the lowering view.
+
+### Speaker and scene documents
+
+Two documents outside the packet hold the speaker's standing, in the store that
+owns them (`SpeakerStateStore`). `weksa.speaker` (key `speaker:<entity slug>@<n>`)
+holds one entity's stable axes as feature values of slot `Speaker`.
+`weksa.scene` (key `scene:<group>@<n>`) holds a corpus group's participants and,
+per ordered pair, the speaker's relation to a party (slot `Scene`); the party is
+a named participant or `Party::Unnamed`, an addressee the scene does not name,
+such as the player or a crowd. A revision appends and never edits: `n` is the
+latest plus one, and the latest revision is the highest `n`. Each carries an
+`Annotator`, `Operator` or `Model` with an attestation string for its generator.
+Both hold typed feature values only, never text. A feature of slot `Stance`,
+`Speaker` or `Scene` sits in that slot alone (each layer has one writer and one
+lifetime), which `admit_revision` enforces. `LoweringInput::with_scene` takes the
+speaker-state and corpus stores and names neither speaker nor scene: the view knows its corpus item, so
+the speaker is the item's speaker and the scene is the store's latest for the
+item's group. The scene must list the item's speaker and the speaker of every live item of the
+group (V16; `Scene::uncovered`, the rule `put_scene` applies too, so a scene a
+later corpus item outgrew is refused at the read), and the relation
+selected is the speaker's to the entity of the addressee referent (to
+`Unnamed` when that referent has no entity, to nothing when the packet has no
+addressee or the scene holds no such relation). V13 is retired.
 
 ### `referents`
 

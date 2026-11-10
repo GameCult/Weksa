@@ -1,0 +1,301 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RoundRecord",
+  "description": "One scored round. It holds no text and no Test reading: per-item rows for\nTrain only, Validation only as means and refusal counts by stage. Only\n`run::round` builds one.\n\n```\nfn f(r: &weksa::run::RoundRecord) -> u32 { r.n() }\n```\n\nEvery field is given, so the literal below fails only on privacy; its twin\nis the same literal in the unit test `a_round_record_literal_compiles_in_the_lib`.\n\n```compile_fail,E0451\nuse weksa::run::{RefusalCounts, RoundRecord};\nuse weksa::score::SplitMean;\nfn f() -> RoundRecord {\n    RoundRecord {\n        n: 1,\n        inventory_rev: 1,\n        prompt_digest: String::new(),\n        corpus_digest: String::new(),\n        entity_digest: String::new(),\n        model: String::new(),\n        embedder: String::new(),\n        chrf_version: String::new(),\n        calls: vec![],\n        train: vec![],\n        train_mean: SplitMean::default(),\n        train_scored: 0,\n        validation_mean: SplitMean::default(),\n        validation_scored: 0,\n        validation_refused: RefusalCounts::default(),\n        inventory_digest: String::new(),\n        cycle: None,\n        admit_rules: vec![],\n        parse_reasons: vec![],\n        own_family: 0,\n    }\n}\n```",
+  "type": "object",
+  "properties": {
+    "admit_rules": {
+      "description": "The rules admission refused items under, in rule order; every Train\nand Validation item refused at `Stage::Admit` is counted once per rule.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/RuleCount"
+      }
+    },
+    "calls": {
+      "description": "The encode calls, then the lowering calls, each with its prompt digest\nand one item key.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Call"
+      }
+    },
+    "chrf_version": {
+      "type": "string"
+    },
+    "corpus_digest": {
+      "type": "string"
+    },
+    "cycle": {
+      "description": "`Some(k)` for the candidate round of cycle `k`.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0
+    },
+    "embedder": {
+      "type": "string"
+    },
+    "entity_digest": {
+      "type": "string"
+    },
+    "inventory_digest": {
+      "description": "16 hex of the inventory file the round was scored under.",
+      "type": "string"
+    },
+    "inventory_rev": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "model": {
+      "type": "string"
+    },
+    "n": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "own_family": {
+      "description": "Offered (live Train and Validation) `ModelWritten` items whose writer\nfamily is the run's answerer family. The corpus rule binds\nmodel judges; the scorer is deterministic, so nothing is refused for\nthis: the round labels it.",
+      "type": "integer",
+      "format": "uint32",
+      "default": 0,
+      "minimum": 0
+    },
+    "parse_reasons": {
+      "description": "Why items were refused at `Stage::Parse`, in code order, over Train and\nValidation: a [`DraftClass`] code (`rule`), or `unreadable` for an\nitem with no answer that read as text. Never a token of an answer.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/RuleCount"
+      }
+    },
+    "prompt_digest": {
+      "type": "string"
+    },
+    "train": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/TrainRow"
+      }
+    },
+    "train_mean": {
+      "$ref": "#/$defs/SplitMean"
+    },
+    "train_scored": {
+      "description": "Train items that lowered and scored; `train_mean` is over all of them\nand counts a refused item as 0.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "validation_mean": {
+      "$ref": "#/$defs/SplitMean"
+    },
+    "validation_refused": {
+      "$ref": "#/$defs/RefusalCounts"
+    },
+    "validation_scored": {
+      "description": "Validation items that lowered and scored; `validation_mean` is over all\nof them and counts a refused item as 0, so refusing a weak item cannot\nraise it.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "n",
+    "inventory_rev",
+    "prompt_digest",
+    "corpus_digest",
+    "entity_digest",
+    "model",
+    "embedder",
+    "chrf_version",
+    "calls",
+    "train",
+    "train_mean",
+    "validation_mean",
+    "validation_refused",
+    "train_scored",
+    "validation_scored",
+    "inventory_digest"
+  ],
+  "$defs": {
+    "Call": {
+      "description": "One model call: the prompt's digest and the item keys it held.",
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "prompt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "prompt",
+        "items"
+      ]
+    },
+    "Outcome": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "Scored": {
+              "type": "object",
+              "properties": {
+                "chrf": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "meaning": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "format": "double"
+                }
+              },
+              "required": [
+                "chrf"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Scored"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "Refused": {
+              "$ref": "#/$defs/Stage"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Refused"
+          ]
+        }
+      ]
+    },
+    "RefusalCounts": {
+      "type": "object",
+      "properties": {
+        "admit": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "lower": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "parse": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "parse",
+        "admit",
+        "lower"
+      ]
+    },
+    "RuleCount": {
+      "description": "How many items one admission rule refused, over both splits: a rule code\n(`V5`, `UnknownEntity`) and a count, never an identifier or text.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "rule": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule",
+        "count"
+      ]
+    },
+    "SplitMean": {
+      "description": "Mean scores of one derived split.",
+      "type": "object",
+      "properties": {
+        "chrf": {
+          "description": "`None` when the split has no items.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "count": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "meaning": {
+          "description": "Mean over the items that have a meaning score; `None` when none do.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "required": [
+        "count"
+      ]
+    },
+    "Stage": {
+      "description": "Where a round refused: the first stage that did.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "Parse",
+            "Admit"
+          ]
+        },
+        {
+          "description": "The lowering prompt could not be built, or its answer was not UTF-8, not\na `LoweringDraft`, or text that is blank, over `MAX_LOWERING_BYTES` or\nholds a control character.",
+          "type": "string",
+          "const": "Lower"
+        }
+      ]
+    },
+    "TrainRow": {
+      "description": "A Train item's row. Validation has no rows.",
+      "type": "object",
+      "properties": {
+        "item": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "packet": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "item",
+        "outcome"
+      ]
+    }
+  }
+}

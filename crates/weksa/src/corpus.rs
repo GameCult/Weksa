@@ -29,12 +29,24 @@ pub enum Source {
     OperatorApproved {
         note: String,
     },
+    /// A public-domain work, with everything a reader needs to check the claim:
+    /// the edition's licence and the jurisdiction the public-domain status is
+    /// asserted in, who translated it (the translation is the text's copyright,
+    /// not the original's) and when the edition appeared. A work missing any
+    /// is refused at admission.
     PublicDomain {
         work: String,
         author: String,
         edition_url: String,
+        licence: String,
+        jurisdiction: String,
+        translator: String,
+        edition_year: u16,
     },
-    /// Labelled model output; never in the test split, never judged by its own family.
+    /// Labelled model output; never in the test split. The rule that it is
+    /// never judged by its own family binds model judges and the split; a
+    /// deterministic scorer refuses nothing, so the loop labels (the round
+    /// counts items of the answerer's family) and does not forbid.
     /// `family` is `Unrecorded` when nothing records one. `generator` is the
     /// string the fixture or run wrote, kept verbatim.
     ModelWritten {
@@ -45,7 +57,7 @@ pub enum Source {
 }
 
 /// The family of the model that wrote a line.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum ModelFamily {
     Anthropic,
     OpenAi,
@@ -54,6 +66,7 @@ pub enum ModelFamily {
     Meta,
     Mistral,
     /// Nothing records which family wrote the line.
+    #[default]
     Unrecorded,
 }
 
@@ -86,6 +99,20 @@ pub struct CorpusItem {
     /// Which entities the text names, and where. Fixed with the text at intake.
     #[cultcache(key = 10)]
     pub names: Vec<NameSpan>,
+}
+
+impl CorpusItem {
+    /// The entities a packet for this item may cite (leak-owned-by-flow-and-scorer-3
+    /// (3)): the entities its text names, then its speaker, then its prior-turn
+    /// speakers (which may repeat). `PacketStore::admit` and `EncoderOffer` read
+    /// only this.
+    pub fn cited_entities(&self) -> impl Iterator<Item = &EntityId> {
+        self.names
+            .iter()
+            .map(|n| &n.entity)
+            .chain(std::iter::once(&self.speaker))
+            .chain(self.prior_turns.iter().map(|t| &t.speaker))
+    }
 }
 
 /// A byte range `[start, end)` of an item's text that names an entity. The

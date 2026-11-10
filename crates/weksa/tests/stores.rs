@@ -337,6 +337,210 @@ fn s6_reads_text_under_compatibility_case_folding() {
 }
 
 #[test]
+fn s6_folds_dotless_i_kana_and_arabic_indic_digits() {
+    let d = dir();
+    let mut store = CorpusStore::open(&d.path().join("c.cc")).unwrap();
+    // Turkish dotless and dotted capital i read as i; hiragana and katakana
+    // (small, voiced, iteration marks, halfwidth through NFKC) read as one
+    // syllabary; Arabic-Indic and Extended Arabic-Indic digits read as 0-9.
+    let pairs = [
+        ("isi", "\u{131}s\u{131}"),
+        ("istanbul", "\u{130}stanbul"),
+        (
+            "\u{3072}\u{3089}\u{304c}\u{306a}",
+            "\u{30d2}\u{30e9}\u{30ac}\u{30ca}",
+        ),
+        ("\u{3041}\u{3083}", "\u{30a1}\u{30e3}"),
+        ("\u{3042}\u{309d}\u{309e}", "\u{3042}\u{30fd}\u{30fe}"),
+        ("\u{306d}\u{3053}", "\u{ff88}\u{ff7a}"),
+        (
+            "room 1234567890",
+            "room \u{661}\u{662}\u{663}\u{664}\u{665}\u{666}\u{667}\u{668}\u{669}\u{660}",
+        ),
+        ("gate 45", "gate \u{6f4}\u{6f5}"),
+        ("\u{3096}", "\u{30f6}"),
+        // Voiced wa, wi, we, wo: katakana U+30F7-30FA read as the hiragana
+        // plus the combining voiced mark.
+        ("\u{308f}\u{3099}", "\u{30f7}"),
+        ("\u{3090}\u{3099}", "\u{30f8}"),
+        ("\u{3091}\u{3099}", "\u{30f9}"),
+        ("\u{3092}\u{3099}", "\u{30fa}"),
+        // Dotted capital I and i plus a combining dot above
+        // read alike (plain ix collides with both, below).
+        ("\u{130}x", "i\u{307}x"),
+    ];
+    for (n, (a, b)) in pairs.into_iter().enumerate() {
+        let (first, second) = (
+            format!("item:fold:{}", 2 * n + 1),
+            format!("item:fold:{}", 2 * n + 2),
+        );
+        store.add(item(&first, a), &ents(&d)).unwrap();
+        assert_eq!(
+            refusal(store.add(item(&second, b), &ents(&d))),
+            StoreRefusal::S6TextHeld {
+                key: second.clone(),
+                held_by: first.clone()
+            },
+            "{a:?} vs {b:?}"
+        );
+    }
+    // Plain ix collides with the dotted spellings too: a rare sequence
+    // over-merges toward held.
+    assert_eq!(
+        refusal(store.add(item("item:fold:80", "ix"), &ents(&d))),
+        StoreRefusal::S6TextHeld {
+            key: "item:fold:80".into(),
+            held_by: "item:fold:27".into()
+        }
+    );
+    // Nothing wider: the prolonged sound mark, Devanagari digits and the
+    // Cyrillic homoglyph of i stay apart from what they resemble.
+    store
+        .add(item("item:fold:90", "\u{30a2}\u{30fc}"), &ents(&d))
+        .unwrap();
+    store
+        .add(item("item:fold:91", "\u{30a2}"), &ents(&d))
+        .unwrap();
+    store
+        .add(item("item:fold:92", "room 12"), &ents(&d))
+        .unwrap();
+    store
+        .add(item("item:fold:93", "room \u{967}\u{968}"), &ents(&d))
+        .unwrap();
+    store.add(item("item:fold:94", "bit"), &ents(&d)).unwrap();
+    // A combining dot above after any other letter is kept.
+    store.add(item("item:fold:96", "x"), &ents(&d)).unwrap();
+    store
+        .add(item("item:fold:97", "\u{1e8b}"), &ents(&d))
+        .unwrap();
+    store
+        .add(item("item:fold:95", "b\u{456}t"), &ents(&d))
+        .unwrap();
+    // j has no precomposed dot-above form, so this reaches the guard itself.
+    store.add(item("item:fold:98", "jx"), &ents(&d)).unwrap();
+    store
+        .add(item("item:fold:99", "j\u{307}x"), &ents(&d))
+        .unwrap();
+    // Marks after the dotted i compose with it: i, dot, acute is an i with an
+    // acute, whatever order the writer used.
+    store
+        .add(item("item:fold:100", "\u{ed}x"), &ents(&d))
+        .unwrap();
+    assert_eq!(
+        refusal(store.add(item("item:fold:101", "i\u{307}\u{301}x"), &ents(&d))),
+        StoreRefusal::S6TextHeld {
+            key: "item:fold:101".into(),
+            held_by: "item:fold:100".into()
+        }
+    );
+}
+
+/// `modifier_letters.txt` is the Unicode 17 Lm list, the oracle for the test
+/// below. When the toolchain's Unicode tables move, this fails first: regenerate
+/// the file from the new tables, then bump the pin.
+#[test]
+fn the_modifier_letter_table_matches_the_toolchains_unicode_version() {
+    assert_eq!(
+        char::UNICODE_VERSION,
+        (17, 0, 0),
+        "regenerate crates/weksa/tests/modifier_letters.txt for the new Unicode version"
+    );
+}
+
+#[test]
+fn a_text_of_only_marks_is_refused() {
+    let d = dir();
+    let mut store = CorpusStore::open(&d.path().join("c.cc")).unwrap();
+    // Prolonged sound mark, Thai maiyamok, fathatan, tatweel: alphabetic to
+    // Unicode, but none carries a word.
+    for (n, text) in [
+        "\u{30fc}",
+        "\u{e46}",
+        "\u{64b}",
+        "\u{640}",
+        "\u{30fc}\u{30fc}",
+        "\u{640}\u{64b}",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let key = format!("item:mo:{}", n + 1);
+        assert_eq!(
+            refusal(store.add(item(&key, text), &ents(&d))),
+            malformed(&key, "text has no base letter or digit"),
+            "{text:?}"
+        );
+    }
+    // Every modifier letter (Lm) alone is refused: for having no base letter,
+    // or, where Unicode does not call it alphabetic, no alphanumeric at all, or
+    // (U+0374, U+037A) for not being NFC.
+    for line in include_str!("modifier_letters.txt")
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+    {
+        let c = char::from_u32(u32::from_str_radix(line, 16).unwrap()).unwrap();
+        let key = "item:mo:90";
+        let got = refusal(store.add(item(key, &c.to_string()), &ents(&d)));
+        assert!(
+            got == StoreRefusal::NotNfc { key: key.into() }
+                || got == malformed(key, "text has no base letter or digit")
+                || got == malformed(key, "text has no alphanumeric character"),
+            "{c:?}: {got:?}"
+        );
+    }
+    // With a base letter or digit the same marks are text.
+    store
+        .add(item("item:mo:91", "\u{30a2}\u{30fc}"), &ents(&d))
+        .unwrap();
+    store
+        .add(item("item:mo:92", "\u{e01}\u{e46}"), &ents(&d))
+        .unwrap();
+    store
+        .add(item("item:mo:93", "\u{640}7"), &ents(&d))
+        .unwrap();
+}
+
+#[test]
+fn admitted_on_is_a_real_calendar_date() {
+    let d = dir();
+    let mut store = CorpusStore::open(&d.path().join("c.cc")).unwrap();
+    for (n, bad) in [
+        "",
+        "junk",
+        "2026-02-30",
+        "2026-02-29",
+        "2026-13-01",
+        "2026-00-10",
+        "2026-04-31",
+        "2026-1-1",
+        "2026-10-29 ",
+        "20261029",
+        "2026-10-29T00:00Z",
+        "\u{661}\u{662}\u{663}\u{664}-10-29",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let key = format!("item:dt:{}", n + 1);
+        let mut it = item(&key, "a date");
+        it.admitted_on = bad.into();
+        assert_eq!(
+            refusal(store.add(it, &ents(&d))),
+            malformed(&key, "admitted_on is not a YYYY-MM-DD date"),
+            "{bad:?}"
+        );
+    }
+    for (n, good) in ["2026-10-29", "2024-02-29", "2000-02-29"]
+        .into_iter()
+        .enumerate()
+    {
+        let mut it = item(&format!("item:dt:{}", 90 + n), &format!("a date {n}"));
+        it.admitted_on = good.into();
+        store.add(it, &ents(&d)).unwrap();
+    }
+}
+
+#[test]
 fn s6_keeps_tone_marks_and_viramas_apart() {
     let d = dir();
     let mut store = CorpusStore::open(&d.path().join("c.cc")).unwrap();
@@ -356,11 +560,23 @@ fn s6_keeps_tone_marks_and_viramas_apart() {
             .unwrap_or_else(|e| panic!("{b:?} held by {a:?}: {e}"));
     }
     // A mark alone is still no text.
-    for (n, text) in ["\u{e49}", "\u{94d}"].into_iter().enumerate() {
+    for (n, text) in [
+        "\u{e49}",
+        "\u{94d}",
+        "\u{301}",
+        "\u{200d}",
+        "\u{200c}",
+        "\u{fe0f}",
+        "\u{200d}\u{fe0f}\u{301}",
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let key = format!("item:mk:{}", 90 + n);
         assert_eq!(
             refusal(store.add(item(&key, text), &ents(&d))),
-            malformed(&key, "text has no alphanumeric character")
+            malformed(&key, "text has no base letter or digit"),
+            "{text:?}"
         );
     }
 }
@@ -371,7 +587,7 @@ fn an_attestation_holds_something_readable() {
     let mut store = CorpusStore::open(&d.path().join("c.cc")).unwrap();
     let s = |x: &str| x.to_string();
     type Build = fn(String) -> Source;
-    let builders: [(Build, &'static str); 9] = [
+    let builders: [(Build, &'static str); 12] = [
         (
             |v| Source::CastAuthored {
                 persona: v,
@@ -405,6 +621,10 @@ fn an_attestation_holds_something_readable() {
                 work: v,
                 author: "a".into(),
                 edition_url: "u".into(),
+                licence: "l".into(),
+                jurisdiction: "j".into(),
+                translator: "t".into(),
+                edition_year: 1891,
             },
             "a public-domain source names its work",
         ),
@@ -413,6 +633,10 @@ fn an_attestation_holds_something_readable() {
                 work: "w".into(),
                 author: v,
                 edition_url: "u".into(),
+                licence: "l".into(),
+                jurisdiction: "j".into(),
+                translator: "t".into(),
+                edition_year: 1891,
             },
             "a public-domain source names its author",
         ),
@@ -421,8 +645,48 @@ fn an_attestation_holds_something_readable() {
                 work: "w".into(),
                 author: "a".into(),
                 edition_url: v,
+                licence: "l".into(),
+                jurisdiction: "j".into(),
+                translator: "t".into(),
+                edition_year: 1891,
             },
             "a public-domain source names its edition url",
+        ),
+        (
+            |v| Source::PublicDomain {
+                work: "w".into(),
+                author: "a".into(),
+                edition_url: "u".into(),
+                licence: v,
+                jurisdiction: "j".into(),
+                translator: "t".into(),
+                edition_year: 1891,
+            },
+            "a public-domain source names its licence",
+        ),
+        (
+            |v| Source::PublicDomain {
+                work: "w".into(),
+                author: "a".into(),
+                edition_url: "u".into(),
+                licence: "l".into(),
+                jurisdiction: v,
+                translator: "t".into(),
+                edition_year: 1891,
+            },
+            "a public-domain source names its jurisdiction",
+        ),
+        (
+            |v| Source::PublicDomain {
+                work: "w".into(),
+                author: "a".into(),
+                edition_url: "u".into(),
+                licence: "l".into(),
+                jurisdiction: "j".into(),
+                translator: v,
+                edition_year: 1891,
+            },
+            "a public-domain source names its translator",
         ),
         (
             |v| Source::ModelWritten {
@@ -528,6 +792,10 @@ fn an_item_source_attests_with_non_empty_strings() {
         work: s(work),
         author: s(author),
         edition_url: s(url),
+        licence: s("l"),
+        jurisdiction: s("j"),
+        translator: s("t"),
+        edition_year: 1891,
     };
     let cases: [(Source, &'static str); 9] = [
         (
@@ -823,6 +1091,51 @@ fn revision_change_rules() {
     assert_eq!(inv.latest().unwrap().n, 1);
     assert!(inv.entry(&iv("concept:1")).is_none());
     assert!(inv.entry(&iv("role:1")).unwrap().retired_rev.is_none());
+}
+
+#[test]
+fn speaker_state_slots_are_exclusive() {
+    let shape = "entry shape does not match its family";
+    let d = dir();
+    let mut store = seeded(&d.path().join("i.cc"));
+    for slots in [
+        &[Slot::Stance, Slot::Discourse][..],
+        &[Slot::Scene, Slot::Relation],
+        &[Slot::Discourse, Slot::Scene],
+        &[Slot::Scene, Slot::Scene],
+        &[Slot::Speaker, Slot::Scene],
+        &[Slot::Speaker, Slot::Stance],
+        &[Slot::Speaker, Slot::Relation],
+        &[Slot::Speaker, Slot::Speaker],
+        &[Slot::Stance, Slot::Stance],
+    ] {
+        let rev = rev_with(vec![Change::Add(iv("feature:50"))], 2, Some(1));
+        let entries = vec![InventoryEntry {
+            introduced_rev: 2,
+            ..feature("feature:50", ValueKind::Flag, slots)
+        }];
+        assert_eq!(
+            refusal(store.admit_revision(rev, entries)),
+            malformed("feature:50", shape),
+            "{slots:?}"
+        );
+    }
+    assert_eq!(store.inventory().unwrap().latest().unwrap().n, 1);
+    // One slot alone, and several content slots, are admitted.
+    for (n, slots) in [
+        (2, &[Slot::Scene][..]),
+        (3, &[Slot::Stance]),
+        (4, &[Slot::Speaker]),
+        (5, &[Slot::Discourse, Slot::Predication]),
+    ] {
+        let id = format!("feature:{}", 50 + n);
+        let rev = rev_with(vec![Change::Add(iv(&id))], n, Some(n - 1));
+        let entries = vec![InventoryEntry {
+            introduced_rev: n,
+            ..feature(&id, ValueKind::Flag, slots)
+        }];
+        store.admit_revision(rev, entries).unwrap();
+    }
 }
 
 #[test]
@@ -1291,4 +1604,27 @@ fn seed_reseeded() {
         assert!(entities.get(&i.speaker).unwrap().is_some(), "{}", i.id);
         replay.add(i, &entities).unwrap();
     }
+}
+
+#[test]
+fn a_public_domain_source_without_an_edition_year_is_refused() {
+    let d = dir();
+    let mut store = CorpusStore::open(&d.path().join("c.cc")).unwrap();
+    let key = "item:pd:1";
+    let source = |edition_year| Source::PublicDomain {
+        work: "w".into(),
+        author: "a".into(),
+        edition_url: "u".into(),
+        licence: "l".into(),
+        jurisdiction: "j".into(),
+        translator: "t".into(),
+        edition_year,
+    };
+    assert_eq!(
+        refusal(store.add(item_in(key, "line", "scene-1", source(0)), &ents(&d))),
+        malformed(key, "a public-domain source names its edition year")
+    );
+    store
+        .add(item_in(key, "line", "scene-1", source(1891)), &ents(&d))
+        .unwrap();
 }

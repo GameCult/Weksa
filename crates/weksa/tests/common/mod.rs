@@ -34,7 +34,8 @@ pub const CONCEPT_LATE: &str = "concept:4";
 pub const FRAME: &str = "frame:1";
 /// An extension entry of value kind Grade, introduced at rev 2.
 pub const EXT: &str = "extension:1";
-/// A Grade feature introduced at rev 2 that sits in every slot.
+/// A Grade feature introduced at rev 2 in every content slot (Discourse,
+/// Referent, Predication, Relation).
 pub const FEAT_ALL: &str = "feature:50";
 
 pub const PACKET_ID: &str = "packet:0123456789abcdef";
@@ -111,6 +112,28 @@ pub fn entities_in(dir: &std::path::Path) -> EntityStore {
         store.put(ent(slug, "en-US", &[&form])).unwrap();
     }
     store
+}
+
+/// A run over the stores `world()` and `corpus()` keep in `dir`: `c.cc`,
+/// `i.cc` and `entities.cc`. Read at the call, so create it after the items.
+pub fn run_over(dir: &std::path::Path) -> weksa::run::RunStores {
+    for name in ["c.cc", "i.cc", "entities.cc"] {
+        if !dir.join(name).exists() {
+            std::fs::write(dir.join(name), [0x90]).unwrap();
+        }
+    }
+    weksa::run::RunStores::create(
+        &dir.join("run"),
+        "t",
+        weksa::run::RunPaths {
+            corpus: &dir.join("c.cc"),
+            inventory: &dir.join("i.cc"),
+            entities: &dir.join("entities.cc"),
+        },
+        "fake-model",
+        "bag", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded,
+    )
+    .unwrap()
 }
 
 pub fn item_in(key: &str, text: &str, group: &str, source: Source) -> CorpusItem {
@@ -218,7 +241,6 @@ pub fn world() -> World {
                         Slot::Referent,
                         Slot::Predication,
                         Slot::Relation,
-                        Slot::Stance,
                     ],
                 )
             },
@@ -329,5 +351,27 @@ pub fn good() -> Packet {
                 },
             ],
         },
+    }
+}
+
+/// A deterministic bag-of-letters embedder, so cosine differs with the text.
+pub struct Bag;
+
+impl weksa::Embedder for Bag {
+    fn model(&self) -> &str {
+        "bag"
+    }
+    fn embed(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+        Ok(texts
+            .iter()
+            .map(|t| {
+                let mut v = vec![0.0; 27];
+                v[26] = 1.0;
+                for c in t.chars().filter(char::is_ascii_alphabetic) {
+                    v[(c.to_ascii_lowercase() as u8 - b'a') as usize] += 1.0;
+                }
+                v
+            })
+            .collect())
     }
 }

@@ -210,6 +210,14 @@ fn model_written_and_public_domain_sources_name_their_provenance() {
         "a",
         "--edition-url",
         "https://example.org/w",
+        "--licence",
+        "Public domain",
+        "--jurisdiction",
+        "US",
+        "--translator",
+        "T. Translator",
+        "--edition-year",
+        "1891",
     ]);
     assert!(pd.status.success(), "{}", out(&pd));
     let bad_turn = run(&[
@@ -271,7 +279,13 @@ fn validate_reports_each_packet() {
         .unwrap();
     let refused = validate(&short, &[]);
     assert!(
-        !refused.status.success() && out(&refused).contains("V10"),
+        !refused.status.success()
+            && out(&refused).contains("V10: the inventory revision has no record"),
+        "{}",
+        out(&refused)
+    );
+    assert!(
+        !out(&refused).contains("V10UnknownRevision"),
         "{}",
         out(&refused)
     );
@@ -294,7 +308,12 @@ fn schema_writes_the_published_files() {
             "weksa.entity.schema.json",
             "weksa.interlingua_packet.schema.json",
             "weksa.inventory_entry.schema.json",
-            "weksa.inventory_revision.schema.json"
+            "weksa.inventory_revision.schema.json",
+            "weksa.loop_decision.schema.json",
+            "weksa.loop_round.schema.json",
+            "weksa.loop_run.schema.json",
+            "weksa.scene.schema.json",
+            "weksa.speaker.schema.json"
         ]
     );
 }
@@ -566,6 +585,14 @@ fn source_flags_must_match_the_source() {
                 "a",
                 "--edition-url",
                 "u",
+                "--licence",
+                "l",
+                "--jurisdiction",
+                "j",
+                "--translator",
+                "t",
+                "--edition-year",
+                "1891",
                 "--note",
                 "n",
             ],
@@ -617,6 +644,78 @@ fn source_flags_must_match_the_source() {
             "public-domain",
             &["--work", "w", "--edition-url", "u"],
             "--author",
+        ),
+        (
+            "public-domain",
+            &[
+                "--work",
+                "w",
+                "--author",
+                "a",
+                "--edition-url",
+                "u",
+                "--jurisdiction",
+                "j",
+                "--translator",
+                "t",
+                "--edition-year",
+                "1891",
+            ],
+            "--licence",
+        ),
+        (
+            "public-domain",
+            &[
+                "--work",
+                "w",
+                "--author",
+                "a",
+                "--edition-url",
+                "u",
+                "--licence",
+                "l",
+                "--translator",
+                "t",
+                "--edition-year",
+                "1891",
+            ],
+            "--jurisdiction",
+        ),
+        (
+            "public-domain",
+            &[
+                "--work",
+                "w",
+                "--author",
+                "a",
+                "--edition-url",
+                "u",
+                "--licence",
+                "l",
+                "--jurisdiction",
+                "j",
+                "--edition-year",
+                "1891",
+            ],
+            "--translator",
+        ),
+        (
+            "public-domain",
+            &[
+                "--work",
+                "w",
+                "--author",
+                "a",
+                "--edition-url",
+                "u",
+                "--licence",
+                "l",
+                "--jurisdiction",
+                "j",
+                "--translator",
+                "t",
+            ],
+            "--edition-year",
         ),
         // Empty provenance strings.
         (
@@ -836,16 +935,19 @@ fn proof_packet_lowers_and_the_lowering_scores_against_items() {
     assert!(text.contains("NIBU will stop"), "{text}");
 
     let missing = weksa(d.path(), &["lower", "./p.cc", "packet:0000000000000000"]);
-    assert!(!missing.status.success() && out(&missing).contains("no packet"));
+    assert!(!missing.status.success() && out(&missing).contains("no such packet"));
 
     // IPA is the ruled pronunciation or nothing: spelling is not one.
     let args = ["lower", "./p.cc", "packet:6e6962752d303031", "--ipa"];
     let unruled = weksa(d.path(), &args);
     assert!(
-        !unruled.status.success() && out(&unruled).contains("NoPronunciation"),
+        !unruled.status.success() && out(&unruled).contains("entity has no ruled pronunciation"),
         "{}",
         out(&unruled)
     );
+    for leak in ["NoPronunciation", "entity:nibu", "entity {"] {
+        assert!(!out(&unruled).contains(leak), "{leak}: {}", out(&unruled));
+    }
     let ruled = weksa(
         d.path(),
         &[
@@ -876,6 +978,30 @@ fn proof_packet_lowers_and_the_lowering_scores_against_items() {
     let ipa = weksa(d.path(), &args);
     assert!(ipa.status.success(), "{}", out(&ipa));
     assert_eq!(String::from_utf8(ipa.stdout).unwrap(), "ˈnibu\n");
+    // The phones line is the committed fixture, byte for byte, and is a different
+    // output from --ipa, so the two flags cannot be combined.
+    let phones = weksa(
+        d.path(),
+        &["lower", "./p.cc", "packet:6e6962752d303031", "--phones"],
+    );
+    assert!(phones.status.success(), "{}", out(&phones));
+    let fixture = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/phonology/fixtures/nibu-en-US.phones.json"),
+    )
+    .unwrap();
+    assert_eq!(String::from_utf8(phones.stdout).unwrap(), fixture);
+    let both = weksa(
+        d.path(),
+        &[
+            "lower",
+            "./p.cc",
+            "packet:6e6962752d303031",
+            "--phones",
+            "--ipa",
+        ],
+    );
+    assert!(!both.status.success(), "{}", out(&both));
     let again = weksa(d.path(), &["lower", "./p.cc", "packet:6e6962752d303031"]);
     assert_eq!(String::from_utf8(again.stdout).unwrap(), text);
 
@@ -908,5 +1034,563 @@ fn proof_packet_lowers_and_the_lowering_scores_against_items() {
             &url,
         ],
     );
-    assert!(!unknown.status.success() && out(&unknown).contains("no item item:nibu:9"));
+    assert!(!unknown.status.success() && out(&unknown).contains("no such item"));
+    assert!(!out(&unknown).contains("item:nibu:9"), "{}", out(&unknown));
+}
+
+/// Runs `args` and demands a refusal whose text holds `reason` and none of the
+/// identifiers the caller supplied.
+fn refuses_without_echo(d: &std::path::Path, args: &[&str], reason: &str) {
+    let o = weksa(d, args);
+    let text = out(&o);
+    assert!(!o.status.success(), "{args:?}: {text}");
+    assert!(text.contains(reason), "{args:?} lacks {reason:?}: {text}");
+    for a in args.iter().filter(|a| a.to_lowercase().contains("canary")) {
+        // An argument may carry the canary beside flag syntax (`--x=...`); the
+        // identifier itself is the part from the canary on.
+        let id = &a[a.to_lowercase().find("canary").unwrap()..];
+        assert!(
+            !text.to_lowercase().contains(&id.to_lowercase()),
+            "{args:?} echoes {id:?}: {text}"
+        );
+    }
+}
+
+#[test]
+fn cli_errors_never_echo_identifiers() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path();
+    cast_entities(p, &["nibu"]);
+    let add = |extra: &[&str]| -> Vec<String> {
+        ["corpus", "add", "--admitted-on", "2026-10-29"]
+            .into_iter()
+            .chain(extra.iter().copied())
+            .map(String::from)
+            .collect()
+    };
+    let run = |args: Vec<String>, reason: &str| {
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        refuses_without_echo(p, &refs, reason);
+    };
+    // The positional entity id, malformed and well formed but unheld.
+    refuses_without_echo(
+        p,
+        &[
+            "entity",
+            "put",
+            "canary-id",
+            "--form",
+            "en-US=X",
+            "--origin",
+            "live",
+            "--persona",
+            "k",
+        ],
+        "not a EntityId",
+    );
+    // --speaker: a malformed id, and a well formed one no entity holds.
+    run(
+        add(&[
+            "--slug",
+            "q",
+            "--text",
+            "Hello there.",
+            "--speaker",
+            "canary-speaker",
+            "--group",
+            "g",
+            "--source",
+            "operator-written",
+        ]),
+        "--speaker",
+    );
+    run(
+        add(&[
+            "--slug",
+            "q",
+            "--text",
+            "Hello there.",
+            "--speaker",
+            "entity:canary",
+            "--group",
+            "g",
+            "--source",
+            "operator-written",
+        ]),
+        "UnknownEntity",
+    );
+    // clap enum values.
+    run(
+        add(&[
+            "--slug",
+            "q",
+            "--text",
+            "Hello there.",
+            "--speaker",
+            "entity:nibu",
+            "--group",
+            "g",
+            "--source",
+            "canary-source",
+        ]),
+        "--source",
+    );
+    refuses_without_echo(
+        p,
+        &[
+            "entity",
+            "put",
+            "entity:kay",
+            "--form",
+            "en-US=X",
+            "--origin",
+            "canary-origin",
+        ],
+        "--origin",
+    );
+    run(
+        add(&[
+            "--slug",
+            "q",
+            "--text",
+            "Hello there.",
+            "--speaker",
+            "entity:nibu",
+            "--group",
+            "g",
+            "--source",
+            "model-written",
+            "--model-family",
+            "canary-family",
+        ]),
+        "--model-family",
+    );
+    // Keys on withdraw, split, validate, lower and score.
+    refuses_without_echo(p, &["corpus", "withdraw", "item:canary:7"], "no such item");
+    refuses_without_echo(p, &["split", "item:canary:7"], "no such item");
+    std::fs::write(p.join("out.txt"), "text").unwrap();
+    refuses_without_echo(
+        p,
+        &["score", "item:canary:7", "--output", "out.txt"],
+        "no such item",
+    );
+    let packets = weksa(p, &["inventory", "seed"]);
+    assert!(packets.status.success(), "{}", out(&packets));
+    let made = weksa(p, &["packet", "proof", "p.cc"]);
+    let _ = made;
+    refuses_without_echo(
+        p,
+        &["validate", "p.cc", "packet:canary:7"],
+        "no such packet",
+    );
+    refuses_without_echo(p, &["lower", "p.cc", "packet:canary:7"], "no such packet");
+    // S6 names no held key; S5 names no group.
+    let held = weksa(
+        p,
+        &add(&[
+            "--slug",
+            "canarya",
+            "--text",
+            "Fresh words here.",
+            "--speaker",
+            "entity:nibu",
+            "--group",
+            "canary-first",
+            "--source",
+            "operator-written",
+        ])
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>(),
+    );
+    assert!(held.status.success(), "{}", out(&held));
+    let copy = add(&[
+        "--slug",
+        "other",
+        "--text",
+        "Fresh words here.",
+        "--speaker",
+        "entity:nibu",
+        "--group",
+        "g",
+        "--source",
+        "operator-written",
+    ]);
+    let copy = weksa(p, &copy.iter().map(String::as_str).collect::<Vec<_>>());
+    assert!(
+        !copy.status.success() && out(&copy).contains("S6TextHeld"),
+        "{}",
+        out(&copy)
+    );
+    assert!(!out(&copy).contains("canary"), "{}", out(&copy));
+    let moved = add(&[
+        "--slug",
+        "other",
+        "--text",
+        "Corrected words here.",
+        "--speaker",
+        "entity:nibu",
+        "--group",
+        "canary-second",
+        "--supersedes",
+        "item:canarya:1",
+        "--source",
+        "operator-written",
+    ]);
+    let moved = weksa(p, &moved.iter().map(String::as_str).collect::<Vec<_>>());
+    assert!(
+        !moved.status.success() && out(&moved).contains("S5SupersedeGroup"),
+        "{}",
+        out(&moved)
+    );
+    assert!(!out(&moved).contains("canary"), "{}", out(&moved));
+}
+
+#[test]
+fn admitted_on_must_be_a_real_calendar_date() {
+    let d = tempfile::tempdir().unwrap();
+    cast_entities(d.path(), &["nibu"]);
+    for bad in ["2026-02-30", "", "junk", "2026-13-01", "2026-1-1"] {
+        let mut args = ADD.to_vec();
+        let at = args.iter().position(|a| *a == "--admitted-on").unwrap();
+        args[at + 1] = bad;
+        let o = weksa(d.path(), &args);
+        assert!(!o.status.success(), "{bad:?}: {}", out(&o));
+        assert!(out(&o).contains("--admitted-on"), "{bad:?}: {}", out(&o));
+    }
+    assert!(!out(&weksa(d.path(), &["corpus", "dump"])).contains("item:"));
+}
+
+#[test]
+fn clap_errors_never_echo_the_token() {
+    let d = tempfile::tempdir().unwrap();
+    for args in [
+        &["--sentinelflagzz"][..],
+        &["validate", "--sentinelflagzz"],
+        &["sentinelsubzz"],
+        &["corpus", "sentinelsubzz"],
+        &["--inventory"],
+    ] {
+        let o = weksa(d.path(), args);
+        let text = out(&o);
+        assert_eq!(o.status.code(), Some(2), "{args:?}: {text}");
+        assert!(text.contains("error:"), "{args:?}: {text}");
+        assert!(
+            !text.to_lowercase().contains("sentinel"),
+            "{args:?} echoes the token: {text}"
+        );
+    }
+}
+
+#[test]
+fn pronunciation_language_is_never_echoed() {
+    let d = tempfile::tempdir().unwrap();
+    let o = weksa(
+        d.path(),
+        &[
+            "entity",
+            "put",
+            "entity:nibu",
+            "--form",
+            "en-US=NIBU",
+            "--origin",
+            "cast",
+            "--persona",
+            "nibu",
+            "--fixture",
+            "f.yaml",
+            "--pronunciation",
+            "sentinel-LANG=ˈnibu",
+            "--ruled-by",
+            "N",
+            "--ruled-on",
+            "2026-11-07",
+            "--ruling-source",
+            "t",
+        ],
+    );
+    let text = out(&o);
+    assert!(
+        !o.status.success() && text.contains("names a language that has no --form"),
+        "{text}"
+    );
+    assert!(!text.to_lowercase().contains("sentinel"), "{text}");
+}
+
+/// Copies of the Dao De Jing stores where `weksa()` looks for them.
+fn dao_stores(dir: &std::path::Path) {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/daodejing");
+    for (from, to) in [
+        ("corpus.cc", "c.cc"),
+        ("inventory.cc", "i.cc"),
+        ("entity.cc", "e.cc"),
+    ] {
+        std::fs::copy(src.join(from), dir.join(to)).unwrap();
+    }
+}
+
+#[test]
+fn loop_open_and_unanswered_round() {
+    let d = tempfile::tempdir().unwrap();
+    dao_stores(d.path());
+    let open = |root: &str| {
+        weksa(
+            d.path(),
+            &[
+                "loop",
+                "open",
+                root,
+                "--label",
+                "smoke",
+                "--answerer",
+                "fake-model",
+                "--lowerer-reach",
+                "tool-less-relay",
+                "--answerer-family",
+                "open-ai",
+            ],
+        )
+    };
+    let o = open("canaryroot");
+    assert!(o.status.success(), "{}", out(&o));
+    assert_eq!(out(&o), "opened run:smoke\n");
+
+    // A second open fails and names neither the root nor a path.
+    let again = open("canaryroot");
+    assert!(!again.status.success());
+    let text = out(&again);
+    assert!(text.contains("already holds a run"), "{text}");
+    for echoed in ["canaryroot", d.path().to_str().unwrap()] {
+        assert!(!text.contains(echoed), "{text}");
+    }
+
+    // Round 1 is unanswered: three digests, a count, exit 3, no round recorded.
+    let round = || weksa(d.path(), &["loop", "round", "canaryroot"]);
+    let first = round();
+    assert_eq!(first.status.code(), Some(3), "{}", out(&first));
+    let text = out(&first);
+    let digests: Vec<&str> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("unanswered "))
+        .filter(|d| d.len() == 16)
+        .collect();
+    assert_eq!(digests.len(), 3, "{text}");
+    assert!(text.ends_with("unanswered 3 of 3\n"), "{text}");
+    assert!(!text.contains("canaryroot"), "{text}");
+    for digest in &digests {
+        assert!(
+            d.path()
+                .join(format!("canaryroot/round-1/{digest}.prompt"))
+                .is_file()
+        );
+    }
+
+    // Answers that are not drafts record a round of refusals, with no embed call.
+    for digest in &digests {
+        std::fs::write(
+            d.path().join(format!("canaryroot/round-1/{digest}.answer")),
+            "not json",
+        )
+        .unwrap();
+    }
+    let second = round();
+    assert!(second.status.success(), "{}", out(&second));
+    assert_eq!(
+        out(&second),
+        "round 1 rev 3 train n=1 scored=0 chrf=0.00 meaning=0.0000 refused=1 validation n=2 scored=0 chrf=0.00 meaning=0.0000 refused parse=2 admit=0 lower=0 parse-reasons=syntaxx3 lowering=tool-less-relay\n"
+    );
+
+    // The global store flags are not read by loop round: a drifted store is refused.
+    let mut entities = EntityStore::open(&d.path().join("e.cc")).unwrap();
+    entities.put(common::ent("kay", "en-US", &["Kay"])).unwrap();
+    let drifted = round();
+    assert!(!drifted.status.success());
+    assert!(
+        out(&drifted).contains("drift in Entities"),
+        "{}",
+        out(&drifted)
+    );
+}
+
+fn open_dao_run(d: &std::path::Path) {
+    dao_stores(d);
+    let o = weksa(
+        d,
+        &[
+            "loop",
+            "open",
+            "canaryroot",
+            "--label",
+            "smoke",
+            "--answerer",
+            "fake-model",
+            "--lowerer-reach",
+            "tool-less-relay",
+        ],
+    );
+    assert!(o.status.success(), "{}", out(&o));
+}
+
+#[test]
+fn loop_cycle_needs_a_floor() {
+    let d = tempfile::tempdir().unwrap();
+    open_dao_run(d.path());
+    let o = weksa(d.path(), &["loop", "cycle", "canaryroot"]);
+    assert!(!o.status.success());
+    let text = out(&o);
+    assert!(
+        text.contains("the run has no noise floor: record two rounds first"),
+        "{text}"
+    );
+    for echoed in ["canaryroot", d.path().to_str().unwrap()] {
+        assert!(!text.contains(echoed), "{text}");
+    }
+    assert!(!d.path().join("canaryroot/cycle-1").exists());
+}
+
+#[test]
+fn loop_cycle_asks_then_decides() {
+    let d = tempfile::tempdir().unwrap();
+    open_dao_run(d.path());
+    // Two rounds of refusals: a floor of 0 and a base of 0.
+    for n in 1..=2 {
+        let first = weksa(d.path(), &["loop", "round", "canaryroot"]);
+        assert_eq!(first.status.code(), Some(3), "{}", out(&first));
+        for entry in std::fs::read_dir(d.path().join(format!("canaryroot/round-{n}"))).unwrap() {
+            let path = entry.unwrap().path();
+            std::fs::write(path.with_extension("answer"), "not json").unwrap();
+        }
+        let second = weksa(d.path(), &["loop", "round", "canaryroot"]);
+        assert!(second.status.success(), "{}", out(&second));
+    }
+
+    // The editor is asked first: one digest, a count, exit 3, the prompt on disk.
+    let ask = weksa(d.path(), &["loop", "cycle", "canaryroot"]);
+    assert_eq!(ask.status.code(), Some(3), "{}", out(&ask));
+    let text = out(&ask);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 2, "{text}");
+    let digest = lines[0].strip_prefix("unanswered ").unwrap();
+    assert_eq!(digest.len(), 16, "{text}");
+    assert_eq!(lines[1], "unanswered 1 prompts");
+    for echoed in ["canaryroot", d.path().to_str().unwrap()] {
+        assert!(!text.contains(echoed), "{text}");
+    }
+    let dir = d.path().join("canaryroot/cycle-1");
+    let prompt = std::fs::read_to_string(dir.join(format!("{digest}.prompt"))).unwrap();
+    assert!(prompt.starts_with(weksa::context::MINT_INSTRUCTIONS));
+
+    // An answer that is not an edit closes the cycle as a rejection, with no
+    // embed call and no echo of the answer.
+    std::fs::write(dir.join(format!("{digest}.answer")), "CANARYANSWER").unwrap();
+    let done = weksa(d.path(), &["loop", "cycle", "canaryroot"]);
+    assert!(done.status.success(), "{}", out(&done));
+    assert_eq!(
+        out(&done),
+        "cycle 1 rev 3->none base=0.0000 candidate=none floor=0.0000 threshold=0.0050 rejected edit-parse lowering=tool-less-relay\n"
+    );
+
+    // The next cycle asks afresh in its own directory.
+    let next = weksa(d.path(), &["loop", "cycle", "canaryroot"]);
+    assert_eq!(next.status.code(), Some(3), "{}", out(&next));
+    let text = out(&next);
+    assert!(text.ends_with("unanswered 1 prompts\n"), "{text}");
+    assert!(!text.to_uppercase().contains("CANARY"), "{text}");
+    let asked = text
+        .lines()
+        .next()
+        .unwrap()
+        .strip_prefix("unanswered ")
+        .unwrap();
+    assert_ne!(asked, digest);
+    assert!(
+        d.path()
+            .join(format!("canaryroot/cycle-2/{asked}.prompt"))
+            .is_file()
+    );
+}
+
+#[test]
+fn loop_errors_echo_no_input() {
+    let d = tempfile::tempdir().unwrap();
+    dao_stores(d.path());
+    let o = weksa(d.path(), &["loop", "round", "canaryroot"]);
+    assert!(!o.status.success());
+    assert!(out(&o).contains("holds no run"), "{}", out(&o));
+    for args in [
+        vec![
+            "loop",
+            "open",
+            "canaryroot",
+            "--label",
+            "CANARYLABEL",
+            "--answerer",
+            "m",
+            "--lowerer-reach",
+            "tool-less-relay",
+        ],
+        vec![
+            "loop",
+            "open",
+            "canaryroot",
+            "--label",
+            "ok",
+            "--answerer",
+            "CANARY\n",
+            "--lowerer-reach",
+            "tool-less-relay",
+        ],
+    ] {
+        let o = weksa(d.path(), &args);
+        assert!(!o.status.success());
+        assert!(!out(&o).to_uppercase().contains("CANARY"), "{}", out(&o));
+    }
+    // A store path that does not exist.
+    let o = Command::new(env!("CARGO_BIN_EXE_weksa"))
+        .current_dir(d.path())
+        .args([
+            "--corpus",
+            "./canarystore.cc",
+            "loop",
+            "open",
+            "canaryroot",
+            "--label",
+            "ok",
+            "--answerer",
+            "m",
+            "--lowerer-reach",
+            "tool-less-relay",
+        ])
+        .output()
+        .unwrap();
+    assert!(!o.status.success());
+    assert!(!out(&o).to_uppercase().contains("CANARY"), "{}", out(&o));
+}
+
+#[test]
+fn loop_open_requires_the_lowerer_reach_and_pins_it() {
+    let d = tempfile::tempdir().unwrap();
+    dao_stores(d.path());
+    let base = ["loop", "open", "canaryroot", "--label", "smoke", "--answerer", "m"];
+    // No default: the record says how lowerings are answered, or there is no run.
+    let o = weksa(d.path(), &base);
+    assert!(!o.status.success());
+    assert!(out(&o).contains("--lowerer-reach"), "{}", out(&o));
+    // A value outside the two names is refused without being echoed.
+    let mut args = base.to_vec();
+    args.extend(["--lowerer-reach", "CANARYREACH"]);
+    let o = weksa(d.path(), &args);
+    assert!(!o.status.success());
+    assert!(!out(&o).to_uppercase().contains("CANARY"), "{}", out(&o));
+    assert!(!d.path().join("canaryroot/run.cc").exists());
+    // Either name opens, and the record keeps it.
+    let mut args = base.to_vec();
+    args.extend(["--lowerer-reach", "briefed-subagent"]);
+    let o = weksa(d.path(), &args);
+    assert!(o.status.success(), "{}", out(&o));
+    let run = weksa::run::RunStores::open(&d.path().join("canaryroot")).unwrap();
+    assert_eq!(
+        run.record().lowerer_reach,
+        weksa::run::LowererReach::BriefedSubagent
+    );
 }

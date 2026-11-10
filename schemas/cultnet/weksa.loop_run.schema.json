@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RunRecord",
+  "description": "What a run pinned at open. Key `run:<label>`.",
+  "type": "object",
+  "properties": {
+    "answerer_family": {
+      "description": "The family of the model answering the run's encode and lowering\nprompts, set once at open; `Unrecorded` when the opener did not say\nand for a run opened before this was kept.",
+      "$ref": "#/$defs/ModelFamily",
+      "default": "Unrecorded"
+    },
+    "chrf_version": {
+      "type": "string"
+    },
+    "corpus": {
+      "description": "Canonical absolute path of the corpus store.",
+      "type": "string"
+    },
+    "corpus_digest": {
+      "description": "16 hex of the corpus file's bytes.",
+      "type": "string"
+    },
+    "embedder": {
+      "description": "The embedder's model.",
+      "type": "string"
+    },
+    "entities": {
+      "type": "string"
+    },
+    "entity_digest": {
+      "type": "string"
+    },
+    "inventory": {
+      "description": "Canonical absolute path of the inventory store the run was opened over:\nprovenance only. `create` copies that file to `<root>/inventory.cc` and\nthe run reads nothing at this path afterwards.",
+      "type": "string"
+    },
+    "inventory_digest": {
+      "description": "16 hex of the bytes `create` copied to `<root>/inventory.cc`.",
+      "type": "string"
+    },
+    "label": {
+      "type": "string"
+    },
+    "lowerer_reach": {
+      "description": "How the run's lowering prompts are answered, set once at open.",
+      "$ref": "#/$defs/LowererReach"
+    },
+    "model": {
+      "description": "The answering model.",
+      "type": "string"
+    },
+    "prompt_digest": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "label",
+    "corpus",
+    "inventory",
+    "entities",
+    "corpus_digest",
+    "entity_digest",
+    "prompt_digest",
+    "model",
+    "embedder",
+    "chrf_version",
+    "inventory_digest",
+    "lowerer_reach"
+  ],
+  "$defs": {
+    "LowererReach": {
+      "description": "How a run's lowering prompts reach the model that answers them (rulings\n`lowerer-call-reach-toolless-relay`, `dao-round-seed-inventory`). The\nrecord says which, so a round lowered by a briefed subagent cannot pass as\na tool-less one.",
+      "oneOf": [
+        {
+          "description": "A subagent briefed to read one prompt file: acceptable for smoke rounds\nonly.",
+          "type": "string",
+          "const": "BriefedSubagent"
+        },
+        {
+          "description": "The prompt passed inline to an agent with no file tools.",
+          "type": "string",
+          "const": "ToolLessRelay"
+        }
+      ]
+    },
+    "ModelFamily": {
+      "description": "The family of the model that wrote a line.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "Anthropic",
+            "OpenAi",
+            "Google",
+            "Alibaba",
+            "Meta",
+            "Mistral"
+          ]
+        },
+        {
+          "description": "Nothing records which family wrote the line.",
+          "type": "string",
+          "const": "Unrecorded"
+        }
+      ]
+    }
+  }
+}

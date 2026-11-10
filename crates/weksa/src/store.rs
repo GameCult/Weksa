@@ -7,16 +7,21 @@ use std::fmt;
 use std::path::Path;
 
 use caseless::default_case_fold_str;
-use cultcache_rs::{CultCache, SingleFileMessagePackBackingStore};
+use cultcache_rs::{CacheBackingStore, CultCache, SingleFileMessagePackBackingStore};
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark, is_nfc};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::corpus::{CorpusItem, CorpusItemId, Source, item_key, key_slug};
 use crate::entity::{Entity, EntityOrigin, Pronunciation};
-use crate::form::{is_attestation, is_joining_only, is_language_tag, is_refused_format};
-use crate::inventory::{Change, InvId, Inventory, InventoryEntry, InventoryRevision, revision_key};
+use crate::form::{
+    is_attestation, is_calendar_date, is_joining_only, is_language_tag, is_refused_format, is_slug,
+};
+use crate::inventory::{
+    Change, InvId, Inventory, InventoryEntry, InventoryRevision, Slot, revision_key,
+};
 use crate::packet::{EntityId, Packet};
-use crate::validate::{LoweringInput, Refusal, admissible};
+use crate::speaker::{Annotator, MAX_PARTICIPANTS, Party, Scene, Speaker, scene_key, speaker_key};
+use crate::validate::{LoweringInput, Refusal, feature_refusals, validate};
 
 /// A broken store rule, named.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -77,8 +82,59 @@ pub enum StoreRefusal {
     /// A new packet names a corpus item already withdrawn. Packets admitted
     /// before the withdrawal stay stored and readable.
     WithdrawnCorpusItem { key: String },
+    /// A speaker or scene revision that is not the entity's or group's latest
+    /// plus one (1 when none).
+    RevisionNotNext {
+        key: String,
+        expected: u32,
+        got: u32,
+    },
+    /// A scene that omits the speaker of a live item of its group.
+    SceneSpeakerMissing { group: String, entity: EntityId },
     /// Any other malformed document or change.
     Malformed { key: String, why: &'static str },
+}
+
+/// What the CLI prints: the rule broken and the numbers and reasons that
+/// explain it. Item keys, entity ids and groups are the caller's identifiers
+/// and are left to the typed value, never to text.
+impl fmt::Display for StoreRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use StoreRefusal::*;
+        match self {
+            S1ItemImmutable { .. } => f.write_str("S1ItemImmutable"),
+            S2RevisionChain { expected, got } => {
+                write!(f, "S2RevisionChain expected {expected} got {got}")
+            }
+            S3Frozen { frozen } => write!(f, "S3Frozen at {frozen}"),
+            S4IntroducedRev {
+                introduced,
+                revision,
+                ..
+            } => write!(f, "S4IntroducedRev {introduced} in revision {revision}"),
+            S5SupersedeGroup { .. } => f.write_str("S5SupersedeGroup"),
+            S6TextHeld { .. } => f.write_str("S6TextHeld"),
+            UnknownCorpusItem { .. } => f.write_str("UnknownCorpusItem"),
+            PacketImmutable { .. } => f.write_str("PacketImmutable"),
+            UnknownEntity { .. } => f.write_str("UnknownEntity"),
+            NameSpanRange { start, end, .. } => write!(f, "NameSpanRange {start}..{end}"),
+            NameSpanSplitsCluster { start, end, .. } => {
+                write!(f, "NameSpanSplitsCluster {start}..{end}")
+            }
+            NotNfc { .. } => f.write_str("NotNfc"),
+            EntityBounds { bound, .. } => write!(f, "EntityBounds {bound:?}"),
+            NameSpanOverlap { .. } => f.write_str("NameSpanOverlap"),
+            NameSpanNotAForm { start, end, .. } => write!(f, "NameSpanNotAForm {start}..{end}"),
+            EntityNotAppendOnly { .. } => f.write_str("EntityNotAppendOnly"),
+            EntityNotOnItem { .. } => f.write_str("EntityNotOnItem"),
+            WithdrawnCorpusItem { .. } => f.write_str("WithdrawnCorpusItem"),
+            RevisionNotNext { expected, got, .. } => {
+                write!(f, "RevisionNotNext expected {expected} got {got}")
+            }
+            SceneSpeakerMissing { .. } => f.write_str("SceneSpeakerMissing"),
+            Malformed { why, .. } => write!(f, "Malformed: {why}"),
+        }
+    }
 }
 
 /// The capacity bound an entity broke.
@@ -111,7 +167,7 @@ pub enum StoreError {
 impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            StoreError::Refused(r) => write!(f, "refused: {r:?}"),
+            StoreError::Refused(r) => write!(f, "refused: {r}"),
             StoreError::Invalid(rs) => {
                 write!(f, "invalid packet:")?;
                 rs.iter().try_for_each(|r| write!(f, " [{r}]"))
@@ -143,16 +199,23 @@ fn malformed(key: &str, why: &'static str) -> StoreError {
     .into()
 }
 
-fn open_cache(
+pub(crate) fn open_cache(
     path: &Path,
     register: impl FnOnce(&mut CultCache) -> anyhow::Result<()>,
 ) -> anyhow::Result<CultCache> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
+    open_cache_over(SingleFileMessagePackBackingStore::new(path), register)
+}
+
+pub(crate) fn open_cache_over(
+    store: impl CacheBackingStore + 'static,
+    register: impl FnOnce(&mut CultCache) -> anyhow::Result<()>,
+) -> anyhow::Result<CultCache> {
     let mut cache = CultCache::new();
     register(&mut cache)?;
-    cache.add_generic_backing_store(SingleFileMessagePackBackingStore::new(path))?;
+    cache.add_generic_backing_store(store)?;
     cache.pull_all_backing_stores()?;
     Ok(cache)
 }
@@ -241,8 +304,26 @@ impl CorpusStore {
             return Err(StoreRefusal::NotNfc { key: item.id }.into());
         }
         let text = normalized(&item.text);
-        if !text.chars().any(char::is_alphanumeric) {
-            return Err(malformed(&item.id, "text has no alphanumeric character"));
+        // Read from the text as given: NFKC maps modifier letters (ʰ) to base letters.
+        // A text of marks, joiners and modifiers says so; any other text with
+        // no alphanumeric character (punctuation, space) gets the plainer reason.
+        if !item.text.chars().any(is_base) {
+            let marks_only = item.text.chars().any(|c| {
+                is_combining_mark(c)
+                    || matches!(c, '\u{200c}' | '\u{200d}')
+                    || is_modifier_letter(c)
+            });
+            return Err(malformed(
+                &item.id,
+                if marks_only {
+                    "text has no base letter or digit"
+                } else {
+                    "text has no alphanumeric character"
+                },
+            ));
+        }
+        if !is_calendar_date(&item.admitted_on) {
+            return Err(malformed(&item.id, "admitted_on is not a YYYY-MM-DD date"));
         }
         if let Some(why) = empty_attestation(&item.source) {
             return Err(malformed(&item.id, why));
@@ -364,14 +445,158 @@ fn check_entities(item: &CorpusItem, entities: &EntityStore) -> Result<(), Store
 /// default case fold, NFKC) keeping letters, digits and combining marks
 /// (General_Category L, N, M) so tone marks and viramas keep words apart. Composed and decomposed,
 /// fullwidth, ligature and case-fold variants (straße, STRASSE) and spacing and
-/// punctuation variants compare equal. Homoglyphs across scripts (Cyrillic a for
-/// Latin a) stay apart: no key here reads what a character looks like.
-fn normalized(text: &str) -> String {
-    let folded = default_case_fold_str(&text.nfkc().collect::<String>());
-    folded
+/// punctuation variants compare equal. Three writings of one thing also fold:
+/// Turkish dotless i and dotted capital I read as i, katakana reads as the
+/// hiragana of the same syllable, and Arabic-Indic and Extended Arabic-Indic
+/// digits read as 0-9. Homoglyphs across scripts (Cyrillic a for Latin a) stay
+/// apart: no key here reads what a character looks like. A combining dot above
+/// (U+0307) after i is dropped, so İx and i̇x collide as the old case fold made
+/// them; so does plain ix, with both. Over-merging a rare sequence errs toward
+/// held, a lost collision toward leak. U+0307 after any other letter stays.
+pub(crate) fn normalized(text: &str) -> String {
+    let mapped: String = text.nfkc().flat_map(fold_variant).collect();
+    // The dot goes before the last NFKC so the marks left on the i compose with
+    // it (i, dot, acute reads as the i with an acute).
+    let mut dotless = String::new();
+    for c in default_case_fold_str(&mapped).chars() {
+        if c == '\u{307}' && dotless.ends_with('i') {
+            continue;
+        }
+        dotless.push(c);
+    }
+    dotless
         .nfkc()
-        .filter(|c| c.is_alphanumeric() || is_combining_mark(*c))
+        .filter(|&c| c.is_alphanumeric() || is_combining_mark(c))
         .collect()
+}
+
+/// The one-to-one folds `normalized` adds to NFKC and case folding, applied
+/// before the case fold (U+0130 would otherwise fold to i plus a combining dot,
+/// which the key keeps as a mark).
+fn fold_variant(c: char) -> impl Iterator<Item = char> {
+    let one = |c: char| (c, None);
+    let (first, second) = match c {
+        '\u{131}' => one('i'),
+        '\u{130}' => one('I'),
+        // Voiced katakana wa, wi, we, wo: the hiragana (U+308F-3092) plus the
+        // combining voiced mark, which is how NFKC spells the hiragana forms.
+        '\u{30f7}'..='\u{30fa}' => (
+            char::from_u32(c as u32 - 0x68).unwrap_or(c),
+            Some('\u{3099}'),
+        ),
+        // Katakana letters and small letters to hiragana; the iteration marks
+        // ヽヾ to ゝゞ. The prolonged sound mark U+30FC stays.
+        '\u{30a1}'..='\u{30f6}' | '\u{30fd}'..='\u{30fe}' => {
+            one(char::from_u32(c as u32 - 0x60).unwrap_or(c))
+        }
+        '\u{660}'..='\u{669}' => one(char::from(b'0' + (c as u32 - 0x660) as u8)),
+        '\u{6f0}'..='\u{6f9}' => one(char::from(b'0' + (c as u32 - 0x6f0) as u8)),
+        _ => one(c),
+    };
+    std::iter::once(first).chain(second)
+}
+
+/// A character that can carry a word: alphanumeric and neither a combining
+/// mark (Mn, Mc, Me) nor a modifier letter (Lm). A text of none is marks and
+/// modifiers only, like a text of punctuation.
+fn is_base(c: char) -> bool {
+    c.is_alphanumeric() && !is_combining_mark(c) && !is_modifier_letter(c)
+}
+
+/// General_Category Lm, Unicode 17 (the Rust 1.99 tables), as inclusive ranges.
+fn is_modifier_letter(c: char) -> bool {
+    const LM: [(u32, u32); 79] = [
+        (0x2b0, 0x2c1),
+        (0x2c6, 0x2d1),
+        (0x2e0, 0x2e4),
+        (0x2ec, 0x2ec),
+        (0x2ee, 0x2ee),
+        (0x374, 0x374),
+        (0x37a, 0x37a),
+        (0x559, 0x559),
+        (0x640, 0x640),
+        (0x6e5, 0x6e6),
+        (0x7f4, 0x7f5),
+        (0x7fa, 0x7fa),
+        (0x81a, 0x81a),
+        (0x824, 0x824),
+        (0x828, 0x828),
+        (0x8c9, 0x8c9),
+        (0x971, 0x971),
+        (0xe46, 0xe46),
+        (0xec6, 0xec6),
+        (0x10fc, 0x10fc),
+        (0x17d7, 0x17d7),
+        (0x1843, 0x1843),
+        (0x1aa7, 0x1aa7),
+        (0x1c78, 0x1c7d),
+        (0x1d2c, 0x1d6a),
+        (0x1d78, 0x1d78),
+        (0x1d9b, 0x1dbf),
+        (0x2071, 0x2071),
+        (0x207f, 0x207f),
+        (0x2090, 0x209c),
+        (0x2c7c, 0x2c7d),
+        (0x2d6f, 0x2d6f),
+        (0x2e2f, 0x2e2f),
+        (0x3005, 0x3005),
+        (0x3031, 0x3035),
+        (0x303b, 0x303b),
+        (0x309d, 0x309e),
+        (0x30fc, 0x30fe),
+        (0xa015, 0xa015),
+        (0xa4f8, 0xa4fd),
+        (0xa60c, 0xa60c),
+        (0xa67f, 0xa67f),
+        (0xa69c, 0xa69d),
+        (0xa717, 0xa71f),
+        (0xa770, 0xa770),
+        (0xa788, 0xa788),
+        (0xa7f1, 0xa7f4),
+        (0xa7f8, 0xa7f9),
+        (0xa9cf, 0xa9cf),
+        (0xa9e6, 0xa9e6),
+        (0xaa70, 0xaa70),
+        (0xaadd, 0xaadd),
+        (0xaaf3, 0xaaf4),
+        (0xab5c, 0xab5f),
+        (0xab69, 0xab69),
+        (0xff70, 0xff70),
+        (0xff9e, 0xff9f),
+        (0x10780, 0x10785),
+        (0x10787, 0x107b0),
+        (0x107b2, 0x107ba),
+        (0x10d4e, 0x10d4e),
+        (0x10d6f, 0x10d6f),
+        (0x10ec5, 0x10ec5),
+        (0x11dd9, 0x11dd9),
+        (0x16b40, 0x16b43),
+        (0x16d40, 0x16d42),
+        (0x16d6b, 0x16d6c),
+        (0x16f93, 0x16f9f),
+        (0x16fe0, 0x16fe1),
+        (0x16fe3, 0x16fe3),
+        (0x16ff2, 0x16ff3),
+        (0x1aff0, 0x1aff3),
+        (0x1aff5, 0x1affb),
+        (0x1affd, 0x1affe),
+        (0x1e030, 0x1e06d),
+        (0x1e137, 0x1e13d),
+        (0x1e4eb, 0x1e4eb),
+        (0x1e6ff, 0x1e6ff),
+        (0x1e94b, 0x1e94b),
+    ];
+    let c = c as u32;
+    LM.binary_search_by(|&(lo, hi)| {
+        if hi < c {
+            std::cmp::Ordering::Less
+        } else if lo > c {
+            std::cmp::Ordering::Greater
+        } else {
+            std::cmp::Ordering::Equal
+        }
+    })
+    .is_ok()
 }
 
 /// The field that holds an unattested provenance string, if any: a string with
@@ -402,6 +627,18 @@ fn empty_attestation(source: &Source) -> Option<&'static str> {
         Source::PublicDomain { edition_url, .. } if empty(edition_url) => {
             Some("a public-domain source names its edition url")
         }
+        Source::PublicDomain { licence, .. } if empty(licence) => {
+            Some("a public-domain source names its licence")
+        }
+        Source::PublicDomain { jurisdiction, .. } if empty(jurisdiction) => {
+            Some("a public-domain source names its jurisdiction")
+        }
+        Source::PublicDomain { translator, .. } if empty(translator) => {
+            Some("a public-domain source names its translator")
+        }
+        Source::PublicDomain {
+            edition_year: 0, ..
+        } => Some("a public-domain source names its edition year"),
         Source::ModelWritten { generator, .. } if empty_some(generator) => {
             Some("a model-written source names a non-empty generator")
         }
@@ -563,18 +800,7 @@ fn check_pronunciation(entity: &Entity, p: &Pronunciation) -> Result<(), StoreEr
     if !is_attestation(&p.ruled_by) || !is_attestation(&p.source) {
         return Err(bad("a pronunciation names who ruled it and where"));
     }
-    let b = p.date.as_bytes();
-    let date_ok = b.len() == 10
-        && b.iter().enumerate().all(|(i, c)| {
-            if i == 4 || i == 7 {
-                *c == b'-'
-            } else {
-                c.is_ascii_digit()
-            }
-        })
-        && (1..=12).contains(&p.date[5..7].parse::<u32>().unwrap_or(0))
-        && (1..=31).contains(&p.date[8..].parse::<u32>().unwrap_or(0));
-    if !date_ok {
+    if !is_calendar_date(&p.date) {
         return Err(bad("a pronunciation is dated YYYY-MM-DD"));
     }
     if p.rejected.len() > EntityBound::MAX_FORMS {
@@ -740,7 +966,7 @@ impl PacketStore {
         corpus: &CorpusStore,
         entities: &EntityStore,
     ) -> Result<LoweringInput, StoreError> {
-        let view = admissible(&packet, &inventory.inventory()?).map_err(StoreError::Invalid)?;
+        validate(&packet, &inventory.inventory()?).map_err(StoreError::Invalid)?;
         let item = corpus.resolve(&packet.provenance.corpus_item)?;
         if item.withdrawn {
             return Err(StoreRefusal::WithdrawnCorpusItem {
@@ -755,9 +981,7 @@ impl PacketStore {
                 }
                 .into());
             }
-            let on_item = item.names.iter().any(|n| &n.entity == entity)
-                || &item.speaker == entity
-                || item.prior_turns.iter().any(|t| &t.speaker == entity);
+            let on_item = item.cited_entities().any(|e| e == entity);
             if !on_item {
                 return Err(StoreRefusal::EntityNotOnItem {
                     entity: entity.clone(),
@@ -766,6 +990,7 @@ impl PacketStore {
                 .into());
             }
         }
+        let view = LoweringInput::of(&packet, &item);
         let key = packet.id.to_string();
         if let Some(existing) = self.get(&key)? {
             if existing == packet {
@@ -776,4 +1001,209 @@ impl PacketStore {
         self.cache.put(key, &packet)?;
         Ok(view)
     }
+}
+
+/// The speaker and scene documents: append-only revisions, one key each. The
+/// only writer of `weksa.speaker` and `weksa.scene`.
+pub struct SpeakerStateStore {
+    cache: CultCache,
+}
+
+impl SpeakerStateStore {
+    pub fn open(path: &Path) -> anyhow::Result<Self> {
+        Ok(Self {
+            cache: open_cache(path, |c| {
+                c.register_entry_type::<Speaker>()?;
+                c.register_entry_type::<Scene>()
+            })?,
+        })
+    }
+
+    /// Admits the next revision of a speaker, or an identical replay. The key
+    /// derives from the document. Revision `n` is the entity's latest plus one
+    /// (1 when none). The entity is in the entity store, the features pass
+    /// `feature_refusals` in slot `Speaker` at the document's inventory
+    /// revision, and a model annotator's generator is an attestation.
+    pub fn put_speaker(
+        &mut self,
+        s: Speaker,
+        inventory: &InventoryStore,
+        entities: &EntityStore,
+    ) -> Result<AddOutcome, StoreError> {
+        let key = speaker_key(&s.entity, s.n);
+        if self.get_speaker(&key)?.is_some_and(|old| old == s) {
+            return Ok(AddOutcome::Unchanged);
+        }
+        check_annotator(&key, &s.annotator)?;
+        known_entity(entities, &s.entity)?;
+        let out = feature_refusals(
+            &inventory.inventory()?,
+            s.inventory_rev,
+            &s.features,
+            Slot::Speaker,
+        );
+        if !out.is_empty() {
+            return Err(StoreError::Invalid(out));
+        }
+        let latest = self.speaker(&s.entity)?.map_or(0, |l| l.n);
+        check_next(&key, latest, s.n)?;
+        self.cache.put(key, &s)?;
+        Ok(AddOutcome::Added)
+    }
+
+    /// Admits the next revision of a scene, or an identical replay. The group
+    /// is a slug some corpus item (live or withdrawn) holds; there are 1 to
+    /// `MAX_PARTICIPANTS` participants, each named once and in the entity
+    /// store; a relation's `from` is a participant, a named `to` is another
+    /// participant, and an ordered pair has at most one relation; every speaker
+    /// of a live item of the group is a participant. Features pass
+    /// `feature_refusals` in slot `Scene` for every relation.
+    pub fn put_scene(
+        &mut self,
+        s: Scene,
+        inventory: &InventoryStore,
+        corpus: &CorpusStore,
+        entities: &EntityStore,
+    ) -> Result<AddOutcome, StoreError> {
+        let key = scene_key(&s.group, s.n);
+        if self.get_scene(&key)?.is_some_and(|old| old == s) {
+            return Ok(AddOutcome::Unchanged);
+        }
+        let bad = |why| malformed(&key, why);
+        if !is_slug(&s.group) {
+            return Err(bad("a scene group is a slug"));
+        }
+        check_annotator(&key, &s.annotator)?;
+        let items: Vec<CorpusItem> = corpus
+            .all()?
+            .into_iter()
+            .filter(|i| i.group == s.group)
+            .collect();
+        if items.is_empty() {
+            return Err(bad("no corpus item holds the scene's group"));
+        }
+        if s.participants.is_empty() || s.participants.len() > MAX_PARTICIPANTS {
+            return Err(bad("a scene has 1 to 64 participants"));
+        }
+        let mut seen = BTreeSet::new();
+        for p in &s.participants {
+            if !seen.insert(p) {
+                return Err(bad("a participant is named once"));
+            }
+            known_entity(entities, p)?;
+        }
+        let mut pairs = BTreeSet::new();
+        for r in &s.relations {
+            if !seen.contains(&r.from) {
+                return Err(bad("a relation's from is a participant"));
+            }
+            if let Party::Named(to) = &r.to
+                && (!seen.contains(to) || to == &r.from)
+            {
+                return Err(bad("a relation's named to is another participant"));
+            }
+            if !pairs.insert((&r.from, &r.to)) {
+                return Err(bad("an ordered pair has one relation"));
+            }
+        }
+        if let Some(entity) = s.uncovered(items.iter().filter(|i| !i.withdrawn).map(|i| &i.speaker))
+        {
+            return Err(StoreRefusal::SceneSpeakerMissing {
+                entity: entity.clone(),
+                group: s.group,
+            }
+            .into());
+        }
+        let inv = inventory.inventory()?;
+        let mut out = Vec::new();
+        if s.relations.is_empty() {
+            out = feature_refusals(&inv, s.inventory_rev, &[], Slot::Scene);
+        }
+        for r in &s.relations {
+            out.extend(feature_refusals(
+                &inv,
+                s.inventory_rev,
+                &r.features,
+                Slot::Scene,
+            ));
+        }
+        if !out.is_empty() {
+            return Err(StoreError::Invalid(out));
+        }
+        let latest = self.scene(&s.group)?.map_or(0, |l| l.n);
+        check_next(&key, latest, s.n)?;
+        self.cache.put(key, &s)?;
+        Ok(AddOutcome::Added)
+    }
+
+    /// The latest revision (highest `n`) of the entity's speaker document.
+    pub fn speaker(&self, entity: &EntityId) -> anyhow::Result<Option<Speaker>> {
+        Ok(self
+            .all_speakers()?
+            .into_iter()
+            .filter(|s| &s.entity == entity)
+            .max_by_key(|s| s.n))
+    }
+
+    /// The latest revision (highest `n`) of the group's scene document.
+    pub fn scene(&self, group: &str) -> anyhow::Result<Option<Scene>> {
+        Ok(self
+            .all_scenes()?
+            .into_iter()
+            .filter(|s| s.group == group)
+            .max_by_key(|s| s.n))
+    }
+
+    pub fn get_speaker(&self, key: &str) -> anyhow::Result<Option<Speaker>> {
+        self.cache.get::<Speaker>(key)
+    }
+
+    pub fn get_scene(&self, key: &str) -> anyhow::Result<Option<Scene>> {
+        self.cache.get::<Scene>(key)
+    }
+
+    /// Every speaker revision, by entity then revision number.
+    pub fn all_speakers(&self) -> anyhow::Result<Vec<Speaker>> {
+        let mut all = self.cache.get_all::<Speaker>()?;
+        all.sort_by(|a, b| (&a.entity, a.n).cmp(&(&b.entity, b.n)));
+        Ok(all)
+    }
+
+    /// Every scene revision, by group then revision number.
+    pub fn all_scenes(&self) -> anyhow::Result<Vec<Scene>> {
+        let mut all = self.cache.get_all::<Scene>()?;
+        all.sort_by(|a, b| (&a.group, a.n).cmp(&(&b.group, b.n)));
+        Ok(all)
+    }
+}
+
+fn known_entity(entities: &EntityStore, id: &EntityId) -> Result<(), StoreError> {
+    match entities.get(id)? {
+        Some(_) => Ok(()),
+        None => Err(StoreRefusal::UnknownEntity { entity: id.clone() }.into()),
+    }
+}
+
+fn check_annotator(key: &str, a: &Annotator) -> Result<(), StoreError> {
+    match a {
+        Annotator::Model { generator, .. } if !is_attestation(generator) => {
+            Err(malformed(key, "a model annotator attests its generator"))
+        }
+        _ => Ok(()),
+    }
+}
+
+fn check_next(key: &str, latest: u32, got: u32) -> Result<(), StoreError> {
+    let expected = latest
+        .checked_add(1)
+        .ok_or_else(|| malformed(key, "no revision follows the latest"))?;
+    if got != expected {
+        return Err(StoreRefusal::RevisionNotNext {
+            key: key.to_string(),
+            expected,
+            got,
+        }
+        .into());
+    }
+    Ok(())
 }
