@@ -350,10 +350,61 @@ fn a_run_from_before_the_copy_does_not_open() {
 }
 
 #[test]
+fn a_store_changed_between_its_digest_and_its_open_is_drift() {
+    let mut w = world();
+    let dir = w.dir.path().to_path_buf();
+    let root = dir.join("run");
+    run_over(&dir);
+    let more = |w: &mut common::World| {
+        let item = common::item_in(
+            "item:nibu:2",
+            "Another line.",
+            &common::group_in_bucket(10),
+            common::cast(),
+        );
+        w.corpus.add(item, &w.entities).unwrap();
+    };
+    // The pins hold at the check; the corpus changes before the stores open.
+    assert_eq!(
+        RunStores::open_between(&root, || more(&mut w)).err(),
+        Some(RunError::Drift(DriftOf::Corpus))
+    );
+
+    // The same window at create: nothing is pinned and nothing is left behind,
+    // so the retry creates.
+    let mut w = world();
+    let dir = w.dir.path().to_path_buf();
+    let root = dir.join("run");
+    for name in ["c.cc", "i.cc", "entities.cc"] {
+        assert!(dir.join(name).exists(), "{name}");
+    }
+    let (c, i, e) = (dir.join("c.cc"), dir.join("i.cc"), dir.join("entities.cc"));
+    let paths = || weksa::run::RunPaths {
+        corpus: &c,
+        inventory: &i,
+        entities: &e,
+    };
+    assert_eq!(
+        RunStores::create_between(&root, "t", paths(), "fake-model", "bag", || more(&mut w)).err(),
+        Some(RunError::Drift(DriftOf::Corpus))
+    );
+    assert!(!root.join("inventory.cc").exists());
+    assert_eq!(RunStores::open(&root).err(), Some(RunError::NoRun));
+    RunStores::create(&root, "t", paths(), "fake-model", "bag").unwrap();
+}
+
+#[test]
 fn source_digests_cover_their_files() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let digest = |name: &str| fnv1a64(&std::fs::read(src.join(name)).unwrap());
-    assert_eq!(weksa::run::PROMPT_SOURCE_DIGEST, digest("context.rs"));
+    // The prompt's partition and names come from split.rs: it is covered too.
+    let both = [
+        std::fs::read(src.join("context.rs")).unwrap(),
+        std::fs::read(src.join("split.rs")).unwrap(),
+    ]
+    .concat();
+    assert_eq!(weksa::run::PROMPT_SOURCE_DIGEST, fnv1a64(&both));
+    assert_ne!(weksa::run::PROMPT_SOURCE_DIGEST, digest("context.rs"));
     assert_eq!(weksa::run::LOWERER_SOURCE_DIGEST, digest("lower.rs"));
     assert_ne!(
         weksa::run::PROMPT_SOURCE_DIGEST,

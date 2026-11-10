@@ -35,12 +35,15 @@ use crate::form::{is_attestation, is_slug};
 use crate::lower::lower;
 use crate::model::{ModelPort, PortError};
 use crate::score::{CHRF_VERSION, Embedder, ItemScore, ScoreInput, Scorer, SplitMean, aggregate};
-use crate::split::{Split, SplitScheme, fnv1a64, hex16};
+use crate::split::{Split, SplitScheme, fnv1a64, fnv1a64_of, hex16};
 use crate::store::{CorpusStore, EntityStore, InventoryStore, PacketStore, open_cache_over};
 
-/// The digest of the prompt builder's source. Any edit to `context.rs`,
-/// comments included, ends a run; code outside that file is not covered.
-pub const PROMPT_SOURCE_DIGEST: u64 = fnv1a64(include_bytes!("context.rs"));
+/// The digest of the prompt builder's source: `context.rs`, then `split.rs`,
+/// whose scheme and digest function decide which lines the prompt holds as
+/// Train and name every prompt. Any edit to either, comments included, ends a
+/// run; code outside those files is not covered.
+pub const PROMPT_SOURCE_DIGEST: u64 =
+    fnv1a64_of(&[include_bytes!("context.rs"), include_bytes!("split.rs")]);
 
 /// The digest of the lowerer's source. Any edit to `lower.rs`, comments
 /// included, ends a run; code outside that file is not covered.
@@ -387,6 +390,21 @@ pub struct RunStores {
 /// The run's own copy of the inventory, made at `create`.
 const INVENTORY_FILE: &str = "inventory.cc";
 
+/// The corpus, entity and head inventory files against the record's pins.
+fn check_pins(cache: &CultCache, root: &Path, record: &RunRecord) -> Result<(), RunError> {
+    if file_digest(&record.corpus).as_ref() != Some(&record.corpus_digest) {
+        return Err(RunError::Drift(DriftOf::Corpus));
+    }
+    if file_digest(&record.entities).as_ref() != Some(&record.entity_digest) {
+        return Err(RunError::Drift(DriftOf::Entities));
+    }
+    let (path, digest, _) = head_of(cache, root, record)?;
+    if file_digest_at(&path).as_ref() != Some(&digest) {
+        return Err(RunError::Drift(DriftOf::Inventory));
+    }
+    Ok(())
+}
+
 fn file_digest_at(path: &Path) -> Option<String> {
     std::fs::read(path).ok().map(|b| hex16(fnv1a64(&b)))
 }
@@ -454,6 +472,20 @@ impl RunStores {
         model: &str,
         embedder: &str,
     ) -> Result<Self, RunError> {
+        Self::create_between(root, label, paths, model, embedder, || {})
+    }
+
+    /// `create` with `between` run after the digests are taken and before the
+    /// stores are opened: the seam that lets a test change a store in that window.
+    #[doc(hidden)]
+    pub fn create_between(
+        root: &Path,
+        label: &str,
+        paths: RunPaths<'_>,
+        model: &str,
+        embedder: &str,
+        between: impl FnOnce(),
+    ) -> Result<Self, RunError> {
         if !is_slug(label) {
             return Err(RunError::Malformed("label"));
         }
@@ -463,7 +495,7 @@ impl RunStores {
         if !is_attestation(embedder) {
             return Err(RunError::Malformed("embedder"));
         }
-        let mut cache = run_cache(root)?;
+        let cache = run_cache(root)?;
         if one_run(&cache)?.is_some() {
             return Err(RunError::Exists);
         }
@@ -493,10 +525,16 @@ impl RunStores {
                 inventory_digest: file_digest_at(&head).ok_or(RunError::Store)?,
                 ..record
             };
-            cache
-                .put(format!("run:{label}"), &record)
+            between();
+            let mut run = Self::with(root, cache, record)?;
+            // The stores were read between the digests: unless they still match
+            // the pins, what was opened is not what was pinned. Nothing is
+            // recorded for a run that did not pin.
+            check_pins(&run.cache, root, &run.record)?;
+            run.cache
+                .put(format!("run:{label}"), &run.record)
                 .map_err(|_| RunError::Store)?;
-            Self::with(root, cache, record)
+            Ok(run)
         })();
         if pinned.is_err() {
             let _ = std::fs::remove_file(&head);
@@ -507,6 +545,13 @@ impl RunStores {
     /// Reopens the run at `root` from its record, refusing when a pinned store
     /// or the prompt or lowerer source no longer matches.
     pub fn open(root: &Path) -> Result<Self, RunError> {
+        Self::open_between(root, || {})
+    }
+
+    /// `open` with `between` run after the pins are checked and before the
+    /// stores are opened: the seam that lets a test change a store in that window.
+    #[doc(hidden)]
+    pub fn open_between(root: &Path, between: impl FnOnce()) -> Result<Self, RunError> {
         if !root.join("run.cc").is_file() {
             return Err(RunError::NoRun);
         }
@@ -518,17 +563,13 @@ impl RunStores {
         if record.lowerer_digest != hex16(LOWERER_SOURCE_DIGEST) {
             return Err(RunError::Drift(DriftOf::Lowerer));
         }
-        if file_digest(&record.corpus).as_ref() != Some(&record.corpus_digest) {
-            return Err(RunError::Drift(DriftOf::Corpus));
-        }
-        if file_digest(&record.entities).as_ref() != Some(&record.entity_digest) {
-            return Err(RunError::Drift(DriftOf::Entities));
-        }
-        let (path, digest, _) = head_of(&cache, root, &record)?;
-        if file_digest_at(&path).as_ref() != Some(&digest) {
-            return Err(RunError::Drift(DriftOf::Inventory));
-        }
-        Self::with(root, cache, record)
+        check_pins(&cache, root, &record)?;
+        between();
+        let run = Self::with(root, cache, record)?;
+        // Checking and opening are two reads of each file: the opened stores
+        // are the pinned ones only if the pins still hold after the open.
+        check_pins(&run.cache, root, &run.record)?;
+        Ok(run)
     }
 
     fn with(root: &Path, cache: CultCache, record: RunRecord) -> Result<Self, RunError> {

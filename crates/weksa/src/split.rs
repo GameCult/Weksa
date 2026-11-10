@@ -25,12 +25,22 @@ pub enum SplitScheme {
 }
 
 pub const fn fnv1a64(bytes: &[u8]) -> u64 {
+    fnv1a64_of(&[bytes])
+}
+
+/// FNV-1a 64 of the parts laid end to end.
+pub const fn fnv1a64_of(parts: &[&[u8]]) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    let mut i = 0;
-    while i < bytes.len() {
-        h ^= bytes[i] as u64;
-        h = h.wrapping_mul(0x0000_0100_0000_01b3);
-        i += 1;
+    let mut p = 0;
+    while p < parts.len() {
+        let bytes = parts[p];
+        let mut i = 0;
+        while i < bytes.len() {
+            h ^= bytes[i] as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+            i += 1;
+        }
+        p += 1;
     }
     h
 }
