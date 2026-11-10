@@ -182,7 +182,7 @@ def outcome_html(fx):
                 f"<h3>Closeness to the corpus ({e(data['build']['embedder'])})</h3>{''.join(sc)}")
     if o["kind"] == "lower_error":
         er = o["error"]
-        return f"<h3>Refused by the lowerer</h3><div class='refusal'><b>LowerError::{e(er['variant'])}</b>: {e(er['reason'])}<br><span class='mono'>{e(er['debug'])}</span></div><p class='meta'>No text, so no score: nothing was invented to score.</p>"
+        return f"<h3>Refused by the lowerer</h3><div class='refusal'><b>LowerError::{e(er['variant'])}</b>: {e(er['reason'])}</div><p class='meta'>No text, so no score: nothing was invented to score.</p>"
     items = "".join(f"<li><b>{e(r['rule'])}</b> <span class='mono'>{e(r['detail'])}</span></li>" for r in o["refusals"])
     return f"<h3>Refused at admission</h3><div class='refusal'><ul>{items}</ul></div><p class='meta'>The packet never became a lowering input, so the lowerer never saw it.</p>"
 

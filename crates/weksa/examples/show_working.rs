@@ -260,7 +260,7 @@ fn lower_error(e: &LowerError) -> Value {
         LowerError::AskerNotAddressee { predication } => ("AskerNotAddressee", format!("the agent of {predication} is not the addressee")),
         LowerError::EntityRead { entity, why } => ("EntityRead", format!("reading {entity}: {why}")),
     };
-    json!({ "variant": variant, "reason": reason, "debug": format!("{e:?}") })
+    json!({ "variant": variant, "reason": reason })
 }
 
 struct World {
@@ -374,4 +374,23 @@ fn main() {
     }
     let _ = std::fs::remove_dir_all(&dir);
     println!("{}", serde_json::to_string_pretty(&json!({ "fixtures": out })).expect("json"));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refusal_carries_the_closed_reason_never_a_debug_of_the_error() {
+        // UnknownPhone holds the ruled IPA text; no field of the output may.
+        let e = LowerError::UnknownPhone {
+            entity: EntityId::parse("entity:nibu").expect("entity id"),
+            at: 3,
+            text: "CANARY-IPA".into(),
+        };
+        let v = lower_error(&e);
+        assert!(!v.to_string().contains("CANARY"));
+        let keys: Vec<_> = v.as_object().expect("object").keys().cloned().collect();
+        assert_eq!(keys, ["reason", "variant"]);
+    }
 }
