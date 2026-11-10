@@ -1527,15 +1527,16 @@ mod tests {
     #[test]
     fn the_floor_is_the_spread_of_each_field_of_the_two_replicates() {
         let record = record_of("d1");
-        let rounds = [
-            replicate(1, "d1", 60.0, 0.5),
-            replicate(2, "d1", 50.0, 0.7),
-        ];
+        let rounds = [replicate(1, "d1", 60.0, 0.5), replicate(2, "d1", 50.0, 0.7)];
         let floor = floor_of(&rounds, &record).unwrap();
         // composites 0.55 and 0.6.
         assert_eq!(floor.chrf, 10.0);
         assert!((floor.meaning - 0.2).abs() < 1e-12);
-        assert!((floor.composite - 0.05).abs() < 1e-12, "{}", floor.composite);
+        assert!(
+            (floor.composite - 0.05).abs() < 1e-12,
+            "{}",
+            floor.composite
+        );
 
         // The order of the replicates does not matter, and a third round, or a
         // round under another inventory or from a cycle, is not a replicate.

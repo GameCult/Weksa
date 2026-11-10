@@ -1623,7 +1623,10 @@ fn two_accepts_make_the_latest_the_head_and_a_reject_after_them_is_told_so() {
     assert_eq!(d1.verdict(), Verdict::Accepted);
     assert_eq!(d2.verdict(), Verdict::Accepted);
     assert_eq!((d2.base_round(), d2.base_rev()), (3, 4));
-    assert_eq!((d2.candidate_round(), d2.candidate_rev()), (Some(4), Some(5)));
+    assert_eq!(
+        (d2.candidate_round(), d2.candidate_rev()),
+        (Some(4), Some(5))
+    );
 
     // The head is the second accept, live and reopened.
     assert_eq!(head_rev(&dao.root), 5);
@@ -2194,7 +2197,11 @@ fn source_tripwires() {
     let count = |needle: &str| code.iter().filter(|l| l.contains(needle)).count();
     assert!(!run.contains("pub fn new"));
     assert_eq!(count("admit_revision("), 1, "one door call");
-    assert_eq!(count("std::fs::copy"), 1, "the cycle's copy; create's is copy_new");
+    assert_eq!(
+        count("std::fs::copy"),
+        1,
+        "the cycle's copy; create's is copy_new"
+    );
     assert_eq!(
         count("Path::new(&record.inventory)"),
         1,
