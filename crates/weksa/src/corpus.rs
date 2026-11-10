@@ -97,6 +97,20 @@ pub struct CorpusItem {
     pub names: Vec<NameSpan>,
 }
 
+impl CorpusItem {
+    /// The entities a packet for this item may cite (leak-owned-by-flow-and-scorer-3
+    /// (3)): the entities its text names, then its speaker, then its prior-turn
+    /// speakers (which may repeat). `PacketStore::admit` and `EncoderOffer` read
+    /// only this.
+    pub fn cited_entities(&self) -> impl Iterator<Item = &EntityId> {
+        self.names
+            .iter()
+            .map(|n| &n.entity)
+            .chain(std::iter::once(&self.speaker))
+            .chain(self.prior_turns.iter().map(|t| &t.speaker))
+    }
+}
+
 /// A byte range `[start, end)` of an item's text that names an entity. The
 /// store admits it only when both ends sit on extended grapheme cluster
 /// boundaries (UAX #29) of the NFC text and the range's bytes equal one of the

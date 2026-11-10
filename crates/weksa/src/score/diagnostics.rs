@@ -56,12 +56,6 @@ pub struct SplitLeak {
     pub worst: Option<WorstItem>,
 }
 
-#[derive(Clone, Debug, PartialEq, Default)]
-pub struct LeakDiagnostic {
-    pub validation: SplitLeak,
-    pub test: SplitLeak,
-}
-
 /// The distinct word n-grams of a text for each order 1..=ORDERS, over its
 /// normalised word segments.
 fn grams(text: &str) -> Vec<HashSet<String>> {
@@ -145,25 +139,29 @@ fn split_leak(
     leak
 }
 
-/// Reads minted text (inventory glosses, option labels, later ontology text)
-/// against the held-out items. Per held-out item and for n in 1..=3, its word
-/// n-grams that occur in no Train item are its novel n-grams; coverage at each
-/// n is the covered over the novel n-grams summed across the split's items
-/// (unigrams over all minted strings, longer grams within one string). Honest
-/// single-word glosses saturate n = 1, so the leak signature is pooled n >= 2
-/// and the worst item at n >= 2. Train items are not measured; items in no
-/// split are dropped.
-pub fn leak_diagnostic(minted: &[&str], items: &[CorpusItem]) -> LeakDiagnostic {
+/// The held-out split `want` read against minted text: Train items are the
+/// live Train items; the readings are over the live items of `want`.
+pub(super) fn held_out(minted: &[&str], items: &[CorpusItem], want: Split) -> SplitLeak {
     let of = |want: Split| -> Vec<&CorpusItem> {
         items
             .iter()
-            .filter(|i| SplitScheme::V1.split(i) == Some(want))
+            .filter(|i| SplitScheme::V1.live(i) == Some(want))
             .collect()
     };
     let train = union(of(Split::Train).iter().map(|i| i.text.as_str()));
     let minted_grams = union(minted.iter().copied());
-    LeakDiagnostic {
-        validation: split_leak(minted, &train, &minted_grams, &of(Split::Validation)),
-        test: split_leak(minted, &train, &minted_grams, &of(Split::Test)),
-    }
+    split_leak(minted, &train, &minted_grams, &of(want))
+}
+
+/// Reads minted text (inventory glosses, option labels, later ontology text)
+/// against the Validation items. Per Validation item and for n in 1..=3, its
+/// word n-grams that occur in no Train item are its novel n-grams; coverage at
+/// each n is the covered over the novel n-grams summed across the split's
+/// items (unigrams over all minted strings, longer grams within one string).
+/// Honest single-word glosses saturate n = 1, so the leak signature is pooled
+/// n >= 2 and the worst item at n >= 2. Train items are not measured; withdrawn
+/// items and items in no split are dropped. Test is read only through
+/// `TestReadings`.
+pub fn leak_diagnostic(minted: &[&str], items: &[CorpusItem]) -> SplitLeak {
+    held_out(minted, items, Split::Validation)
 }
