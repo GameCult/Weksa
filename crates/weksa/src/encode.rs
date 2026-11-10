@@ -342,19 +342,25 @@ mod tests {
         // None keeps a token of the answer.
         let secret = r#"{"confidence": "canary-token"}"#;
         assert!(!format!("{:?}", PacketDraft::parse(secret).unwrap_err()).contains("canary"));
-        // Every code is distinct and none can hold answer text: they are fixed.
-        let all = [
-            DraftClass::Syntax,
-            DraftClass::Eof,
-            DraftClass::MissingField,
-            DraftClass::UnknownField,
-            DraftClass::InvalidType,
-            DraftClass::InvalidValue,
-            DraftClass::BadForm,
-            DraftClass::Other,
+        // Other is fed by real serde errors the reader names no class for.
+        let dup = r#"{"confidence": 1, "confidence": 1}"#;
+        assert_eq!(class(dup), DraftClass::Other);
+        let variant = r#"{"stance": {"features": [{"feature": "feature:9", "value": {"Bogus": 1}}]}}"#;
+        assert_eq!(class(variant), DraftClass::Other);
+        // Each code is its literal, exactly: a round record keeps these strings.
+        let pinned = [
+            (DraftClass::Syntax, "syntax"),
+            (DraftClass::Eof, "eof"),
+            (DraftClass::MissingField, "missing-field"),
+            (DraftClass::UnknownField, "unknown-field"),
+            (DraftClass::InvalidType, "invalid-type"),
+            (DraftClass::InvalidValue, "invalid-value"),
+            (DraftClass::BadForm, "bad-form"),
+            (DraftClass::Other, "other"),
         ];
-        let codes: std::collections::BTreeSet<_> = all.iter().map(|c| c.code()).collect();
-        assert_eq!(codes.len(), all.len());
+        for (c, lit) in pinned {
+            assert_eq!(c.code(), lit);
+        }
     }
 
     #[test]
