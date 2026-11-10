@@ -228,9 +228,11 @@ latest plus one, and the latest revision is the highest `n`. Each carries an
 Both hold typed feature values only, never text. A feature of slot `Stance`,
 `Speaker` or `Scene` sits in that slot alone (each layer has one writer and one
 lifetime), which `admit_revision` enforces. `LoweringInput::with_scene` takes the
-store and names neither speaker nor scene: the view knows its corpus item, so
+speaker-state and corpus stores and names neither speaker nor scene: the view knows its corpus item, so
 the speaker is the item's speaker and the scene is the store's latest for the
-item's group. The speaker must be a participant (V16), and the relation
+item's group. The scene must list the item's speaker and the speaker of every live item of the
+group (V16; `Scene::uncovered`, the rule `put_scene` applies too, so a scene a
+later corpus item outgrew is refused at the read), and the relation
 selected is the speaker's to the entity of the addressee referent (to
 `Unnamed` when that referent has no entity, to nothing when the packet has no
 addressee or the scene holds no such relation). V13 is retired.

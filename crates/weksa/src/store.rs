@@ -1106,13 +1106,11 @@ impl SpeakerStateStore {
                 return Err(bad("an ordered pair has one relation"));
             }
         }
-        if let Some(i) = items
-            .iter()
-            .find(|i| !i.withdrawn && !seen.contains(&i.speaker))
+        if let Some(entity) = s.uncovered(items.iter().filter(|i| !i.withdrawn).map(|i| &i.speaker))
         {
             return Err(StoreRefusal::SceneSpeakerMissing {
+                entity: entity.clone(),
                 group: s.group,
-                entity: i.speaker.clone(),
             }
             .into());
         }

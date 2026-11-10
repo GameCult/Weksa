@@ -125,6 +125,10 @@ fn refusal_display_names_the_rule_and_no_identifier() {
         Refusal::V16SpeakerNotInScene,
         Refusal::V17AddresseeNotAReferent { id: node() },
     ];
+    assert_eq!(
+        Refusal::V16SpeakerNotInScene.to_string(),
+        "V16: the scene does not cover the speaker of every live item of its group"
+    );
     for r in &all {
         assert!(r.to_string().starts_with(r.rule()), "{r:?}");
     }
