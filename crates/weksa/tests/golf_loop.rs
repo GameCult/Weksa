@@ -1605,6 +1605,55 @@ fn a_rejected_candidates_score_never_reaches_the_editor() {
 }
 
 #[test]
+fn two_accepts_make_the_latest_the_head_and_a_reject_after_them_is_told_so() {
+    let mut dao = dao();
+    // Level 0 twice: a floor of 0 and a base reading of the weakest.
+    for _ in 0..2 {
+        let mut m = fake(&worst_answers());
+        recorded(round(&mut dao.run, &mut m, &Scorer::new(Bag)).unwrap());
+    }
+    let mut model = fake(&worst_answers());
+    let mut step = |dao: &mut Dao, rev: u32, answers: &[(usize, String)]| {
+        model.candidate = Some((rev, keyed(answers)));
+        model.edit = Some(Ok(ONE_CONCEPT.to_string()));
+        run_cycle(dao, &mut model)
+    };
+    let d1 = step(&mut dao, 4, &degraded_answers());
+    let d2 = step(&mut dao, 5, &good_answers());
+    assert_eq!(d1.verdict(), Verdict::Accepted);
+    assert_eq!(d2.verdict(), Verdict::Accepted);
+    assert_eq!((d2.base_round(), d2.base_rev()), (3, 4));
+    assert_eq!((d2.candidate_round(), d2.candidate_rev()), (Some(4), Some(5)));
+
+    // The head is the second accept, live and reopened.
+    assert_eq!(head_rev(&dao.root), 5);
+    assert_eq!(
+        d2.candidate_inventory_digest(),
+        Some(hex(&dao.root.join("cycle-2/inventory.cc")).as_str())
+    );
+
+    // Cycle 3 builds on cycle 2's file and round, gains nothing, and is rejected.
+    let d3 = step(&mut dao, 6, &good_answers());
+    assert_eq!((d3.k(), d3.base_round(), d3.base_rev()), (3, 4, 5));
+    assert_eq!(
+        d3.base_inventory_digest(),
+        d2.candidate_inventory_digest().unwrap()
+    );
+    assert_eq!(d3.verdict(), Verdict::Rejected(Why::NoGain));
+    assert_eq!(head_rev(&dao.root), 5, "a reject moves nothing");
+
+    // The editor's last-edit word comes from the latest decision (see cycle 4).
+    let rounds = dao.run.rounds().unwrap();
+    let mints = mint_texts(&model);
+    assert_eq!(mints.len(), 3);
+    assert!(mints[0].contains(&feedback_line("none", &rounds[0])));
+    assert!(mints[1].contains(&feedback_line("accepted", &rounds[2])));
+    assert!(mints[2].contains(&feedback_line("accepted", &rounds[3])));
+    assert!(mints[1].contains("\n\ninventory rev:4\n"));
+    assert!(mints[2].contains("\n\ninventory rev:5\n"));
+}
+
+#[test]
 fn unanswered_cycle_writes_nothing() {
     let mut dao = dao();
     two_rounds(&mut dao);
