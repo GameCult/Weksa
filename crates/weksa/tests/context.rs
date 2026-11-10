@@ -158,11 +158,17 @@ fn prompts_render_deterministically() {
     assert_eq!(Prompt::mint(&t).item_keys(), ["item:a:1", "item:a:2"]);
 
     let offer = run.offer("item:a:2").unwrap().unwrap();
+    let inv = run.inventory().inventory().unwrap();
     assert_eq!(
-        Prompt::encode(&offer, &t).text(),
-        format!("{ENCODE}\n\n[item:a:2] entity:nibu: Second line.\n\nentities: entity:nibu")
+        Prompt::encode(&offer, &t, &inv, 0).text(),
+        format!(
+            "{ENCODE}\n\n[item:a:2] entity:nibu: Second line.\n\nentities: entity:nibu\n\ninventory rev:0"
+        )
     );
-    assert_eq!(Prompt::encode(&offer, &t).item_keys(), ["item:a:2"]);
+    assert_eq!(
+        Prompt::encode(&offer, &t, &inv, 0).item_keys(),
+        ["item:a:2"]
+    );
 }
 
 #[test]
@@ -261,10 +267,11 @@ fn encoder_offer_entities_are_the_items_own() {
         "a sibling's entity is not the item's"
     );
     assert_eq!(offer.key(), "item:a:1");
-    let p = Prompt::encode(&offer, &t);
+    let inv = c.run.inventory().inventory().unwrap();
+    let p = Prompt::encode(&offer, &t, &inv, 0);
     assert!(
         p.text()
-            .ends_with("entities: entity:brokkr, entity:hero, entity:kay")
+            .ends_with("entities: entity:brokkr, entity:hero, entity:kay\n\ninventory rev:0")
     );
     assert!(p.text().contains("[item:a:1]"));
     assert!(!p.text().contains("item:a:2") && !p.text().contains("Someone waits"));
@@ -377,8 +384,9 @@ fn prior_turns_print_only_text_a_live_train_item_holds() {
         "mint prints no prior turns"
     );
 
+    let inv = run.inventory().inventory().unwrap();
     let encode = |key: &str| {
-        Prompt::encode(&run.offer(key).unwrap().unwrap(), &t)
+        Prompt::encode(&run.offer(key).unwrap().unwrap(), &t, &inv, 0)
             .text()
             .to_string()
     };
@@ -417,7 +425,8 @@ fn encode_with_prior(train_text: &str, prior_text: &str) -> (String, Result<(), 
     store.add(reply.clone(), &entities).unwrap();
     let run = run_over(dir.path());
     let t = run.train().unwrap();
-    let p = Prompt::encode(&run.offer("item:a:2").unwrap().unwrap(), &t);
+    let inv = run.inventory().inventory().unwrap();
+    let p = Prompt::encode(&run.offer("item:a:2").unwrap().unwrap(), &t, &inv, 0);
     let text = p.text().to_string();
     // The store's own rule, as the oracle for key equality; after the prompt is
     // built, because an admitted probe would itself become a held line.

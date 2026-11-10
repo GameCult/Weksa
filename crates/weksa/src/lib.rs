@@ -10,6 +10,7 @@ pub mod entity;
 pub mod form;
 pub mod inventory;
 pub mod lower;
+pub mod model;
 pub mod packet;
 pub mod phones;
 pub mod run;
