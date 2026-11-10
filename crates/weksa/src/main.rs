@@ -771,7 +771,7 @@ fn main() -> Result<()> {
                     println!("unanswered {} of {asked}", prompts.len());
                     std::process::exit(3);
                 }
-                RoundOutcome::Recorded(r) => println!("{}", run.labelled(&r.summary_line())),
+                RoundOutcome::Recorded(r) => println!("{}", run.round_line(&r)),
             }
         }
         Command::Loop(LoopCommand::Cycle { root, ollama_url }) => {
@@ -791,7 +791,7 @@ fn main() -> Result<()> {
                     std::process::exit(3);
                 }
                 CycleOutcome::Decided(decision) => {
-                    println!("{}", run.labelled(&decision.summary_line()))
+                    println!("{}", run.cycle_line(&decision))
                 }
             }
         }

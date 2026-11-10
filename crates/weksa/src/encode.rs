@@ -217,8 +217,8 @@ impl LoweringDraft {
     }
 
     /// Whether the text can be scored as an utterance: something after trimming,
-    /// at most [`MAX_LOWERING_BYTES`], and no control character other than a
-    /// line break or tab. Nothing is judged about the words.
+    /// at most [`MAX_LOWERING_BYTES`] bytes (not chars), and no control character other than a
+    /// newline or tab (a carriage return is refused). Nothing is judged about the words.
     pub fn usable(&self) -> bool {
         !self.text.trim().is_empty()
             && self.text.len() <= MAX_LOWERING_BYTES

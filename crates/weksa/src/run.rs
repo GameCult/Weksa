@@ -317,9 +317,9 @@ impl RoundRecord {
         self.cycle
     }
 
-    /// The one line a recorded round prints. `n` is every item of the split,
+    /// The round line, unlabelled: [`RunStores::round_line`] adds how the run was lowered. `n` is every item of the split,
     /// `scored` those that lowered; a mean counts a refused item as 0.
-    pub fn summary_line(&self) -> String {
+    fn line(&self) -> String {
         let mean = |value: Option<f64>, places: usize| {
             value.map_or("none".to_string(), |v| format!("{v:.places$}"))
         };
@@ -646,6 +646,16 @@ impl RunStores {
             }
             LowererReach::ToolLessRelay => format!("{line} lowering={}", reach.label()),
         }
+    }
+
+    /// The line a recorded round prints, labelled with how the run was lowered.
+    pub fn round_line(&self, round: &RoundRecord) -> String {
+        self.labelled(&round.line())
+    }
+
+    /// The line a closed cycle prints, labelled the same way.
+    pub fn cycle_line(&self, decision: &Decision) -> String {
+        self.labelled(&decision.line())
     }
 
     pub fn inventory(&self) -> &InventoryStore {
@@ -1224,8 +1234,8 @@ impl Decision {
         self.verdict
     }
 
-    /// The one line a closed cycle prints.
-    pub fn summary_line(&self) -> String {
+    /// The cycle line, unlabelled: [`RunStores::cycle_line`] adds how the run was lowered.
+    fn line(&self) -> String {
         let candidate_rev = self
             .candidate_rev
             .map_or("none".to_string(), |n| n.to_string());
