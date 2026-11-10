@@ -1431,6 +1431,45 @@ fn open_dao_run(d: &std::path::Path) {
     assert!(o.status.success(), "{}", out(&o));
 }
 
+/// The family `loop open` pinned at `root`, read from the run record.
+fn pinned_family(d: &std::path::Path, root: &str, flag: &[&str]) -> weksa::corpus::ModelFamily {
+    let mut args = vec![
+        "loop",
+        "open",
+        root,
+        "--label",
+        "fam",
+        "--answerer",
+        "fake-model",
+        "--lowerer-reach",
+        "tool-less-relay",
+    ];
+    args.extend_from_slice(flag);
+    let o = weksa(d, &args);
+    assert!(o.status.success(), "{}", out(&o));
+    weksa::run::RunStores::open(&d.join(root))
+        .unwrap()
+        .record()
+        .answerer_family
+}
+
+#[test]
+fn loop_open_pins_answerer_family() {
+    use weksa::corpus::ModelFamily;
+    let d = tempfile::tempdir().unwrap();
+    dao_stores(d.path());
+    assert_eq!(
+        pinned_family(d.path(), "a", &["--answerer-family", "anthropic"]),
+        ModelFamily::Anthropic
+    );
+    assert_eq!(
+        pinned_family(d.path(), "b", &["--answerer-family", "mistral"]),
+        ModelFamily::Mistral
+    );
+    // Omitted, the family stays unrecorded and a round prints no own-family line.
+    assert_eq!(pinned_family(d.path(), "c", &[]), ModelFamily::Unrecorded);
+}
+
 #[test]
 fn loop_cycle_needs_a_floor() {
     let d = tempfile::tempdir().unwrap();

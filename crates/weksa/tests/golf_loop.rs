@@ -3365,3 +3365,122 @@ fn a_recall_mean_is_over_every_probe_an_unreadable_answer_counts_0_and_a_withdra
     let unnamed = m.seen.iter().filter(|t| t.contains("work: not published")).count();
     assert_eq!((named, unnamed), (2, 1));
 }
+
+/// Answers every prompt with text that is not a draft, so a round measures only
+/// what it counts before admission.
+struct NotADraft;
+
+impl weksa::model::ModelPort for NotADraft {
+    fn model(&self) -> &str {
+        "not-a-draft"
+    }
+    fn answer(&mut self, _: &weksa::context::Prompt) -> Result<String, weksa::model::PortError> {
+        Ok("not a draft".to_string())
+    }
+}
+
+struct OneBag;
+
+impl weksa::score::Embedder for OneBag {
+    fn model(&self) -> &str {
+        "bag"
+    }
+    fn embed(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+        Ok(texts.iter().map(|_| vec![1.0]).collect())
+    }
+}
+
+/// A corpus of every shape a family count must tell apart, and the own-family
+/// count of a round over it by an answerer of `family`.
+fn mixed_family_round(family: ModelFamily) -> u32 {
+    use common::{cast, group_in_bucket, item_in};
+    use weksa::corpus::Source;
+    use weksa::run::{LowererReach, RoundOutcome, round};
+
+    let mut w = world();
+    let written = |family| Source::ModelWritten {
+        family,
+        generator: None,
+        prompt_digest: None,
+    };
+    let public_domain = Source::PublicDomain {
+        work: "w".into(),
+        author: "a".into(),
+        edition_url: "https://example.org/e".into(),
+        licence: "PD".into(),
+        jurisdiction: "US".into(),
+        translator: "t".into(),
+        edition_year: 1900,
+    };
+    let (train, validation, test) = (
+        group_in_bucket(10),
+        group_in_bucket(50),
+        group_in_bucket(90),
+    );
+    let items = [
+        // Offered, Anthropic: two of them count for Anthropic.
+        ("item:mix:1", &train, written(ModelFamily::Anthropic)),
+        ("item:mix:2", &validation, written(ModelFamily::Anthropic)),
+        // Offered, other families or no model at all: never Anthropic's.
+        ("item:mix:3", &train, written(ModelFamily::OpenAi)),
+        ("item:mix:4", &train, written(ModelFamily::Unrecorded)),
+        ("item:mix:5", &train, public_domain),
+        ("item:mix:6", &train, cast()),
+        // Model-written in a Test group: in no split, never offered.
+        ("item:mix:7", &test, written(ModelFamily::Anthropic)),
+        // Withdrawn after admission: never offered.
+        ("item:mix:8", &train, written(ModelFamily::Anthropic)),
+    ];
+    let entities = common::entities_in(w.dir.path());
+    for (key, group, source) in items {
+        let text = format!("Line {key}, distinct.");
+        w.corpus
+            .add(item_in(key, &text, group, source), &entities)
+            .unwrap();
+    }
+    w.corpus.withdraw("item:mix:8").unwrap();
+    let dir = w.dir.path().to_path_buf();
+    for name in ["c.cc", "i.cc", "entities.cc"] {
+        assert!(dir.join(name).exists(), "{name}");
+    }
+    let mut run = RunStores::create(
+        &dir.join("run"),
+        "mix",
+        RunPaths {
+            corpus: &dir.join("c.cc"),
+            inventory: &dir.join("i.cc"),
+            entities: &dir.join("entities.cc"),
+        },
+        "not-a-draft",
+        "bag",
+        LowererReach::ToolLessRelay,
+        family,
+    )
+    .unwrap();
+    let scorer = weksa::score::Scorer::new(OneBag);
+    match round(&mut run, &mut NotADraft, &scorer).unwrap() {
+        RoundOutcome::Recorded(r) => {
+            // Seven items were offered: the world's own cast item and mix 1 to 6;
+            // the Test-group and withdrawn items were not.
+            assert_eq!(
+                r.parse_reasons().iter().map(|c| c.count).sum::<u32>(),
+                7,
+                "offered items"
+            );
+            r.own_family()
+        }
+        RoundOutcome::Unanswered { .. } => panic!("answered"),
+    }
+}
+
+#[test]
+fn own_family_counts_offered_items_of_the_answerer_family() {
+    // Two live Train/Validation Anthropic items; the Test-group and withdrawn
+    // Anthropic items are not offered, so they are not counted.
+    assert_eq!(mixed_family_round(ModelFamily::Anthropic), 2);
+    assert_eq!(mixed_family_round(ModelFamily::OpenAi), 1);
+    // Google wrote nothing here; an unrecorded answerer counts no item, though
+    // an offered item is itself unrecorded.
+    assert_eq!(mixed_family_round(ModelFamily::Google), 0);
+    assert_eq!(mixed_family_round(ModelFamily::Unrecorded), 0);
+}
