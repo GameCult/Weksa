@@ -694,11 +694,22 @@ mod lowering {
 #[test]
 fn the_encode_prompt_states_the_id_form_the_inventory_lines_use() {
     assert!(ENCODE.contains("family prefix included: concept:7, never 7"));
-    let (text, _) = encode_with_prior("Hello there.", "Hi.");
-    let listed = text
+    let w = world();
+    let run = run_over(w.dir.path());
+    let inv = run.inventory().inventory().unwrap();
+    let t = run.train().unwrap();
+    let offer = run.offer("item:nibu:1").unwrap().unwrap();
+    let text = Prompt::encode(&offer, &t, &inv, 4).text().to_string();
+    let listed: Vec<&str> = text
+        .split_once("inventory rev:4\n")
+        .unwrap()
+        .1
+        .split("\n\n")
+        .next()
+        .unwrap()
         .lines()
-        .skip_while(|l| !l.starts_with("inventory rev:"))
-        .skip(1);
+        .collect();
+    assert!(!listed.is_empty(), "the prompt lists entries");
     for line in listed {
         let id = line.split(": ").next().unwrap();
         assert!(id.contains(':'), "an inventory line spells its id in full: {line}");

@@ -819,7 +819,7 @@ pub struct RecallReading {
 impl RecallReading {
     pub fn line(&self) -> String {
         format!(
-            "recall n={} answered={} chrf={:.2} (completion from the opening; unrelated English already scores chrf 13 to 18, so a reading near that floor is no recitation and one well above it is)",
+            "recall n={} answered={} chrf={:.2} (completion from the opening; unrelated English already scores chrf 14 to 20, so a reading near that floor is no recitation and one well above it is)",
             self.n, self.answered, self.chrf
         )
     }
