@@ -381,22 +381,98 @@ fn prior_turns_print_only_text_a_live_train_item_holds() {
     );
 }
 
-#[test]
-fn prior_turn_match_uses_the_stores_text_key() {
+/// A scratch Train store holding `train_text`, and an encode prompt for a
+/// sibling whose one prior turn is `prior_text`.
+fn encode_with_prior(train_text: &str, prior_text: &str) -> (String, Result<(), StoreError>) {
     let dir = tempfile::tempdir().unwrap();
     let entities = entities_in(dir.path());
     let mut store = CorpusStore::open(&dir.path().join("c.cc")).unwrap();
     let g = group_in_bucket(10);
     store
-        .add(item_in("item:a:1", "Context Line", &g, cast()), &entities)
+        .add(item_in("item:a:1", train_text, &g, cast()), &entities)
         .unwrap();
     let mut reply = item_in("item:a:2", "reply", &g, cast());
     reply.prior_turns = vec![Turn {
         speaker: common::eid("brokkr"),
-        text: "context line".into(),
+        text: prior_text.into(),
     }];
     store.add(reply.clone(), &entities).unwrap();
     let t = TrainItems::from_corpus(&store).unwrap();
     let p = Prompt::encode(&EncoderOffer::for_round(&reply).unwrap(), &t);
-    assert!(p.text().contains("entity:brokkr: context line"));
+    let text = p.text().to_string();
+    // The store's own rule, as the oracle for key equality; after the prompt is
+    // built, because an admitted probe would itself become a held line.
+    let probe = store.add(item_in("item:a:9", prior_text, &g, cast()), &entities);
+    (text, probe.map(|_| ()))
 }
+
+#[test]
+fn prior_turn_prints_the_held_train_text() {
+    let (text, _) = encode_with_prior("Context Line", "context-line!! :)");
+    assert!(
+        text.contains("entity:brokkr: Context Line\n[item:a:2]"),
+        "{text}"
+    );
+    for turn_bytes in ["!!", ":)", "context-line"] {
+        assert!(!text.contains(turn_bytes), "{turn_bytes} in {text}");
+    }
+}
+
+#[test]
+fn prior_turn_match_uses_the_stores_text_key() {
+    let (text, _) = encode_with_prior("Context Line", "context line");
+    assert!(text.contains("entity:brokkr: Context Line\n"));
+    assert!(!text.contains("context line"));
+}
+
+#[test]
+fn prior_turn_fold_matches_the_store() {
+    let rows = [
+        ("case", "Context Line", "context line"),
+        (
+            "punctuation and spacing",
+            "Context Line",
+            "context,   line!",
+        ),
+        (
+            "NFKC fullwidth letters",
+            "Context",
+            "\u{ff23}\u{ff4f}\u{ff4e}\u{ff54}\u{ff45}\u{ff58}\u{ff54}",
+        ),
+        ("NFKC fullwidth digits", "room 12", "room \u{ff11}\u{ff12}"),
+        ("dotless i", "Ilik", "\u{131}l\u{131}k"),
+        ("dotted capital I", "Istanbul", "\u{130}stanbul"),
+        (
+            "katakana vs hiragana",
+            "\u{3072}\u{3089}\u{304c}\u{306a}",
+            "\u{30d2}\u{30e9}\u{30ac}\u{30ca}",
+        ),
+        ("voiced katakana wa", "\u{308f}\u{3099}", "\u{30f7}"),
+        ("Arabic-Indic digits", "room 12", "room \u{661}\u{662}"),
+    ];
+    for (fold, train_text, prior_text) in rows {
+        let (text, probe) = encode_with_prior(train_text, prior_text);
+        assert!(
+            matches!(
+                probe,
+                Err(StoreError::Refused(StoreRefusal::S6TextHeld { .. }))
+            ),
+            "{fold}: the store does not hold these as one text: {probe:?}"
+        );
+        assert!(
+            text.contains(&format!("entity:brokkr: {train_text}\n[item:a:2]")),
+            "{fold}: {text}"
+        );
+        assert!(!text.contains(ELIDED_MARK), "{fold}: {text}");
+    }
+    // A text differing by a letter is a different key: the store admits it and
+    // the prior turn is elided.
+    let (text, probe) = encode_with_prior("Context Line", "Context Lane");
+    assert!(probe.is_ok(), "{probe:?}");
+    assert!(
+        text.contains("entity:brokkr: [elided]\n[item:a:2]"),
+        "{text}"
+    );
+}
+
+const ELIDED_MARK: &str = "[elided]";

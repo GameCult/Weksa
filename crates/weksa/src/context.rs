@@ -69,13 +69,14 @@ impl TrainItems {
         self.items.is_empty()
     }
 
-    /// Whether a live Train item of `group` holds `text`, compared by the
-    /// store's own text key.
-    fn holds(&self, group: &str, text: &str) -> bool {
+    /// The text of the live Train item of `group` whose store text key equals
+    /// `text`'s (store S6 makes it unique).
+    fn held(&self, group: &str, text: &str) -> Option<&str> {
         let key = normalized(text);
         self.items
             .iter()
-            .any(|item| item.group == group && normalized(&item.text) == key)
+            .find(|item| item.group == group && normalized(&item.text) == key)
+            .map(|item| item.text.as_str())
     }
 
     pub fn keys(&self) -> impl Iterator<Item = &str> {
@@ -91,6 +92,8 @@ pub enum OfferRefusal {
     NoSplit,
     /// A Test item is offered only under a [`Checkpoint`].
     TestBeforeCheckpoint,
+    /// An item is offered at most once under one [`Checkpoint`].
+    OfferedAtCheckpoint,
 }
 
 /// One item the encoder may be shown, with the entities a packet for it may
@@ -109,12 +112,17 @@ impl EncoderOffer {
         }
     }
 
-    /// A convergence checkpoint offers any live item, Test included.
+    /// A convergence checkpoint offers any live item, Test included, each item
+    /// at most once under one `Checkpoint`. The gate runs first, so a refused
+    /// item records no key.
     pub fn for_checkpoint(
         item: &CorpusItem,
-        _checkpoint: &Checkpoint,
+        checkpoint: &mut Checkpoint,
     ) -> Result<Self, OfferRefusal> {
         Self::gate(item)?;
+        if !checkpoint.first_offer(&item.id) {
+            return Err(OfferRefusal::OfferedAtCheckpoint);
+        }
         Ok(Self::of(item))
     }
 
@@ -180,20 +188,19 @@ pub struct Prompt {
 
 /// What a prompt prints of an item: its line, and its prior turns only as the
 /// one owner allows. A prior turn is a copy of text, not a reference, so it can
-/// outlive a withdrawal or quote a held-out line; its text is printed only when
-/// a live Train item of the item's group holds it, and the speaker alone is
-/// printed otherwise. Mint prints no prior turns (`prior: None`).
+/// outlive a withdrawal or quote a held-out line; what is printed is the text of
+/// the live Train item of the item's group that holds it (never the turn's own
+/// bytes), and the speaker alone otherwise. Mint prints no prior turns (`prior: None`).
 fn block(item: &CorpusItem, prior: Option<&TrainItems>) -> String {
     let mut lines: Vec<String> = prior
         .into_iter()
         .flat_map(|train| {
-            item.prior_turns.iter().map(move |t| {
-                if train.holds(&item.group, &t.text) {
-                    format!("{}: {}", t.speaker, t.text)
-                } else {
-                    format!("{}: {ELIDED}", t.speaker)
-                }
-            })
+            item.prior_turns
+                .iter()
+                .map(move |t| match train.held(&item.group, &t.text) {
+                    Some(text) => format!("{}: {text}", t.speaker),
+                    None => format!("{}: {ELIDED}", t.speaker),
+                })
         })
         .collect();
     lines.push(format!("[{}] {}: {}", item.id, item.speaker, item.text));
@@ -245,8 +252,9 @@ mod tests {
 
     #[test]
     fn checkpoint_offer_gate() {
-        let cp = Checkpoint::for_test(1);
-        let check = |i: &CorpusItem| EncoderOffer::for_checkpoint(i, &cp).err();
+        // A fresh checkpoint per call: this test is the gate, not the once rule.
+        let check =
+            |i: &CorpusItem| EncoderOffer::for_checkpoint(i, &mut Checkpoint::for_test(1)).err();
         let train = item("item:a:1", "t", &group_in(Split::Train), false);
         let validation = item("item:b:1", "v", &group_in(Split::Validation), false);
         let test = item("item:c:1", "x", &group_in(Split::Test), false);
@@ -262,5 +270,33 @@ mod tests {
         let mut both = no_split.clone();
         both.withdrawn = true;
         assert_eq!(check(&both), Some(OfferRefusal::Withdrawn));
+    }
+
+    #[test]
+    fn checkpoint_offers_each_item_once() {
+        let mut cp = Checkpoint::for_test(1);
+        let offer = |cp: &mut Checkpoint, i: &CorpusItem| EncoderOffer::for_checkpoint(i, cp).err();
+        let a = item("item:c:1", "a", &group_in(Split::Test), false);
+        let b = item("item:c:3", "b", &group_in(Split::Test), false);
+        let v = item("item:b:1", "v", &group_in(Split::Validation), false);
+        assert_eq!(offer(&mut cp, &a), None);
+        assert_eq!(offer(&mut cp, &a), Some(OfferRefusal::OfferedAtCheckpoint));
+        assert_eq!(offer(&mut cp, &b), None);
+        assert_eq!(offer(&mut cp, &v), None);
+        assert_eq!(offer(&mut cp, &v), Some(OfferRefusal::OfferedAtCheckpoint));
+
+        // A refused item records no key: its refusal stays the gate's.
+        let mut gone = item("item:c:2", "w", &group_in(Split::Test), false);
+        gone.withdrawn = true;
+        assert_eq!(offer(&mut cp, &gone), Some(OfferRefusal::Withdrawn));
+        assert_eq!(offer(&mut cp, &gone), Some(OfferRefusal::Withdrawn));
+        let mut live = gone.clone();
+        live.withdrawn = false;
+        assert_eq!(offer(&mut cp, &live), None, "the refusal recorded no key");
+
+        // The checkpoint is spent by its reading; a new one offers afresh.
+        let _ = crate::score::TestReadings::at_checkpoint(cp, &[], &[], &[]);
+        let mut fresh = Checkpoint::for_test(2);
+        assert_eq!(offer(&mut fresh, &a), None);
     }
 }

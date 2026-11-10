@@ -3,6 +3,8 @@
 //! read in its live split; Test is read only under a Checkpoint, and only the
 //! lib can make one (convergence-freeze adds the door).
 
+use std::collections::BTreeSet;
+
 use crate::corpus::{CorpusItem, Source};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,7 +72,8 @@ impl SplitScheme {
 /// convergence-freeze, which builds a `Checkpoint` from the convergence window
 /// over the run's persisted round records (convergence-test).
 /// `TestReadings::at_checkpoint` consumes it, so one `Checkpoint` buys one Test
-/// reading.
+/// reading. One `Checkpoint` also offers each item at most once
+/// (`EncoderOffer::for_checkpoint`).
 ///
 /// ```
 /// fn f(c: &weksa::split::Checkpoint) -> u32 { c.round() }
@@ -80,6 +83,10 @@ impl SplitScheme {
 ///
 /// ```compile_fail
 /// let _ = weksa::split::Checkpoint::declare(1);
+/// ```
+///
+/// ```compile_fail
+/// let _ = weksa::split::Checkpoint { round: 1, offered: Default::default() };
 /// ```
 ///
 /// One reading per checkpoint:
@@ -104,12 +111,21 @@ impl SplitScheme {
 /// ```
 pub struct Checkpoint {
     round: u32,
+    offered: BTreeSet<String>,
 }
 
 impl Checkpoint {
     #[cfg(test)]
     pub(crate) fn for_test(round: u32) -> Self {
-        Self { round }
+        Self {
+            round,
+            offered: BTreeSet::new(),
+        }
+    }
+
+    /// Records `key` as offered; false when it already was.
+    pub(crate) fn first_offer(&mut self, key: &str) -> bool {
+        self.offered.insert(key.to_string())
     }
 
     pub fn round(&self) -> u32 {
