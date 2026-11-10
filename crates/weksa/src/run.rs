@@ -22,6 +22,9 @@
 //! `ModelPort` (`Prompt::lower`), in two answer phases; the CLI's `lower` still
 //! uses the template table. The prompt source pin covers `context.rs`,
 //! `split.rs` and `lower.rs`.
+//!
+//! `RunStores::stance_ablation`, like `recall`, is a diagnostic in its own
+//! directory: it records nothing and never writes its round's directory.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -39,6 +42,7 @@ use crate::corpus::{CorpusItem, CorpusItemId, ModelFamily, Source};
 use crate::encode::{EditDraft, LoweringDraft, PacketDraft, encoder_id};
 use crate::form::{is_attestation, is_slug};
 use crate::model::{ModelPort, PortError};
+use crate::packet::{Packet, Stance};
 use crate::score::{CHRF_VERSION, chrf, Embedder, ItemScore, ScoreInput, Scorer, SplitMean, aggregate};
 use crate::split::{Split, SplitScheme, fnv1a64, fnv1a64_of, hex16};
 use crate::store::{
@@ -950,6 +954,290 @@ impl RunStores {
     }
 }
 
+/// What the lowerer's answer did to each variant of a packet's stance, per
+/// split. Means only; no key, text or stance value.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AblationReading {
+    /// Items whose recorded and replayed lowerings were both usable.
+    pub n: u32,
+    /// Answers dropped as unusable, replay or variant.
+    pub unusable: u32,
+    /// Mean agreement of the replay with the recorded lowering: the noise
+    /// floor a variant is read against.
+    pub replay: Agreement,
+    pub drop: VariantReading,
+    pub permute: VariantReading,
+}
+
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Agreement {
+    pub chrf: f64,
+    pub meaning: f64,
+}
+
+/// One variant's reading: agreement with the recorded lowering, pairs whose
+/// chrF fell below the replay's, and the mean fidelity the item's own stance
+/// adds (`score(item, replay) - score(item, variant)`).
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct VariantReading {
+    pub n: u32,
+    pub chrf: f64,
+    pub meaning: f64,
+    pub moved: u32,
+    pub ref_gain_chrf: f64,
+    pub ref_gain_meaning: f64,
+}
+
+impl AblationReading {
+    pub fn line(&self) -> String {
+        let variant = |name: &str, v: &VariantReading| {
+            format!(
+                "{name} n={} chrf={:.2} meaning={:.3} moved={} ref_gain_chrf={:.2} ref_gain_meaning={:.3}",
+                v.n, v.chrf, v.meaning, v.moved, v.ref_gain_chrf, v.ref_gain_meaning
+            )
+        };
+        format!(
+            "ablation n={} unusable={} replay chrf={:.2} meaning={:.3} | {} | {}",
+            self.n,
+            self.unusable,
+            self.replay.chrf,
+            self.replay.meaning,
+            variant("drop", &self.drop),
+            variant("permute", &self.permute),
+        )
+    }
+}
+
+#[derive(Debug)]
+pub enum AblationOutcome {
+    Unanswered { prompts: Vec<String> },
+    /// Train then Validation.
+    Read(Vec<(Split, AblationReading)>),
+}
+
+/// What the port made of one lowering prompt.
+enum Asked {
+    Text(String),
+    Unusable,
+    Waiting,
+}
+
+fn asked(port: &mut dyn ModelPort, prompt: &Prompt) -> Result<Asked, RunError> {
+    match port.answer(prompt) {
+        Ok(a) => Ok(LoweringDraft::parse(&a)
+            .ok()
+            .filter(LoweringDraft::usable)
+            .map_or(Asked::Unusable, |d| Asked::Text(d.text))),
+        Err(PortError::Io(ErrorKind::InvalidData)) => Ok(Asked::Unusable),
+        Err(PortError::Unanswered) => Ok(Asked::Waiting),
+        Err(PortError::Io(kind)) => Err(RunError::Io(kind)),
+    }
+}
+
+fn mean(xs: impl Iterator<Item = f64>) -> f64 {
+    let (sum, n) = xs.fold((0.0, 0u32), |(s, n), x| (s + x, n + 1));
+    if n == 0 { 0.0 } else { sum / f64::from(n) }
+}
+
+type Scored = (ItemScore, ItemScore);
+
+/// One item's reference text, recorded lowering, replay, and drop and permute
+/// lowerings.
+type Lowered = (String, String, String, [Option<String>; 2]);
+
+impl RunStores {
+    /// `<root>/ablation-<n>`, where a stance ablation's prompts, answers and
+    /// variant packet stores live.
+    pub fn ablation_dir(&self, n: u32) -> PathBuf {
+        self.root.join(format!("ablation-{n}"))
+    }
+
+    /// A diagnostic like [`recall`](Self::recall), never a gate: for each live
+    /// Train and Validation packet of plain round `n`, asks the lowerer again
+    /// (`model`, the replay), with the packet's stance emptied (drop) and with
+    /// the next item's stance in its split (permute), and reads how far the
+    /// lowering moves against the round's own answer (`recorded`). Test and
+    /// withdrawn items are never asked. Records nothing and writes nothing in
+    /// `round-<n>`; the variant stores are rebuilt each call. An answer that
+    /// is not a usable lowering drops its pair and is counted in `unusable`.
+    pub fn stance_ablation<E: Embedder>(
+        &self,
+        n: u32,
+        recorded: &mut dyn ModelPort,
+        model: &mut dyn ModelPort,
+        scorer: &Scorer<E>,
+    ) -> Result<AblationOutcome, RunError> {
+        let store = |_| RunError::Store;
+        check_drift(self, model, scorer)?;
+        self.rounds()
+            .map_err(store)?
+            .into_iter()
+            .find(|r| r.n() == n && r.cycle().is_none())
+            .ok_or(RunError::Malformed("round"))?;
+        let inventory = self.inventory.inventory().map_err(store)?;
+
+        let dir = self.ablation_dir(n);
+        std::fs::create_dir_all(&dir).map_err(|e| RunError::Io(e.kind()))?;
+        for name in ["base", "drop", "permute"] {
+            for suffix in ["cc", "cc.lock"] {
+                let _ = std::fs::remove_file(dir.join(format!("{name}.{suffix}")));
+            }
+        }
+        let mut stores = [
+            PacketStore::open(&dir.join("base.cc")).map_err(store)?,
+            PacketStore::open(&dir.join("drop.cc")).map_err(store)?,
+            PacketStore::open(&dir.join("permute.cc")).map_err(store)?,
+        ];
+
+        // Live Train and Validation packets, in item key order within a split.
+        let round_packets = PacketStore::open(&self.root.join(format!("round-{n}")).join("packets.cc"))
+            .map_err(store)?
+            .all()
+            .map_err(store)?;
+        let mut splits: [(Split, Vec<(CorpusItem, Packet)>); 2] =
+            [(Split::Train, Vec::new()), (Split::Validation, Vec::new())];
+        for packet in round_packets {
+            let item = self
+                .corpus
+                .get(packet.provenance.corpus_item.as_str())
+                .map_err(store)?
+                .ok_or(RunError::Store)?;
+            for (split, held) in &mut splits {
+                if SplitScheme::V1.live(&item) == Some(*split) {
+                    held.push((item.clone(), packet.clone()));
+                }
+            }
+        }
+
+        let mut waiting: Vec<String> = Vec::new();
+        let mut readings = Vec::new();
+        // Texts per split: (item text, recorded, replay, [drop, permute]).
+        let mut texts: Vec<Vec<Lowered>> = Vec::new();
+        let mut unusable = [0u32; 2];
+        for (at, (_, held)) in splits.iter_mut().enumerate() {
+            held.sort_by(|a, b| a.0.id.as_str().cmp(b.0.id.as_str()));
+            let mut rows = Vec::new();
+            for (i, (item, packet)) in held.iter().enumerate() {
+                let packet_item = packet.provenance.corpus_item.clone();
+                let mut prompt_of = |slot: usize, packet: Packet| -> Result<Prompt, RunError> {
+                    let view = stores[slot]
+                        .admit(packet, &self.inventory, &self.corpus, &self.entities)
+                        .map_err(|_| RunError::Store)?;
+                    Prompt::lower(&view, &packet_item, &inventory, &self.entities)
+                        .map_err(|_| RunError::Store)
+                };
+                let base = prompt_of(0, packet.clone())?;
+                let mut variants: [Option<Prompt>; 2] = [None, None];
+                if !packet.stance.features.is_empty() {
+                    let mut p = packet.clone();
+                    p.stance = Stance::default();
+                    variants[0] = Some(prompt_of(1, p)?);
+                }
+                if held.len() > 1 {
+                    let mut p = packet.clone();
+                    p.stance = held[(i + 1) % held.len()].1.stance.clone();
+                    let prompt = prompt_of(2, p)?;
+                    if prompt.digest() != base.digest() {
+                        variants[1] = Some(prompt);
+                    }
+                }
+                // The round's own answer must exist; a missing one is not a gap to ask for.
+                let recorded_text = match asked(recorded, &base)? {
+                    Asked::Waiting => return Err(RunError::Store),
+                    other => other,
+                };
+                let replay = asked(model, &base)?;
+                let mut got: [Option<String>; 2] = [None, None];
+                for (slot, prompt) in got.iter_mut().zip(&variants) {
+                    let Some(prompt) = prompt else { continue };
+                    match asked(model, prompt)? {
+                        Asked::Text(t) => *slot = Some(t),
+                        Asked::Unusable => unusable[at] += 1,
+                        Asked::Waiting => {
+                            let d = prompt.digest();
+                            if !waiting.contains(&d) {
+                                waiting.push(d);
+                            }
+                        }
+                    }
+                }
+                match (recorded_text, replay) {
+                    (Asked::Text(b), Asked::Text(r)) => {
+                        rows.push((item.text.clone(), b, r, got));
+                    }
+                    (_, Asked::Waiting) => {
+                        let d = base.digest();
+                        if !waiting.contains(&d) {
+                            waiting.push(d);
+                        }
+                    }
+                    _ => unusable[at] += 1,
+                }
+            }
+            texts.push(rows);
+        }
+        if !waiting.is_empty() {
+            return Ok(AblationOutcome::Unanswered { prompts: waiting });
+        }
+
+        // One score call: for each item, the replay then each variant, each
+        // against the recorded lowering (agreement) and the item (fidelity).
+        let mut inputs: Vec<ScoreInput> = Vec::new();
+        for (reference, base, replay, got) in texts.iter().flatten() {
+            for output in std::iter::once(replay).chain(got.iter().flatten()) {
+                inputs.push(ScoreInput { reference: base, output });
+                inputs.push(ScoreInput { reference, output });
+            }
+        }
+        let mut scores = if inputs.is_empty() {
+            Vec::new()
+        } else {
+            scorer.score(&inputs).map_err(|_| RunError::Embed)?
+        }
+        .into_iter();
+        let mut pair = || -> Result<Scored, RunError> {
+            Ok((scores.next().ok_or(RunError::Store)?, scores.next().ok_or(RunError::Store)?))
+        };
+        for (at, ((split, _), rows)) in splits.iter().zip(&texts).enumerate() {
+            let mut replay: Vec<Scored> = Vec::new();
+            let mut variants: [Vec<(Scored, Scored)>; 2] = [Vec::new(), Vec::new()];
+            for (_, _, _, got) in rows {
+                let r = pair()?;
+                for (k, g) in got.iter().enumerate() {
+                    if g.is_some() {
+                        variants[k].push((r.clone(), pair()?));
+                    }
+                }
+                replay.push(r);
+            }
+            let variant = |v: &[(Scored, Scored)]| VariantReading {
+                n: v.len() as u32,
+                chrf: mean(v.iter().map(|(_, x)| x.0.chrf)),
+                meaning: mean(v.iter().filter_map(|(_, x)| x.0.meaning)),
+                moved: v.iter().filter(|(r, x)| x.0.chrf < r.0.chrf).count() as u32,
+                ref_gain_chrf: mean(v.iter().map(|(r, x)| r.1.chrf - x.1.chrf)),
+                ref_gain_meaning: mean(
+                    v.iter().filter_map(|(r, x)| Some(r.1.meaning? - x.1.meaning?)),
+                ),
+            };
+            readings.push((
+                *split,
+                AblationReading {
+                    n: rows.len() as u32,
+                    unusable: unusable[at],
+                    replay: Agreement {
+                        chrf: mean(replay.iter().map(|r| r.0.chrf)),
+                        meaning: mean(replay.iter().filter_map(|r| r.0.meaning)),
+                    },
+                    drop: variant(&variants[0]),
+                    permute: variant(&variants[1]),
+                },
+            ));
+        }
+        Ok(AblationOutcome::Read(readings))
+    }
+}
+
 /// The distinct rule codes an admission refusal broke: validator rules by
 /// code, a store refusal by its variant name. Nothing from the packet or the
 /// stores is kept; an I/O failure is `io`.
@@ -1008,7 +1296,7 @@ pub fn round<M: ModelPort, E: Embedder>(
 }
 
 /// The model and embedder the run pinned are the ones answering.
-fn check_drift<M: ModelPort, E: Embedder>(
+fn check_drift<M: ModelPort + ?Sized, E: Embedder>(
     run: &RunStores,
     model: &M,
     scorer: &Scorer<E>,

@@ -2598,9 +2598,19 @@ fn source_tripwires() {
     let count = |needle: &str| code.iter().filter(|l| l.contains(needle)).count();
     assert!(!run.contains("pub fn new"));
     // The round does not call the template table: the model lowers.
-    assert_eq!(count("lower(&"), 0, "run.rs calls the table");
+    assert_eq!(
+        code.iter()
+            .filter(|l| l.contains("lower(&") && !l.contains("Prompt::lower("))
+            .count(),
+        0,
+        "run.rs calls the table"
+    );
     assert_eq!(count("crate::lower::lower"), 0, "run.rs imports the table");
-    assert_eq!(count("Prompt::lower("), 1, "one lowering call site");
+    assert_eq!(
+        count("Prompt::lower("),
+        2,
+        "two lowering call sites: the round's and the stance ablation's replay of it"
+    );
     // Prompt::lower takes the view, the item's key, the inventory and the entity
     // port: no corpus item, train set, offer or store.
     let start = context.find("pub fn lower(").unwrap();
@@ -3559,4 +3569,442 @@ fn own_family_counts_offered_items_of_the_answerer_family() {
     // an offered item is itself unrecorded.
     assert_eq!(mixed_family_round(ModelFamily::Google), 0);
     assert_eq!(mixed_family_round(ModelFamily::Unrecorded), 0);
+}
+
+// ---- stance ablation (stance-to-lowerer) ----
+
+/// A lowerer by function: the text it answers for an item key and the prompt
+/// text, recording every prompt it was shown.
+struct Lowerer {
+    f: fn(&str, &str) -> String,
+    seen: Vec<(String, String, String)>,
+}
+
+impl Lowerer {
+    fn new(f: fn(&str, &str) -> String) -> Self {
+        Self { f, seen: vec![] }
+    }
+    /// The digests asked, once each, in the order first asked.
+    fn digests(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for (d, ..) in &self.seen {
+            if !out.contains(d) {
+                out.push(d.clone());
+            }
+        }
+        out
+    }
+}
+
+impl ModelPort for Lowerer {
+    fn model(&self) -> &str {
+        "fake-model"
+    }
+    fn answer(&mut self, prompt: &Prompt) -> Result<String, PortError> {
+        let key = prompt.item_keys()[0].clone();
+        self.seen.push((prompt.digest(), key.clone(), prompt.text().to_string()));
+        Ok(serde_json::json!({ "text": (self.f)(&key, prompt.text()) }).to_string())
+    }
+}
+
+const WRITTEN: &str = "item:written:1";
+
+fn english(key: &str) -> String {
+    let mut table = table_english();
+    table.insert(
+        WRITTEN.into(),
+        "Heaven endures through the long years without end.".into(),
+    );
+    table[key].clone()
+}
+
+/// The packet line's stance, as the prompt prints it: the packet line is one
+/// JSON object ending in the stance.
+fn stance_of(text: &str) -> String {
+    let line = text.lines().find(|l| l.starts_with("packet: ")).unwrap();
+    line[line.find("\"stance\":").unwrap()..].to_string()
+}
+
+/// Says the same thing whatever the stance.
+fn blind(key: &str, _text: &str) -> String {
+    english(key)
+}
+
+/// Appends the stance it was shown.
+fn reader(key: &str, text: &str) -> String {
+    format!("{} {}", english(key), stance_of(text))
+}
+
+/// Does better with the item's own stance: the real sentence for it, nonsense
+/// for any other, empty included.
+fn helped(key: &str, text: &str) -> String {
+    let r800 = r#""stance":{"features":[{"feature":"feature:18","value":{"Grade":800}}]}}"#;
+    let own = match key {
+        "item:daodejing:3" => r#""stance":{"features":[{"feature":"feature:18","value":{"Grade":800}},{"feature":"feature:16","value":{"Grade":300}}]}}"#,
+        WRITTEN => r#""stance":{"features":[{"feature":"feature:18","value":{"Grade":500}}]}}"#,
+        _ => r800,
+    };
+    if stance_of(text) == own { english(key) } else { "zzz qqq xxx".into() }
+}
+
+fn grade_stance(features: &[(&str, u16)]) -> weksa::packet::Stance {
+    weksa::packet::Stance {
+        features: features
+            .iter()
+            .map(|(f, v)| weksa::packet::FeatureValue {
+                feature: f.parse().unwrap(),
+                value: weksa::packet::FeatValue::Grade(common::grade(*v)),
+            })
+            .collect(),
+    }
+}
+
+/// A Dao run with a third Validation item (`item:written:1`, key order after
+/// items 2 and 3) and round 1 recorded over it, every item encoded to its Dao
+/// packet. Stances: item 1 restraint 800; item 2 restraint 800; item 3
+/// restraint 800 and affection 300; the written item restraint 500.
+fn recorded_dao(edit: impl FnOnce(&mut HashMap<String, String>)) -> (Dao, RoundRecord) {
+    let mut dao = dao_over(|corpus, entities| {
+        let entities = weksa::EntityStore::open(entities).unwrap();
+        let mut store = CorpusStore::open(corpus).unwrap();
+        let mut written = store.get("item:daodejing:2").unwrap().unwrap();
+        written.id = WRITTEN.into();
+        written.text = "Heaven endures through the long years without end.".into();
+        written.source = weksa::corpus::Source::OperatorWritten;
+        store.add(written, &entities).unwrap();
+    });
+    let mut model = fake(&good_answers());
+    let mut extra = draft_of(2);
+    extra.referents.truncate(1);
+    extra.predications.truncate(1);
+    extra.stance = grade_stance(&[("feature:18", 500)]);
+    model.answers.insert(WRITTEN.into(), json(&extra));
+    edit(&mut model.answers);
+    model.lowered.insert(WRITTEN.into(), english(WRITTEN));
+    let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    (dao, r)
+}
+
+fn ablate(
+    dao: &Dao,
+    recorded: &mut dyn ModelPort,
+    model: &mut dyn ModelPort,
+) -> Result<weksa::run::AblationOutcome, RunError> {
+    dao.run.stance_ablation(1, recorded, model, &Scorer::new(Bag))
+}
+
+fn read(
+    outcome: weksa::run::AblationOutcome,
+) -> Vec<(weksa::Split, weksa::run::AblationReading)> {
+    match outcome {
+        weksa::run::AblationOutcome::Read(r) => r,
+        weksa::run::AblationOutcome::Unanswered { prompts } => panic!("unanswered {prompts:?}"),
+    }
+}
+
+#[test]
+fn recorded_answers_read_and_never_write() {
+    use std::io::ErrorKind;
+    use weksa::model::RecordedAnswers;
+    let p = prompt();
+    let dir = tempfile::tempdir().unwrap();
+    let mut port = RecordedAnswers::new(dir.path().to_path_buf(), "answerer".into());
+    assert_eq!(port.model(), "answerer");
+    // A miss is Unanswered and the directory is as it was.
+    assert_eq!(port.answer(&p), Err(PortError::Unanswered));
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    // A directory that does not exist is a miss too, and is not made.
+    let mut absent = RecordedAnswers::new(dir.path().join("nope"), "m".into());
+    assert_eq!(absent.answer(&p), Err(PortError::Unanswered));
+    assert!(!dir.path().join("nope").exists());
+    // A hit is the file's text as written.
+    let file = dir.path().join(format!("{}.answer", p.digest()));
+    std::fs::write(&file, " {\"x\": 1}\n").unwrap();
+    assert_eq!(port.answer(&p).unwrap(), " {\"x\": 1}\n");
+    std::fs::write(&file, [0xff, 0xfe]).unwrap();
+    assert_eq!(port.answer(&p), Err(PortError::Io(ErrorKind::InvalidData)));
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+}
+
+#[test]
+fn a_stance_ablation_asks_replay_drop_and_permute_for_train_and_validation_only() {
+    let (dao, r) = recorded_dao(|_| {});
+    let round_digests: Vec<String> = r.calls()[4..].iter().map(|c| c.prompt.clone()).collect();
+    assert_eq!(round_digests.len(), 4, "the round lowered four items");
+    let mut recorded_port = Lowerer::new(reader);
+    let mut model = Lowerer::new(reader);
+    read(ablate(&dao, &mut recorded_port, &mut model).unwrap());
+
+    // The base prompts are the round's own, byte for byte.
+    let recorded_digests = recorded_port.digests();
+    assert_eq!(recorded_digests, round_digests);
+    let asked = model.digests();
+    for d in &round_digests {
+        assert!(asked.contains(d), "the replay asks the round's prompt {d}");
+    }
+    // Per item: replay and drop for each; permute for each Validation item, and
+    // none for the lone Train item.
+    let per_key = |key: &str| model.seen.iter().filter(|s| s.1 == key).count();
+    assert_eq!(per_key("item:daodejing:1"), 2);
+    for key in ["item:daodejing:2", "item:daodejing:3", WRITTEN] {
+        assert_eq!(per_key(key), 3, "{key}");
+    }
+    // Test items are never asked.
+    for (_, key, text) in &model.seen {
+        assert!(key != "item:daodejing:4" && key != "item:daodejing:5", "{key}");
+        assert!(!text.contains("item:daodejing:4"));
+    }
+    // A drop prompt prints the empty stance, a replay the item's own.
+    let empty = model
+        .seen
+        .iter()
+        .filter(|s| stance_of(&s.2) == "\"stance\":{\"features\":[]}}")
+        .count();
+    assert_eq!(empty, 4, "one drop per item");
+}
+
+#[test]
+fn a_lowerer_blind_to_stance_reads_no_movement_and_one_that_reads_it_does() {
+    let (dao, _) = recorded_dao(|_| {});
+    let one = |f: fn(&str, &str) -> String| {
+        let (mut rec, mut model) = (Lowerer::new(f), Lowerer::new(f));
+        read(ablate(&dao, &mut rec, &mut model).unwrap())
+    };
+    for (split, r) in one(blind) {
+        assert_eq!(r.unusable, 0);
+        assert_eq!((r.drop.moved, r.permute.moved), (0, 0), "{split:?}: {}", r.line());
+        assert!((r.replay.chrf - 100.0).abs() < 1e-9);
+        assert!((r.drop.chrf - r.replay.chrf).abs() < 1e-9);
+        if r.permute.n > 0 {
+            assert!((r.permute.chrf - r.replay.chrf).abs() < 1e-9);
+        }
+        assert_eq!(r.drop.ref_gain_chrf, 0.0);
+    }
+    let reading = one(reader);
+    let (train, validation) = (&reading[0].1, &reading[1].1);
+    assert_eq!((reading[0].0, reading[1].0), (weksa::Split::Train, weksa::Split::Validation));
+    assert_eq!((train.n, validation.n), (1, 3));
+    assert_eq!((train.drop.n, train.drop.moved), (1, 1));
+    assert_eq!((train.permute.n, train.permute.moved), (0, 0));
+    assert_eq!((validation.drop.n, validation.drop.moved), (3, 3));
+    assert_eq!((validation.permute.n, validation.permute.moved), (3, 3));
+    assert!((validation.replay.chrf - 100.0).abs() < 1e-9);
+    assert!(validation.drop.chrf < validation.replay.chrf);
+    assert!(validation.permute.chrf < validation.replay.chrf);
+}
+
+#[test]
+fn the_item_s_own_stance_helps_fidelity_only_for_a_lowerer_that_uses_it() {
+    let (dao, _) = recorded_dao(|_| {});
+    let one = |f: fn(&str, &str) -> String| {
+        let (mut rec, mut model) = (Lowerer::new(f), Lowerer::new(f));
+        read(ablate(&dao, &mut rec, &mut model).unwrap())
+    };
+    for (split, r) in one(helped) {
+        assert!(r.drop.ref_gain_chrf > 10.0, "{split:?}: {}", r.line());
+        assert!(r.drop.ref_gain_meaning > 0.0, "{split:?}: {}", r.line());
+        if r.permute.n > 0 {
+            assert!(r.permute.ref_gain_chrf > 10.0, "{split:?}: {}", r.line());
+        }
+        assert_eq!(r.drop.moved, r.drop.n);
+    }
+    for (split, r) in one(blind) {
+        assert_eq!((r.drop.ref_gain_chrf, r.drop.ref_gain_meaning), (0.0, 0.0), "{split:?}");
+    }
+}
+
+#[test]
+fn a_packet_without_stance_asks_no_drop_and_a_test_packet_in_the_round_is_never_asked() {
+    let (dao, _) = recorded_dao(|answers| {
+        let mut d = draft_of(3);
+        d.stance = Default::default();
+        answers.insert("item:daodejing:3".into(), json(&d));
+    });
+    // A packet for a Test item, put into the round's own store the way no round
+    // would: the ablation reads splits from the corpus, not from the store.
+    {
+        let corpus = CorpusStore::open(&dao.corpus).unwrap();
+        let inv = dao.run.inventory();
+        let mut packet = packets().remove(3);
+        packet.inventory_rev = 3;
+        PacketStore::open(&dao.root.join("round-1/packets.cc"))
+            .unwrap()
+            .admit(packet, inv, &corpus, dao.run.entities())
+            .unwrap();
+    }
+    let (mut rec, mut model) = (Lowerer::new(reader), Lowerer::new(reader));
+    read(ablate(&dao, &mut rec, &mut model).unwrap());
+    let bare = "\"stance\":{\"features\":[]}}";
+    let drops_of_3 = model
+        .seen
+        .iter()
+        .filter(|s| s.1 == "item:daodejing:3" && stance_of(&s.2) == bare)
+        .count();
+    // Its replay already shows the empty stance; there is no drop beside it.
+    assert_eq!(drops_of_3, 1);
+    assert!(model.seen.iter().all(|s| s.1 != "item:daodejing:4"), "a Test item is never asked");
+    assert!(rec.seen.iter().all(|s| s.1 != "item:daodejing:4"));
+}
+
+#[test]
+fn permute_takes_the_next_items_stance_in_its_split_and_skips_equal_ones() {
+    let (dao, _) = recorded_dao(|_| {});
+    let (mut rec, mut model) = (Lowerer::new(reader), Lowerer::new(reader));
+    read(ablate(&dao, &mut rec, &mut model).unwrap());
+    // The stance each Validation item's permute prompt shows: the next item's
+    // in key order (2, 3, written:1), cyclic; item 1 is alone in Train.
+    let stance = |text: &str| stance_of(text);
+    let of = |key: &str| -> Vec<String> {
+        model
+            .seen
+            .iter()
+            .filter(|s| s.1 == key)
+            .map(|s| stance(&s.2))
+            .collect()
+    };
+    let (s2, s3, sw) = (
+        stance(&rec.seen.iter().find(|s| s.1 == "item:daodejing:2").unwrap().2),
+        stance(&rec.seen.iter().find(|s| s.1 == "item:daodejing:3").unwrap().2),
+        stance(&rec.seen.iter().find(|s| s.1 == WRITTEN).unwrap().2),
+    );
+    assert!(s2 != s3 && s3 != sw && sw != s2);
+    assert!(of("item:daodejing:2").contains(&s3));
+    assert!(of("item:daodejing:3").contains(&sw));
+    assert!(of(WRITTEN).contains(&s2), "the last wraps to the first");
+    assert!(!of("item:daodejing:2").contains(&sw), "not the previous or the other");
+    // Item 1 is alone in Train: it never takes a stance across splits.
+    assert_eq!(of("item:daodejing:1").len(), 2, "replay and drop only");
+
+    // Items 2 and 3 with equal stances: item 2's permute is its own prompt, so
+    // it asks none; the others still do.
+    let (dao, _) = recorded_dao(|answers| {
+        let mut d = draft_of(3);
+        d.stance = draft_of(2).stance;
+        answers.insert("item:daodejing:3".into(), json(&d));
+    });
+    let (mut rec, mut model) = (Lowerer::new(reader), Lowerer::new(reader));
+    let r = read(ablate(&dao, &mut rec, &mut model).unwrap());
+    let per_key = |key: &str| model.seen.iter().filter(|s| s.1 == key).count();
+    assert_eq!(per_key("item:daodejing:2"), 2, "replay and drop: its next holds the stance it has");
+    assert_eq!(per_key("item:daodejing:3"), 3);
+    assert_eq!(per_key(WRITTEN), 3);
+    assert_eq!(r[1].1.permute.n, 2, "{}", r[1].1.line());
+}
+
+#[test]
+fn a_stance_ablation_records_nothing_and_writes_nothing_in_its_round() {
+    use weksa::model::RecordedAnswers;
+    let (dao, r) = recorded_dao(|_| {});
+    let round1 = dao.root.join("round-1");
+    for c in &r.calls()[4..] {
+        std::fs::write(
+            round1.join(format!("{}.answer", c.prompt)),
+            serde_json::json!({ "text": english(&c.items[0]) }).to_string(),
+        )
+        .unwrap();
+    }
+    let snapshot = |dir: &Path| -> Vec<(String, Vec<u8>)> {
+        let mut files: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| {
+                let e = e.unwrap();
+                let bytes = if e.path().is_dir() { vec![] } else { std::fs::read(e.path()).unwrap() };
+                (e.file_name().to_string_lossy().into_owned(), bytes)
+            })
+            .collect();
+        files.sort();
+        files.retain(|f| f.0 != "ablation-1");
+        files
+    };
+    let before = (snapshot(&round1), snapshot(&dao.root), dao.run.rounds().unwrap(), dao.run.decisions().unwrap());
+    let go = || {
+        let mut rec = RecordedAnswers::new(round1.clone(), "fake-model".into());
+        let mut files = weksa::model::AnswerFiles::new(dao.run.ablation_dir(1), "fake-model".into());
+        // Nothing answers yet: the replay and variant prompts are written.
+        dao.run.stance_ablation(1, &mut rec, &mut files, &Scorer::new(Bag))
+    };
+    let weksa::run::AblationOutcome::Unanswered { prompts } = go().unwrap() else {
+        panic!("nobody answered")
+    };
+    // Four replays (the round's own prompts), four drops, three permutes (item 1
+    // is alone in Train).
+    assert_eq!(prompts.len(), 4 + 4 + 3, "{prompts:?}");
+    for d in &prompts {
+        assert!(dao.run.ablation_dir(1).join(format!("{d}.prompt")).is_file());
+    }
+    // Answer every ask from a fake and read; then again over the same files.
+    for d in &prompts {
+        let text = std::fs::read_to_string(dao.run.ablation_dir(1).join(format!("{d}.prompt"))).unwrap();
+        std::fs::write(
+            dao.run.ablation_dir(1).join(format!("{d}.answer")),
+            serde_json::json!({ "text": format!("answer {}", &text[..8]) }).to_string(),
+        )
+        .unwrap();
+    }
+    let first = read(go().unwrap());
+    let again = read(go().unwrap());
+    assert_eq!(first, again);
+    let after = (snapshot(&round1), snapshot(&dao.root), dao.run.rounds().unwrap(), dao.run.decisions().unwrap());
+    assert!(before.0 == after.0, "round-1 is unchanged byte for byte");
+    assert!(before.1 == after.1, "the run root's files are unchanged");
+    assert_eq!(before.2, after.2);
+    assert_eq!(before.3, after.3);
+}
+
+#[test]
+fn a_stance_ablation_refuses_a_cycle_round_and_missing_round_answers() {
+    use weksa::model::RecordedAnswers;
+    let (dao, _) = recorded_dao(|_| {});
+    // No round-2, and round 1 holds no answer files.
+    let mut model = Lowerer::new(reader);
+    let mut rec = RecordedAnswers::new(dao.root.join("round-1"), "fake-model".into());
+    assert!(matches!(
+        dao.run.stance_ablation(2, &mut rec, &mut model, &Scorer::new(Bag)),
+        Err(RunError::Malformed("round"))
+    ));
+    assert!(matches!(
+        ablate(&dao, &mut rec, &mut model),
+        Err(RunError::Store)
+    ));
+    assert!(
+        std::fs::read_dir(dao.root.join("round-1"))
+            .unwrap()
+            .all(|e| !e.unwrap().file_name().to_string_lossy().ends_with(".prompt")),
+        "no prompt is written into the round"
+    );
+    // Drift is refused as a round refuses it.
+    struct Named(Lowerer);
+    impl ModelPort for Named {
+        fn model(&self) -> &str {
+            "other-model"
+        }
+        fn answer(&mut self, p: &Prompt) -> Result<String, PortError> {
+            self.0.answer(p)
+        }
+    }
+    let mut named = Named(Lowerer::new(reader));
+    let mut rec2 = Lowerer::new(reader);
+    assert!(matches!(
+        ablate(&dao, &mut rec2, &mut named),
+        Err(RunError::Drift(DriftOf::Model))
+    ));
+    assert!(matches!(
+        dao.run.stance_ablation(1, &mut rec2, &mut Lowerer::new(reader), &Scorer::new(OtherEmbedder)),
+        Err(RunError::Drift(DriftOf::Embedder))
+    ));
+}
+
+#[test]
+fn a_stance_ablation_refuses_a_cycle_round() {
+    let mut dao = dao();
+    two_rounds(&mut dao);
+    run_cycle(&mut dao, &mut cycle_fake(ONE_CONCEPT));
+    let rounds = dao.run.rounds().unwrap();
+    let candidate = rounds.iter().find(|r| r.cycle().is_some()).expect("the cycle's round");
+    let (mut rec, mut model) = (Lowerer::new(reader), Lowerer::new(reader));
+    assert!(matches!(
+        dao.run.stance_ablation(candidate.n(), &mut rec, &mut model, &Scorer::new(Bag)),
+        Err(RunError::Malformed("round"))
+    ));
+    assert!(model.seen.is_empty() && rec.seen.is_empty());
 }

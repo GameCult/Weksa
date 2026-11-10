@@ -11,11 +11,14 @@ use weksa::corpus::{CorpusItem, ModelFamily, NameSpan, Source, Turn};
 use weksa::entity::{Entity, EntityOrigin, LanguageForms, Pronunciation};
 use weksa::inventory::{proof_revision, seed};
 use weksa::packet::proof_packet;
-use weksa::run::{CycleOutcome, LowererReach, RecallOutcome, RoundOutcome, RunPaths, RunStores, cycle, round};
+use weksa::model::RecordedAnswers;
+use weksa::run::{
+    AblationOutcome, CycleOutcome, LowererReach, RecallOutcome, RoundOutcome, RunPaths, RunStores, cycle, round,
+};
 use weksa::score::ScoreInput;
 use weksa::{
     AnswerFiles, CorpusStore, EntityId, EntityStore, InventoryStore, OllamaEmbedder, PacketStore,
-    Scorer, SplitScheme, StoreError, lower, pronounce, validate,
+    Scorer, Split, SplitScheme, StoreError, lower, pronounce, validate,
 };
 
 #[derive(Parser)]
@@ -112,6 +115,19 @@ enum LoopCommand {
     /// half). Prompts and answers live in `<ROOT>/recall`; the command exits 3
     /// until every prompt has an answer. A diagnostic, never a gate.
     Recall { root: PathBuf },
+    /// Ask whether the lowerer uses a packet's stance: for each live Train and
+    /// Validation packet of round ROUND, ask again with the stance as it is,
+    /// emptied, and swapped for the next item's, and read how far the lowering
+    /// moves from the round's own answer. Prompts and answers live in
+    /// `<ROOT>/ablation-<ROUND>`; the command exits 3 until every prompt has an
+    /// answer. A diagnostic, never a gate; Test is never touched.
+    Ablate {
+        root: PathBuf,
+        #[arg(long)]
+        round: u32,
+        #[arg(long, default_value = "http://127.0.0.1:11434")]
+        ollama_url: String,
+    },
     /// Run one edit-accept cycle of the run at ROOT. The stores are read only
     /// from the run's record. The editor's prompt, then the candidate round's
     /// encode prompts, then its lowering prompts are written in turn; the
@@ -783,6 +799,36 @@ fn main() -> Result<()> {
                     std::process::exit(3);
                 }
                 RoundOutcome::Recorded(r) => println!("{}", run.round_line(&r)),
+            }
+        }
+        Command::Loop(LoopCommand::Ablate {
+            root,
+            round,
+            ollama_url,
+        }) => {
+            let run = RunStores::open(&root)?;
+            let model = run.record().model.clone();
+            let mut recorded =
+                RecordedAnswers::new(root.join(format!("round-{round}")), model.clone());
+            let mut files = AnswerFiles::new(run.ablation_dir(round), model);
+            let scorer = Scorer::new(OllamaEmbedder::new(&ollama_url, &run.record().embedder));
+            match run.stance_ablation(round, &mut recorded, &mut files, &scorer)? {
+                AblationOutcome::Unanswered { prompts } => {
+                    for digest in &prompts {
+                        println!("unanswered {digest}");
+                    }
+                    println!("unanswered {} prompts", prompts.len());
+                    std::process::exit(3);
+                }
+                AblationOutcome::Read(readings) => {
+                    for (split, reading) in readings {
+                        let name = match split {
+                            Split::Train => "train",
+                            _ => "validation",
+                        };
+                        println!("{name} {}", reading.line());
+                    }
+                }
             }
         }
         Command::Loop(LoopCommand::Recall { root }) => {
