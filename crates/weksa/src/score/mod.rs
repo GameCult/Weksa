@@ -18,7 +18,7 @@ pub use diagnostics::{OrderCoverage, PairChrf, SplitLeak, WorstItem, leak_diagno
 pub use embed::{Embedder, OllamaEmbedder, cosine};
 
 use crate::corpus::CorpusItem;
-use crate::split::{Split, SplitScheme};
+use crate::split::{Checkpoint, Split, SplitScheme};
 
 /// One reference/output pair; both are scored whole.
 pub struct ScoreInput<'a> {
@@ -152,5 +152,91 @@ pub fn aggregate(scored: &[(&CorpusItem, ItemScore)]) -> Aggregate {
     Aggregate {
         train: split_mean(scored, Split::Train),
         validation: split_mean(scored, Split::Validation),
+    }
+}
+
+/// The Test split's readings, scalars only: no item key, no minted string, no
+/// pair. The checkpoint decision (convergence-test) needs numbers; a key beside
+/// a minted string is the handle an edit step would act on. The only producer
+/// is `at_checkpoint`, which consumes a `Checkpoint`.
+///
+/// ```
+/// use weksa::score::TestReadings;
+/// use weksa::split::Checkpoint;
+/// fn s<T: serde::Serialize>(_: &T) {}
+/// let t = TestReadings::at_checkpoint(Checkpoint::declare(1), &[], &[], &[]);
+/// assert_eq!(t.count(), 0);
+/// s(&0u8);
+/// ```
+///
+/// ```compile_fail
+/// use weksa::score::TestReadings;
+/// use weksa::split::Checkpoint;
+/// let t = TestReadings::at_checkpoint(Checkpoint::declare(1), &[], &[], &[]);
+/// let _u = t.clone();
+/// ```
+///
+/// ```compile_fail
+/// use weksa::score::TestReadings;
+/// use weksa::split::Checkpoint;
+/// let t = TestReadings::at_checkpoint(Checkpoint::declare(1), &[], &[], &[]);
+/// let _ = format!("{t:?}");
+/// ```
+///
+/// ```compile_fail
+/// use weksa::score::TestReadings;
+/// use weksa::split::Checkpoint;
+/// fn s<T: serde::Serialize>(_: &T) {}
+/// let t = TestReadings::at_checkpoint(Checkpoint::declare(1), &[], &[], &[]);
+/// s(&t);
+/// ```
+pub struct TestReadings {
+    mean: SplitMean,
+    leak: SplitLeak,
+}
+
+impl TestReadings {
+    /// Reads the live Test items against the scores and the minted strings,
+    /// by the same `split_leak` method the Validation reading uses. The
+    /// checkpoint is spent.
+    pub fn at_checkpoint(
+        checkpoint: Checkpoint,
+        scored: &[(&CorpusItem, ItemScore)],
+        minted: &[&str],
+        items: &[CorpusItem],
+    ) -> TestReadings {
+        let _spent = checkpoint;
+        TestReadings {
+            mean: split_mean(scored, Split::Test),
+            leak: diagnostics::held_out(minted, items, Split::Test),
+        }
+    }
+
+    /// Scored Test items.
+    pub fn count(&self) -> usize {
+        self.mean.count
+    }
+
+    pub fn chrf(&self) -> Option<f64> {
+        self.mean.chrf
+    }
+
+    pub fn meaning(&self) -> Option<f64> {
+        self.mean.meaning
+    }
+
+    /// Test items in the leak reading.
+    pub fn items(&self) -> usize {
+        self.leak.items
+    }
+
+    /// The highest chrF of any minted string against any Test item; the score
+    /// only, never the pair.
+    pub fn max_chrf(&self) -> Option<f64> {
+        self.leak.max_chrf.as_ref().map(|p| p.chrf)
+    }
+
+    pub fn coverage_by_n(&self) -> &[OrderCoverage] {
+        &self.leak.coverage_by_n
     }
 }

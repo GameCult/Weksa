@@ -10,9 +10,10 @@ use common::{cast, group_in_bucket, item_in, model};
 use serde_json::Value;
 use weksa::CorpusItem;
 use weksa::score::{
-    Embedder, ItemScore, OllamaEmbedder, ScoreInput, Scorer, aggregate, chrf, cosine,
+    Embedder, ItemScore, OllamaEmbedder, ScoreInput, Scorer, TestReadings, aggregate, chrf, cosine,
     leak_diagnostic,
 };
+use weksa::split::Checkpoint;
 
 /// (reference, hypothesis, sacrebleu 2.4.3 sentence_chrf), map 491536c.
 const VECTORS: [(&str, &str, f64); 6] = [
@@ -874,4 +875,76 @@ fn leak_diagnostic_reads_validation_only() {
 
     let on_validation = leak_diagnostic(&["gardening is quiet work"], &items);
     assert!(on_validation.max_chrf.unwrap().chrf > 99.0);
+}
+
+#[test]
+fn test_readings_at_checkpoint() {
+    let train_item = train("item:t:1", UNRELATED);
+    let test = item_in("item:c:1", HELD_OUT, &group_in_bucket(90), cast());
+    let test_model = item_in(
+        "item:c:2",
+        "model words here",
+        &group_in_bucket(90),
+        model(),
+    );
+    let mut gone = item_in("item:c:3", "withdrawn words", &group_in_bucket(90), cast());
+    gone.withdrawn = true;
+    let val = validation("item:v:1", "gardening is quiet work");
+    let items = [
+        train_item.clone(),
+        test.clone(),
+        test_model.clone(),
+        gone.clone(),
+        val.clone(),
+    ];
+    let scored = [
+        (&train_item, score(10.0, Some(0.5))),
+        (&val, score(40.0, Some(0.8))),
+        (&test, score(60.0, Some(0.6))),
+        (&test_model, score(100.0, Some(1.0))),
+        (&gone, score(90.0, Some(0.9))),
+    ];
+    let t = TestReadings::at_checkpoint(Checkpoint::declare(2), &scored, &[HELD_OUT], &items);
+    assert_eq!(
+        (t.count(), t.chrf(), t.meaning()),
+        (1, Some(60.0), Some(0.6))
+    );
+    assert_eq!(
+        t.items(),
+        1,
+        "model-written and withdrawn Test items are excluded"
+    );
+    assert!(t.max_chrf().unwrap() > 99.0);
+    assert_eq!(t.coverage_by_n()[2].share, Some(1.0));
+
+    // A minted string that is not the Test text reads low; the same method as
+    // the Validation reading, so the same minted text reads alike in each.
+    let t = TestReadings::at_checkpoint(Checkpoint::declare(2), &scored, &["zzz"], &items);
+    assert!(t.max_chrf().unwrap() < 20.0);
+    assert_eq!(t.coverage_by_n()[2].share, Some(0.0));
+
+    let empty = TestReadings::at_checkpoint(Checkpoint::declare(2), &[], &[HELD_OUT], &[]);
+    assert_eq!(
+        (empty.count(), empty.chrf(), empty.meaning()),
+        (0, None, None)
+    );
+    assert_eq!((empty.items(), empty.max_chrf()), (0, None));
+}
+
+#[test]
+fn validation_and_test_leak_agree_in_method() {
+    // The same text and minted strings, once in Validation and once in Test,
+    // read the same numbers.
+    let minted = chunks(3, " ");
+    let minted = refs(&minted);
+    let train_item = train("item:t:1", UNRELATED);
+    let v = leak_diagnostic(
+        &minted,
+        &[validation("item:v:1", HELD_OUT), train_item.clone()],
+    );
+    let test = item_in("item:c:1", HELD_OUT, &group_in_bucket(90), cast());
+    let t = TestReadings::at_checkpoint(Checkpoint::declare(1), &[], &minted, &[test, train_item]);
+    assert_eq!(t.items(), v.items);
+    assert_eq!(t.max_chrf(), v.max_chrf.as_ref().map(|p| p.chrf));
+    assert_eq!(t.coverage_by_n(), v.coverage_by_n.as_slice());
 }

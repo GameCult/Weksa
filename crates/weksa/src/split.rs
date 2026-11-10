@@ -62,3 +62,45 @@ impl SplitScheme {
         }
     }
 }
+
+/// Permission to read Test once. The loop declares one at a convergence
+/// checkpoint (convergence-test); `TestReadings::at_checkpoint` consumes it, so
+/// one declaration buys one Test reading, and `EncoderOffer::for_checkpoint`
+/// borrows it first.
+///
+/// ```
+/// use weksa::score::TestReadings;
+/// use weksa::split::Checkpoint;
+/// let c = Checkpoint::declare(3);
+/// assert_eq!(c.round(), 3);
+/// let _ = TestReadings::at_checkpoint(c, &[], &[], &[]);
+/// ```
+///
+/// One declaration, one reading:
+///
+/// ```compile_fail
+/// use weksa::score::TestReadings;
+/// use weksa::split::Checkpoint;
+/// let c = Checkpoint::declare(3);
+/// let _ = TestReadings::at_checkpoint(c, &[], &[], &[]);
+/// let _ = TestReadings::at_checkpoint(c, &[], &[], &[]);
+/// ```
+///
+/// ```compile_fail
+/// use weksa::split::Checkpoint;
+/// let c = Checkpoint::declare(3);
+/// let _again = c.clone();
+/// ```
+pub struct Checkpoint {
+    round: u32,
+}
+
+impl Checkpoint {
+    pub fn declare(round: u32) -> Self {
+        Self { round }
+    }
+
+    pub fn round(&self) -> u32 {
+        self.round
+    }
+}
