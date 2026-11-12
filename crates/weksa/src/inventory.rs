@@ -541,7 +541,7 @@ pub fn proof_revision() -> (InventoryRevision, Vec<InventoryEntry>) {
     )
 }
 
-/// Revision 3: the speaker-state vocabulary. First the Scene features, the
+/// Revision `n`: the speaker-state vocabulary. First the Scene features, the
 /// speaker's relation to one party of a scene (slot `Scene`): `relative_status`
 /// is the speaker's standing against the addressee's, not a register word, what
 /// it selects is each language's ontology's business. Then the Speaker features

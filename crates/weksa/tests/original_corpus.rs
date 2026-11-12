@@ -282,6 +282,7 @@ fn committed_ontology_is_model_drafted_and_reads_every_inventory() {
                     [
                         "claude-sonnet-5-5 (Weksa Hands, model-drafted seed ontology)",
                         "claude-sonnet-5-5 (Weksa Hands, model-drafted scene ontology)",
+                        "claude-sonnet-5-5 (Weksa Hands, reworded seed entry)",
                     ]
                     .contains(&generator.as_str()),
                     "{}",
@@ -313,16 +314,27 @@ fn committed_ontology_is_model_drafted_and_reads_every_inventory() {
             "{lang} has no Stance-conditioned entry"
         );
     }
-    for (corpus, panel) in [("original", &PANEL[..]), ("daodejing", &PANEL[..1])] {
+    // Every committed inventory bed, the default one included, carries the
+    // revisions the entries bind to: a run opens over each with its panel.
+    // The default bed (data/interlingua) is read with the original corpus,
+    // entities and scenes, as `loop open` with its defaults and `--corpus
+    // data/original` does.
+    for (corpus, bed, panel) in [
+        ("original", "original", &PANEL[..]),
+        ("daodejing", "daodejing", &PANEL[..1]),
+        ("original", "interlingua", &PANEL[..]),
+    ] {
         let dir = data.join(corpus);
-        let copy = |f: &str| {
-            std::fs::copy(dir.join(f), tmp.path().join(format!("{corpus}-{f}"))).unwrap();
-            tmp.path().join(format!("{corpus}-{f}"))
+        let name = format!("{corpus}-{bed}");
+        let copy = |from: &Path, f: &str| {
+            let to = tmp.path().join(format!("{name}-{f}"));
+            std::fs::copy(from.join(f), &to).unwrap();
+            to
         };
-        let (c, i, e) = (copy("corpus.cc"), copy("inventory.cc"), copy("entity.cc"));
-        let s = copy("speaker-state.cc");
+        let (c, i, e) = (copy(&dir, "corpus.cc"), copy(&data.join(bed), "inventory.cc"), copy(&dir, "entity.cc"));
+        let s = copy(&dir, "speaker-state.cc");
         RunStores::create(
-            &tmp.path().join(format!("run-{corpus}")),
+            &tmp.path().join(format!("run-{name}")),
             corpus,
             RunPaths {
                 corpus: &c,
@@ -337,7 +349,7 @@ fn committed_ontology_is_model_drafted_and_reads_every_inventory() {
             ModelFamily::Unrecorded,
             &panel.iter().map(|l| l.to_string()).collect::<Vec<_>>(),
         )
-        .unwrap_or_else(|e| panic!("{corpus}: {e:?}"));
+        .unwrap_or_else(|e| panic!("{name}: {e:?}"));
     }
 }
 
@@ -1001,8 +1013,9 @@ fn committed_scenes_cover_original_groups() {
         .collect();
     assert_eq!(live.len(), 56);
     let held: BTreeSet<String> = scenes.iter().map(|s| s.group.clone()).collect();
-    assert_eq!(held, live, "one scene per live Train or Validation group, none other");
-    assert_eq!(scenes.len(), 56, "each group holds revision 1 only");
+    assert_eq!(held, live, "a scene for each live Train or Validation group, none other");
+    // Revisions append: a group's later revisions re-derived its relation.
+    assert!(scenes.iter().all(|s| s.n <= 2));
     for s in &scenes {
         match &s.annotator {
             Annotator::Model { family, generator } => {
@@ -1014,6 +1027,77 @@ fn committed_scenes_cover_original_groups() {
                 );
             }
             other => panic!("{} is {other:?}", s.group),
+        }
+    }
+}
+
+/// The committed ontology's Scene-conditioned entries, over every scene relation
+/// (relative_status x in_group x intimacy in steps of 50): an entry that names
+/// a register or politeness level has a Scene condition, and two Scene-conditioned
+/// entries of one language and layer are never selected by the same relation, so
+/// the ontology never gives opposing instructions for one relation.
+#[test]
+fn scene_entries_never_co_select_in_a_layer_and_levels_hang_on_the_scene() {
+    use weksa::inventory::Slot;
+    use weksa::ontology::{Condition, Test};
+    use weksa::packet::FeatValue;
+    use weksa::OntologyStore;
+    let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
+    let tmp = tempfile::tempdir().unwrap();
+    let onto = tmp.path().join("ontology.cc");
+    std::fs::copy(data.join("ontology/ontology.cc"), &onto).unwrap();
+    let inv = InventoryStore::open(&data.join("original/inventory.cc")).unwrap().inventory().unwrap();
+    let id = |gloss: &str| inv.entries().find(|e| e.gloss == gloss).unwrap().id;
+    let (status, intimacy, in_group) = (id("relative_status"), id("intimacy"), id("in_group"));
+    let entries = OntologyStore::open(&onto).unwrap().all().unwrap();
+    // Terms that name a register or politeness level.
+    let levels = [
+        "teineigo", "sonkeigo", "kenjogo", "desu/masu", "honorific", "register",
+        "politeness", "polite", "formal", "informal", "casual",
+    ];
+    for e in &entries {
+        let lower = e.choice.to_lowercase();
+        if levels.iter().any(|t| lower.contains(t)) {
+            // The seed entries that say they set no level carry "no politeness" or
+            // follow the rest of the line; every other naming is Scene-conditioned.
+            let disclaimed = lower.contains("sets no politeness")
+                || lower.contains("politeness follows the rest")
+                || lower.contains("politeness follows")
+                || lower.contains("own register allows");
+            assert!(
+                disclaimed || e.when.iter().any(|c: &Condition| c.slot == Slot::Scene),
+                "{} names a level without a Scene condition",
+                e.key()
+            );
+        }
+    }
+    let holds = |c: &Condition, rel: (&str, u16, bool)| match (c.feature, &c.test) {
+        (f, Test::Is(FeatValue::Option(l))) if f == status => l.as_str() == rel.0,
+        (f, Test::AtLeast(g)) if f == intimacy => rel.1 >= g.get(),
+        (f, Test::AtMost(g)) if f == intimacy => rel.1 <= g.get(),
+        (f, Test::Is(FeatValue::Flag(b))) if f == in_group => *b == rel.2,
+        _ => panic!("a Scene condition this test does not model"),
+    };
+    let selects = |e: &weksa::OntologyEntry, rel| {
+        e.when.iter().all(|c| c.slot != Slot::Scene || holds(c, rel))
+            && e.when.iter().all(|c| c.slot == Slot::Scene)
+    };
+    for st in ["below", "level", "above"] {
+        for ig in [false, true] {
+            for it in (0..=1000).step_by(50) {
+                let rel = (st, it, ig);
+                let mut seen = std::collections::BTreeSet::new();
+                for e in entries.iter().filter(|e| e.when.iter().any(|c| c.slot == Slot::Scene)) {
+                    if selects(e, rel) {
+                        assert!(
+                            seen.insert((e.language.clone(), e.layer.name())),
+                            "{} co-selects with another {} entry at {rel:?}",
+                            e.key(),
+                            e.layer.name()
+                        );
+                    }
+                }
+            }
         }
     }
 }

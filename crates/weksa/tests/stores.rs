@@ -1584,7 +1584,8 @@ fn seed_reseeded() {
         .unwrap();
     assert_eq!(items.len(), 3);
     // The committed inventory is the seed, reseeded (stance features in, the
-    // displayed-affect features out), then the nibu-proof revision.
+    // displayed-affect features out), the nibu-proof revision, the Dao revision
+    // and the speaker-scene revision: the same four as the other beds.
     let committed = InventoryStore::open(&root.join("data/interlingua/inventory.cc"))
         .unwrap()
         .inventory()
@@ -1593,6 +1594,8 @@ fn seed_reseeded() {
     let (proof, proof_entries) = weksa::inventory::proof_revision();
     assert!(committed.has_revision(rev.n) && committed.has_revision(proof.n));
     entries.extend(proof_entries);
+    entries.extend(weksa::daodejing::revision().1);
+    entries.extend(weksa::inventory::speaker_scene_revision(4).1);
     let mut have: Vec<_> = committed.entries().cloned().collect();
     let mut want = entries;
     have.sort_by_key(|e| e.id);
