@@ -2953,7 +2953,7 @@ mod tests {
     }
 
     /// Answers the Dao encode prompts from `answers` by item, the candidate
-    /// inventory's (rev 4) from the good drafts, and the editor with one concept.
+    /// inventory's (rev 5) from the good drafts, and the editor with one concept.
     struct Fake {
         degraded: HashMap<String, String>,
         good: HashMap<String, String>,
@@ -2980,7 +2980,7 @@ mod tests {
                 };
                 return Ok(format!(r#"{{"text":"{text}"}}"#));
             }
-            let answers = if prompt.text().contains("\n\ninventory rev:4\n") {
+            let answers = if prompt.text().contains("\n\ninventory rev:5\n") {
                 &self.good
             } else {
                 &self.degraded

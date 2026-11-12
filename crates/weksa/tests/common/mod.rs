@@ -123,6 +123,21 @@ pub fn ontology_in(dir: &std::path::Path) -> std::path::PathBuf {
     path
 }
 
+/// A new inventory store at `path` holding the Dao inventory as it stood at
+/// rev 3 (seed, proof, the Dao revision): the loop tests' fixed head, whose
+/// round and candidate revisions they pin. The committed
+/// `data/daodejing/inventory.cc` is rev 4 and is read by the corpus tests.
+pub fn dao_rev3_at(path: &std::path::Path) {
+    let mut store = weksa::InventoryStore::open(path).unwrap();
+    for (rev, entries) in [
+        weksa::inventory::seed(),
+        weksa::inventory::proof_revision(),
+        weksa::daodejing::revision(),
+    ] {
+        store.admit_revision(rev, entries).unwrap();
+    }
+}
+
 /// An empty speaker-state store beside `ontology` (same directory), made if absent.
 pub fn speaker_state_beside(ontology: &std::path::Path) -> std::path::PathBuf {
     let path = ontology.with_file_name("speaker-state.cc");

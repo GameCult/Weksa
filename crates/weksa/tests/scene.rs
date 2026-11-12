@@ -408,3 +408,60 @@ fn only_live_speakers_of_the_views_group_and_the_views_own_speaker_must_be_cover
         ["V16"]
     );
 }
+
+mod select {
+    use super::*;
+    use weksa::speaker::Annotator;
+    use weksa::{Condition, Layer, OntologyEntry, OntologyStore, Slot, Test, select};
+
+    fn scene_feature(gloss: &str) -> weksa::InvId {
+        speaker_scene_revision(3).1.into_iter().find(|e| e.gloss == gloss).unwrap().id
+    }
+
+    fn entry(n: u32, slot: Slot, gloss: &str, test: Test) -> OntologyEntry {
+        OntologyEntry {
+            language: "ja-JP".into(),
+            n,
+            inventory_rev: 3,
+            layer: Layer::Grammar,
+            when: vec![Condition { slot, feature: scene_feature(gloss), test }],
+            choice: "a choice".into(),
+            examples: vec![],
+            annotator: Annotator::Operator,
+        }
+    }
+
+    #[test]
+    fn select_reads_the_scene_relation() {
+        let mut w = world();
+        put(&mut w, standard("g", 1));
+        let mut store = OntologyStore::open(&w.dir.path().join("o.cc")).unwrap();
+        store
+            .admit(
+                vec![
+                    entry(1, Slot::Scene, "relative_status", Test::Is(FeatValue::Option(lab("above")))),
+                    entry(2, Slot::Scene, "intimacy", Test::AtLeast(grade(150))),
+                ],
+                &w.inventory,
+            )
+            .unwrap();
+        let ontology = store.ontology().unwrap();
+        let keys = |read: SceneRead, w: &W| {
+            let view = view_of(w, 3, Some("n3")).with_scene(&inv(w), &w.state, &w.corpus).unwrap();
+            assert_eq!(view.scene_read(), &read);
+            select(&ontology, "ja-JP", &view).iter().map(|e| e.n).collect::<Vec<_>>()
+        };
+        // Brokkr is above-status at intimacy 200: both Scene entries select.
+        assert_eq!(keys(selected(1, status()), &w), [1, 2]);
+        // No scene for the group: neither selects.
+        let empty = world();
+        assert_eq!(keys(SceneRead::NoScene, &empty), Vec::<u32>::new());
+        // No addressee, and no relation to the addressee: neither selects.
+        let view = view_of(&w, 3, None).with_scene(&inv(&w), &w.state, &w.corpus).unwrap();
+        assert_eq!(view.scene_read(), &SceneRead::NoAddressee { rev: 1 });
+        assert!(select(&ontology, "ja-JP", &view).is_empty());
+        let mut lone = world();
+        put(&mut lone, scene("g", 1, &["nibu", "brokkr"], vec![relation("brokkr", Party::Named(eid("nibu")), intimacy(99))]));
+        assert_eq!(keys(SceneRead::NoRelation { rev: 1 }, &lone), Vec::<u32>::new());
+    }
+}

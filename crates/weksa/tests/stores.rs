@@ -1740,9 +1740,9 @@ mod ontology {
             "five conditions",
             vec![OntologyEntry { when: (0..5).map(|_| restraint()).collect(), ..entry("ja-JP", 1) }],
         ));
-        for slot in [Slot::Speaker, Slot::Scene, Slot::Predication] {
+        for slot in [Slot::Speaker, Slot::Predication] {
             cases.push((
-                "slot not Stance or Discourse",
+                "slot not Stance, Discourse or Scene",
                 vec![OntologyEntry {
                     when: vec![when(slot, "restraint", Test::AtLeast(Grade::new(1).unwrap()))],
                     ..entry("ja-JP", 1)
@@ -1816,6 +1816,43 @@ mod ontology {
             .collect();
         assert_eq!(s.admit(batch, &w.inventory).unwrap(), AddOutcome::Added);
         assert_eq!(s.all().unwrap().len(), 64);
+    }
+
+    #[test]
+    fn ontology_admit_takes_scene_refuses_speaker() {
+        use weksa::inventory::{proof_revision, speaker_scene_revision};
+        let d = dir();
+        let mut inventory = InventoryStore::open(&d.path().join("i.cc")).unwrap();
+        for (rev, entries) in [seed(), proof_revision(), speaker_scene_revision(3)] {
+            inventory.admit_revision(rev, entries).unwrap();
+        }
+        let scene_feature = |gloss: &str| {
+            speaker_scene_revision(3).1.into_iter().find(|e| e.gloss == gloss).unwrap().id
+        };
+        let at = |slot, feature, test| OntologyEntry {
+            inventory_rev: 3,
+            when: vec![Condition { slot, feature, test }],
+            ..entry("ja-JP", 1)
+        };
+        let above = Test::Is(FeatValue::Option(lab("above")));
+        let mut s = store(&d);
+        // A Scene condition on a Scene feature admits.
+        assert_eq!(
+            s.admit(vec![at(Slot::Scene, scene_feature("relative_status"), above.clone())], &inventory)
+                .unwrap(),
+            AddOutcome::Added
+        );
+        // Speaker and Predication slots refuse, and a Scene condition naming a
+        // Stance feature refuses.
+        for bad in [
+            at(Slot::Speaker, scene_feature("education"), Test::AtLeast(Grade::new(1).unwrap())),
+            at(Slot::Predication, feature("modality"), Test::Is(FeatValue::Option(lab("actual")))),
+            at(Slot::Scene, feature("restraint"), Test::AtLeast(Grade::new(1).unwrap())),
+        ] {
+            let bad = OntologyEntry { n: 2, ..bad };
+            assert!(s.admit(vec![bad], &inventory).is_err());
+        }
+        assert_eq!(s.all().unwrap().len(), 1);
     }
 
     #[test]

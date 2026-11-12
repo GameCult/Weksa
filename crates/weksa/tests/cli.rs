@@ -1416,7 +1416,7 @@ fn loop_open_and_unanswered_round() {
     assert!(second.status.success(), "{}", out(&second));
     assert_eq!(
         out(&second),
-        "round 1 rev 3 en-US train n=1 scored=0 chrf=0.00 meaning=0.0000 refused=1 validation n=2 scored=0 chrf=0.00 meaning=0.0000 refused parse=2 admit=0 lower=0 parse-reasons=syntaxx3 lowering=tool-less-relay\n"
+        "round 1 rev 4 en-US train n=1 scored=0 chrf=0.00 meaning=0.0000 refused=1 validation n=2 scored=0 chrf=0.00 meaning=0.0000 refused parse=2 admit=0 lower=0 parse-reasons=syntaxx3 lowering=tool-less-relay\n"
     );
 
     // The global store flags are not read by loop round: a drifted store is refused.
@@ -1549,7 +1549,7 @@ fn loop_cycle_asks_then_decides() {
     assert!(done.status.success(), "{}", out(&done));
     assert_eq!(
         out(&done),
-        "cycle 1 rev 3->none en-US base=0.0000 candidate=none floor=0.0000 threshold=0.0050 rejected edit-parse lowering=tool-less-relay\n"
+        "cycle 1 rev 4->none en-US base=0.0000 candidate=none floor=0.0000 threshold=0.0050 rejected edit-parse lowering=tool-less-relay\n"
     );
 
     // The next cycle asks afresh in its own directory.
@@ -1813,4 +1813,65 @@ fn ontology_admit_and_dump() {
     assert!(!o.status.success());
     assert!(!out(&o).contains("LEAKYCHOICE"), "{}", out(&o));
     assert_eq!(out(&weksa(d.path(), &["ontology", "dump"])), before);
+}
+
+#[test]
+fn scene_put_and_dump() {
+    let d = tempfile::tempdir().unwrap();
+    cast_entities(d.path(), &["nibu", "brokkr"]);
+    for step in ["seed", "proof", "speaker-scene"] {
+        let o = weksa(d.path(), &["inventory", step]);
+        assert!(o.status.success(), "{}", out(&o));
+    }
+    let mut add = ADD.to_vec();
+    add.extend(["--persona", "nibu", "--fixture", "f.yaml", "--author", "Ada Writer"]);
+    let o = weksa(d.path(), &add);
+    assert!(o.status.success(), "{}", out(&o));
+    let put = |group: &str, to: &str, sets: &[&str]| {
+        let mut args = vec![
+            "scene", "put", "--group", group, "--to", to, "--inventory-rev", "3",
+            "--model-family", "anthropic", "--generator", "a scene annotator",
+        ];
+        for s in sets {
+            args.extend(["--set", s]);
+        }
+        weksa(d.path(), &args)
+    };
+    let sets = ["relative_status=above", "intimacy=200", "in_group=false"];
+    let o = put("scene-1", "unnamed", &sets);
+    assert!(o.status.success(), "{}", out(&o));
+    let dump = out(&weksa(d.path(), &["scene", "dump"]));
+    for want in ["scene:scene-1@1", "rev:3", "Anthropic", "a scene annotator", "entity:nibu->unnamed", "relative_status=above", "intimacy=200", "in_group=false"] {
+        assert!(dump.contains(want), "{want}: {dump}");
+    }
+    // A repeat is unchanged and writes nothing.
+    let o = put("scene-1", "unnamed", &sets);
+    assert!(out(&o).contains("unchanged"), "{}", out(&o));
+    assert_eq!(out(&weksa(d.path(), &["scene", "dump"])), dump);
+    // A changed value is the next revision.
+    let o = put("scene-1", "unnamed", &["relative_status=level", "intimacy=200", "in_group=false"]);
+    assert!(o.status.success(), "{}", out(&o));
+    assert!(out(&weksa(d.path(), &["scene", "dump"])).contains("scene:scene-1@2"));
+    // An unknown gloss and an unknown group are refused and not echoed.
+    for (group, set) in [("scene-1", "canarygloss=1"), ("canarygroup", "intimacy=1")] {
+        let before = out(&weksa(d.path(), &["scene", "dump"]));
+        let o = put(group, "unnamed", &[set]);
+        assert!(!o.status.success());
+        assert!(!out(&o).contains("canary"), "{}", out(&o));
+        assert_eq!(out(&weksa(d.path(), &["scene", "dump"])), before);
+    }
+    // A group with two live speakers is refused: multi-party scenes wait.
+    let mut two = add.clone();
+    let at = two.iter().position(|a| *a == "entity:nibu").unwrap();
+    two[at] = "entity:brokkr";
+    let at = two.iter().position(|a| *a == "nibu").unwrap();
+    two[at] = "brokkr";
+    two.retain(|a| *a != "Mind the hatch.");
+    let at = two.iter().position(|a| *a == "--text").unwrap() + 1;
+    two.insert(at, "Brokkr speaks.");
+    let o = weksa(d.path(), &two);
+    assert!(o.status.success(), "{}", out(&o));
+    let o = put("scene-1", "unnamed", &sets);
+    assert!(!o.status.success());
+    assert!(!out(&o).contains("scene-1"), "{}", out(&o));
 }

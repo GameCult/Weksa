@@ -844,7 +844,7 @@ fn main() -> Result<()> {
                     }
                     ValueKind::Flag => FeatValue::Flag(value.parse().map_err(|_| bad())?),
                 };
-                features.push(FeatureValue { feature: entry.id.clone(), value });
+                features.push(FeatureValue { feature: entry.id, value });
             }
             let mut participants = vec![from.clone()];
             if let Party::Named(a) = &to

@@ -18,7 +18,7 @@ use weksa::{CorpusStore, EntityStore, InventoryStore};
 fn stores() -> (CorpusStore, EntityStore) {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/original");
     let tmp = tempfile::tempdir().unwrap();
-    for f in ["corpus.cc", "entity.cc", "inventory.cc"] {
+    for f in ["corpus.cc", "entity.cc", "inventory.cc", "speaker-state.cc"] {
         std::fs::copy(dir.join(f), tmp.path().join(f)).unwrap();
     }
     let keep = tmp.keep();
@@ -241,14 +241,22 @@ fn the_first_six_original_items_are_unchanged() {
 }
 
 #[test]
-fn the_original_inventory_is_the_dao_revision_three() {
+fn the_original_inventory_is_the_dao_inventory() {
     let dao = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/daodejing/inventory.cc");
     let own = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/original/inventory.cc");
     assert_eq!(std::fs::read(dao).unwrap(), std::fs::read(&own).unwrap());
     let tmp = tempfile::tempdir().unwrap();
     let copy = tmp.path().join("inventory.cc");
     std::fs::copy(&own, &copy).unwrap();
-    assert!(InventoryStore::open(&copy).is_ok());
+    let inventory = InventoryStore::open(&copy).unwrap().inventory().unwrap();
+    // Revision 4 is the speaker-state vocabulary: the same six features the
+    // generator admits, ids and all.
+    assert_eq!(inventory.latest().unwrap().n, 4);
+    let (rev, entries) = weksa::inventory::speaker_scene_revision(4);
+    assert_eq!(inventory.latest().unwrap().changes, rev.changes);
+    for e in &entries {
+        assert_eq!(inventory.entry(&e.id), Some(e), "{}", e.gloss);
+    }
 }
 
 /// The committed seed ontology: every entry model-drafted, exactly the two
@@ -270,8 +278,12 @@ fn committed_ontology_is_model_drafted_and_reads_every_inventory() {
         match &e.annotator {
             Annotator::Model { family, generator } => {
                 assert_eq!(*family, ModelFamily::Anthropic, "{}", e.key());
-                assert_eq!(
-                    generator, "claude-sonnet-5-5 (Weksa Hands, model-drafted seed ontology)",
+                assert!(
+                    [
+                        "claude-sonnet-5-5 (Weksa Hands, model-drafted seed ontology)",
+                        "claude-sonnet-5-5 (Weksa Hands, model-drafted scene ontology)",
+                    ]
+                    .contains(&generator.as_str()),
                     "{}",
                     e.key()
                 );
@@ -283,6 +295,15 @@ fn committed_ontology_is_model_drafted_and_reads_every_inventory() {
     langs.sort();
     langs.dedup();
     assert_eq!(langs, PANEL);
+    // Every entry from number 10 on is conditioned on the scene relation, and
+    // only an entry with a Scene condition may name a politeness level.
+    for e in entries.iter().filter(|e| e.n >= 10) {
+        assert!(
+            e.when.iter().any(|c| c.slot == weksa::inventory::Slot::Scene),
+            "{} has no Scene condition",
+            e.key()
+        );
+    }
     for lang in PANEL {
         let stance = |c: &Condition| c.slot == weksa::inventory::Slot::Stance;
         assert!(
@@ -299,6 +320,7 @@ fn committed_ontology_is_model_drafted_and_reads_every_inventory() {
             tmp.path().join(format!("{corpus}-{f}"))
         };
         let (c, i, e) = (copy("corpus.cc"), copy("inventory.cc"), copy("entity.cc"));
+        let s = copy("speaker-state.cc");
         RunStores::create(
             &tmp.path().join(format!("run-{corpus}")),
             corpus,
@@ -307,7 +329,7 @@ fn committed_ontology_is_model_drafted_and_reads_every_inventory() {
                 inventory: &i,
                 entities: &e,
                 ontology: &onto,
-                speaker_state: &common::speaker_state_beside(&onto),
+                speaker_state: &s,
             },
             "m",
             "bag",
@@ -419,7 +441,7 @@ fn original_round(family: ModelFamily) -> (weksa::run::RunStores, weksa::run::Ro
     use weksa::run::{LowererReach, RoundOutcome, RunPaths, RunStores, round};
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/original");
     let tmp = tempfile::tempdir().unwrap().keep();
-    for f in ["corpus.cc", "entity.cc", "inventory.cc"] {
+    for f in ["corpus.cc", "entity.cc", "inventory.cc", "speaker-state.cc"] {
         std::fs::copy(src.join(f), tmp.join(f)).unwrap();
     }
     std::fs::write(tmp.join("ontology.cc"), [0x90]).unwrap();
@@ -578,7 +600,7 @@ fn no_test_item_is_offered_to_a_round_or_recall_or_recorded() {
     use weksa::run::{LowererReach, RoundOutcome, RunPaths, RunStores, round};
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/original");
     let tmp = tempfile::tempdir().unwrap();
-    for f in ["corpus.cc", "entity.cc", "inventory.cc"] {
+    for f in ["corpus.cc", "entity.cc", "inventory.cc", "speaker-state.cc"] {
         std::fs::copy(src.join(f), tmp.path().join(f)).unwrap();
     }
     std::fs::write(tmp.path().join("ontology.cc"), [0x90]).unwrap();
