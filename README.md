@@ -84,7 +84,7 @@ target-specific English receipt.
 
 The language ontology is `data/ontology/ontology.cc` (read it with
 `weksa ontology dump`): per language, the lexicon, grammar and discourse choices a lowerer
-reads for a stance and discourse packet. The seed sets no address or politeness level; those
+reads for a stance and discourse packet. No entry fixes an address or politeness level; those
 belong to the speaker and scene state. Its en-US and ja-JP entries are
 model-drafted seeds, never Test evidence. Nothing yet grows them from accepted
 rounds; until that mint exists they change only by a new `weksa ontology admit`.
