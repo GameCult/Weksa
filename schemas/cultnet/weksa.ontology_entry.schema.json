@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "OntologyEntry",
-  "description": "One choice of one language. Key `onto:<language>:<n>`.\n\nThe store judges the form of an entry's text (bounds, normalization, no\ncontrol or format character) and never its meaning: what may enter an entry\nis owned by the minting flow (Train-only assembly) and the scorer's leak\ndiagnostic (ruling `leak-owned-by-flow-and-scorer-3`), not by a door here.",
+  "description": "One choice of one language. Key `onto:<language>:<n>`.\n\nThe store judges the form of an entry's text (bounds, normalization, no\ncontrol or format character) and never its meaning: no door judges text\n(ruling `leak-owned-by-flow-and-scorer-3`). No Train-only ontology mint\nexists yet, so a seed or a drafted entry is checked against held-out text by\nnothing today; follow-up `leak-diagnostic-in-round` owns that diagnostic.",
   "type": "object",
   "properties": {
     "annotator": {

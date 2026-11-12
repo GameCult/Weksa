@@ -91,39 +91,45 @@ pub fn is_calendar_date(s: &str) -> bool {
     (1..=days).contains(&day)
 }
 
-/// A BCP 47-form language tag: 1 to 35 bytes of ASCII alphanumerics in
-/// hyphen-separated subtags of 1 to 8 bytes; the first is 2 to 8 letters, or the
-/// single letter `x` of a private-use tag. Form only: no registry is consulted.
+/// A BCP 47 language tag in its canonical case (RFC 5646 section 2.1.1): 1 to 35
+/// bytes of ASCII alphanumerics in hyphen-separated subtags of 1 to 8 bytes; the
+/// first is 2 to 8 letters, or the single letter `x` of a private-use tag. The
+/// language subtag is lowercase, a four-letter script subtag is Titlecase, a
+/// two-letter region subtag is UPPERCASE, and every other subtag, and every
+/// subtag after a singleton such as `x`, is lowercase. Form only: no registry is
+/// consulted. Selection and comparison are by exact tag, so a case variant would
+/// be a different, dead language; this is the one tag check of corpus items,
+/// entities, ontology entries and the run panel.
 pub(crate) fn is_language_tag(s: &str) -> bool {
     if s.len() > 35 {
         return false;
     }
     let mut subtags = s.split('-');
     let first = subtags.next().unwrap_or("");
-    let first_ok = first.bytes().all(|b| b.is_ascii_alphabetic())
+    let first_ok = first.bytes().all(|b| b.is_ascii_lowercase())
         && ((2..=8).contains(&first.len()) || first == "x");
-    first_ok
-        && subtags
-            .all(|t| (1..=8).contains(&t.len()) && t.bytes().all(|b| b.is_ascii_alphanumeric()))
-}
-
-/// A language tag in its canonical case: lowercase language, two-letter region
-/// in capitals, four-letter script in title case, any other subtag lowercase.
-/// An ontology is selected by exact tag, so a case variant would be a dead
-/// language.
-pub(crate) fn is_canonical_language_tag(s: &str) -> bool {
-    is_language_tag(s)
-        && s.split('-').enumerate().all(|(i, t)| {
-            let upper = |c: char| c.is_ascii_uppercase();
-            match (i, t.len()) {
-                (0, _) => !t.chars().any(upper),
-                (_, 2) if t.bytes().all(|b| b.is_ascii_alphabetic()) => t.chars().all(upper),
-                (_, 4) if t.bytes().all(|b| b.is_ascii_alphabetic()) => {
-                    t.chars().next().is_some_and(upper) && !t.chars().skip(1).any(upper)
-                }
-                _ => !t.chars().any(upper),
-            }
-        })
+    if !first_ok {
+        return false;
+    }
+    let mut singleton = first == "x";
+    subtags.all(|t| {
+        if !(1..=8).contains(&t.len()) || !t.bytes().all(|b| b.is_ascii_alphanumeric()) {
+            return false;
+        }
+        let alpha = t.bytes().all(|b| b.is_ascii_alphabetic());
+        let canonical = if singleton {
+            t.bytes().all(|b| !b.is_ascii_uppercase())
+        } else if alpha && t.len() == 2 {
+            t.bytes().all(|b| b.is_ascii_uppercase())
+        } else if alpha && t.len() == 4 {
+            t.as_bytes()[0].is_ascii_uppercase()
+                && t.bytes().skip(1).all(|b| b.is_ascii_lowercase())
+        } else {
+            t.bytes().all(|b| !b.is_ascii_uppercase())
+        };
+        singleton |= t.len() == 1;
+        canonical
+    })
 }
 
 /// A slug: `[a-z0-9]` and inner `-`, 1 to 48 bytes, no edge `-`.
@@ -231,6 +237,24 @@ mod tests {
             }
         }
         assert!(!is_format('\u{200c}') && !is_format('\u{200d}'));
+    }
+
+    #[test]
+    fn a_language_tag_is_in_canonical_case() {
+        for good in [
+            "en", "en-US", "ja-JP", "zh-Hant-TW", "sr-Latn", "es-419", "de-1996", "en-CA-x-ca",
+            "x-private", "en-u-nu-latn", "ja-JP-x-a1",
+        ] {
+            assert!(is_language_tag(good), "{good}");
+        }
+        for bad in [
+            "", "e", "EN", "En", "en-us", "en-Us", "en-uS", "ja-jp", "JA-JP", "zh-hant-TW",
+            "zh-HANT-TW", "zh-hAnt-TW", "zh-Hant-tw", "en-CA-x-CA", "en-CA-x-Ca", "de-1996-X",
+            "es-419-LATN", "en--US", "en-", "-en", "en_US", "abcdefghi", "en-abcdefghi",
+            "xx-\u{e9}",
+        ] {
+            assert!(!is_language_tag(bad), "{bad}");
+        }
     }
 
     #[test]

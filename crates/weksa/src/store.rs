@@ -14,8 +14,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::corpus::{CorpusItem, CorpusItemId, Source, item_key, key_slug};
 use crate::entity::{Entity, EntityOrigin, Pronunciation};
 use crate::form::{
-    is_attestation, is_calendar_date, is_canonical_language_tag, is_joining_only, is_language_tag,
-    is_refused_format, is_slug,
+    is_attestation, is_calendar_date, is_joining_only, is_language_tag, is_refused_format, is_slug,
 };
 use crate::inventory::{
     Change, InvId, Inventory, InventoryEntry, InventoryRevision, Slot, revision_key,
@@ -1257,11 +1256,8 @@ impl OntologyStore {
         let mut counted: std::collections::BTreeMap<&str, u32> = std::collections::BTreeMap::new();
         for e in &batch {
             let key = e.key();
-            if !is_canonical_language_tag(&e.language) {
-                return Err(malformed(
-                    &key,
-                    "an ontology language is a language tag in canonical case",
-                ));
+            if !is_language_tag(&e.language) {
+                return Err(malformed(&key, "an ontology language is a language tag"));
             }
             let latest = match counted.get(e.language.as_str()) {
                 Some(n) => *n,

@@ -41,7 +41,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::context::{EditFeedback, EncoderOffer, Prompt, TrainItems};
 use crate::corpus::{CorpusItem, CorpusItemId, ModelFamily, Source};
 use crate::encode::{EditDraft, LoweringDraft, PacketDraft, encoder_id};
-use crate::form::{is_attestation, is_slug};
+use crate::form::{is_attestation, is_language_tag, is_slug};
 use crate::model::{ModelPort, PortError};
 use crate::ontology::OntologyEntry;
 use crate::packet::{Packet, Stance};
@@ -675,7 +675,10 @@ impl RunStores {
         panel.sort();
         // A tag no item carries (misspelt, wrong case, not a tag) is refused by
         // `check_panel` once the corpus is open.
-        if panel.is_empty() || panel.windows(2).any(|w| w[0] == w[1]) {
+        if panel.is_empty()
+            || panel.windows(2).any(|w| w[0] == w[1])
+            || !panel.iter().all(|t| is_language_tag(t))
+        {
             return Err(RunError::Panel);
         }
         let cache = run_cache(root)?;

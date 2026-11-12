@@ -4393,6 +4393,7 @@ fn open_refuses_a_bad_panel() {
         vec![],
         vec![tag("en-US"), tag("en-US")],
         vec![tag("en-US"), tag("not a tag!")],
+        vec![tag("en-us")],
         // No live item at all, and a Train item without a Validation one.
         vec![tag("en-US"), tag("de-DE")],
         vec![tag("en-US"), tag("fr-FR")],

@@ -1691,7 +1691,7 @@ mod ontology {
             "decomposed example",
             vec![OntologyEntry { examples: vec!["e\u{301}".into()], ..entry("ja-JP", 1) }],
         ));
-        for sep in ["\u{2028}", "\u{2029}", "\u{202e}", "\u{200b}"] {
+        for sep in ["\u{2028}", "\u{2029}", "\u{202e}", "\u{200b}", "\u{3164}", "\u{115f}", "\u{ffa0}"] {
             cases.push((
                 "line separator or format character in a choice",
                 vec![OntologyEntry { choice: format!("a{sep}b"), ..entry("ja-JP", 1) }],
