@@ -692,6 +692,29 @@ mod lowering {
         }
     }
 
+    /// The mint cut added no line to what the lowerer sees: a prompt with a
+    /// selected ontology entry has the digest it had at af0a56d.
+    #[test]
+    fn the_lowering_prompt_of_a_fixed_packet_is_unchanged_by_the_ontology_mint() {
+        use weksa::encode::OntologyDraft;
+        use weksa::speaker::Annotator;
+        let (view, inv, entities, item) = dao(2);
+        let store = InventoryStore::open(&data("daodejing/inventory.cc")).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let mut onto = weksa::OntologyStore::open(&dir.path().join("o.cc")).unwrap();
+        let annotator = Annotator::Model {
+            family: weksa::corpus::ModelFamily::Anthropic,
+            generator: "golden".into(),
+        };
+        let draft = r#"{"entries":[{"layer":"Grammar","choice":"golden choice","examples":["golden example"]}]}"#;
+        let entries = OntologyDraft::parse(draft).unwrap().into_entries("en-US", 3, 1, &annotator);
+        onto.admit(entries, &store).unwrap();
+        let prompt =
+            Prompt::lower(&view, &item, "en-US", &inv, &entities, &onto.ontology().unwrap()).unwrap();
+        assert!(prompt.text().contains("golden choice"));
+        assert_eq!(prompt.digest(), "4a40eb57282b059d");
+    }
+
     #[test]
     fn lower_prompt_moves_with_the_stance_alone() {
         use weksa::packet::{FeatValue, FeatureValue, Grade, Stance};

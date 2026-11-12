@@ -40,7 +40,9 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::context::{EditFeedback, EncoderOffer, Prompt, TrainItems};
 use crate::corpus::{CorpusItem, CorpusItemId, ModelFamily, Source};
-use crate::encode::{EditDraft, LoweringDraft, MAX_EDIT_CHANGES, PacketDraft, encoder_id};
+use crate::encode::{
+    EditDraft, LoweringDraft, MAX_EDIT_CHANGES, OntologyDraft, PacketDraft, encoder_id,
+};
 use crate::form::{is_attestation, is_language_tag, is_slug};
 use crate::model::{ModelPort, PortError};
 use crate::packet::{Packet, Stance};
@@ -1154,6 +1156,65 @@ impl RunStores {
     /// `<root>/recall`, where a recall's prompts and answers live.
     pub fn recall_dir(&self) -> PathBuf {
         self.root.join("recall")
+    }
+}
+
+/// What an ontology mint came to: the call's prompt digest, never an entry
+/// admitted.
+#[derive(Debug, PartialEq, Eq)]
+pub enum OntologyMintOutcome {
+    /// The prompt is written; nobody has answered it.
+    Unanswered { prompt: String },
+    /// The answer reads as a draft of `entries` entries; the answer file is the
+    /// draft, for `weksa ontology admit`.
+    Drafted { prompt: String, entries: usize },
+    /// Nothing asked, or the answer is no draft: a closed code.
+    Refused { code: &'static str },
+}
+
+impl RunStores {
+    /// Asks `model` to draft ontology entries for `language` from the run's
+    /// Train items of that language. Writes the prompt and answer files of
+    /// `model` and nothing else: the draft is admitted, if ever, by
+    /// `weksa ontology admit` into a copy of the ontology, never here.
+    pub fn mint_ontology(
+        &self,
+        model: &mut dyn ModelPort,
+        language: &str,
+    ) -> Result<OntologyMintOutcome, RunError> {
+        let store = |_| RunError::Store;
+        if !self.record.panel.iter().any(|tag| tag == language) {
+            return Ok(OntologyMintOutcome::Refused { code: "language-not-in-panel" });
+        }
+        let inventory = self.inventory.inventory().map_err(store)?;
+        let rev = inventory.latest().ok_or(RunError::NoInventory)?.n;
+        let ontology = self.ontology.ontology().map_err(store)?;
+        let train = self.train().map_err(store)?;
+        // A panel language has a live Train item (`create` requires it and the
+        // corpus is pinned), so no prompt here is a store that broke its pin.
+        let prompt = Prompt::mint_ontology(&train, language, &inventory, rev, &ontology)
+            .ok_or(RunError::Malformed("ontology-mint train"))?;
+        match model.answer(&prompt) {
+            Ok(answer) => Ok(match OntologyDraft::parse(&answer) {
+                Ok(draft) => OntologyMintOutcome::Drafted {
+                    prompt: prompt.digest(),
+                    entries: draft.entries.len(),
+                },
+                Err(e) => OntologyMintOutcome::Refused { code: e.class.code() },
+            }),
+            Err(PortError::Unanswered) => Ok(OntologyMintOutcome::Unanswered {
+                prompt: prompt.digest(),
+            }),
+            Err(PortError::Io(ErrorKind::InvalidData)) => {
+                Ok(OntologyMintOutcome::Refused { code: "invalid-data" })
+            }
+            Err(PortError::Io(kind)) => Err(RunError::Io(kind)),
+        }
+    }
+
+    /// `<root>/ontology-mint`, where a mint's prompts and answers live.
+    pub fn ontology_mint_dir(&self) -> PathBuf {
+        self.root.join("ontology-mint")
     }
 }
 
