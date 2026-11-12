@@ -848,6 +848,12 @@ fn dao() -> Dao {
 /// A Dao run whose stores `edit` (given the corpus and entity paths) changed
 /// before the run pinned them.
 fn dao_over(edit: impl FnOnce(&Path, &Path)) -> Dao {
+    dao_panel(edit, &["en-US"])
+}
+
+/// `dao_over` with the run opened on `panel`.
+fn dao_panel(edit: impl FnOnce(&Path, &Path), panel: &[&str]) -> Dao {
+    let panel: Vec<String> = panel.iter().map(|t| t.to_string()).collect();
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/daodejing");
     let dir = tempfile::tempdir().unwrap();
     let copy = |from: &str, to: &str| {
@@ -873,7 +879,7 @@ fn dao_over(edit: impl FnOnce(&Path, &Path)) -> Dao {
         "bag",
         weksa::run::LowererReach::ToolLessRelay,
         ModelFamily::Unrecorded,
-        &["en-US".to_string()],
+        &panel,
     )
     .unwrap();
     Dao {
@@ -2674,6 +2680,11 @@ fn the_lowerer_sees_no_item_text() {
         item.text = "CANARYVALIDATIONTEXT of the zebra".into();
         item.names = vec![];
         item.prior_turns = vec![];
+        store.add(item.clone(), &entities).unwrap();
+        // A held-out ja-JP line too: the panel is en-US, so it is never offered.
+        item.id = "item:canary:2".into();
+        item.text = "CANARYJAPANESE 検証テキスト".into();
+        item.language = "ja-JP".into();
         store.add(item, &entities).unwrap();
     });
     let mut model = fake(&good_answers());
@@ -2683,7 +2694,7 @@ fn the_lowerer_sees_no_item_text() {
 
     let corpus = weksa::CorpusStore::open(&dao.corpus).unwrap();
     let items = corpus.all().unwrap();
-    assert!(items.len() >= 6, "the canary and the five Legge items");
+    assert!(items.len() >= 7, "the canaries and the five Legge items");
     let packet_keys: Vec<String> = PacketStore::open(&dao.root.join("round-1/packets.cc"))
         .unwrap()
         .all()
@@ -4139,4 +4150,331 @@ fn a_split_where_no_replay_is_usable_reads_none_throughout() {
         reading[0].1.line(),
         "ablation n=0 unusable=2 replay chrf=none meaning=none | drop n=0 chrf=none meaning=none moved=0 ref_gain_chrf=none ref_gain_meaning=none | permute n=0 chrf=none meaning=none moved=0 ref_gain_chrf=none ref_gain_meaning=none"
     );
+}
+
+// ---- the panel: each item is lowered in its own language ----
+
+const JA_TEXTS: [(&str, &str, usize); 3] = [
+    ("item:daodejing:11", "賢者は民の心を空にし、腹を満たし、志を弱め、骨を強くする。", 1),
+    ("item:daodejing:12", "天は長く、地は久しい。", 2),
+    ("item:daodejing:13", "上善は水のようである。", 3),
+];
+
+/// The Dao corpus with a ja-JP twin of each live item (same group, so the same
+/// split) and a pt-BR twin of each; Laozi, the speaker the packets cite, gains
+/// `ja` as a ja-JP form when given.
+fn add_languages(corpus: &Path, entities: &Path, ja: Option<&str>) {
+    let mut entities = weksa::EntityStore::open(entities).unwrap();
+    if let Some(form) = ja {
+        let mut laozi = entities.get(&common::eid("laozi")).unwrap().unwrap();
+        laozi.forms.push(weksa::LanguageForms {
+            language: "ja-JP".into(),
+            forms: vec![form.into()],
+            pronunciation: None,
+        });
+        entities.put(laozi).unwrap();
+    }
+    let mut store = CorpusStore::open(corpus).unwrap();
+    for (key, text, twin) in JA_TEXTS {
+        let mut item = store.get(&format!("item:daodejing:{twin}")).unwrap().unwrap();
+        item.id = key.into();
+        item.text = text.into();
+        item.language = "ja-JP".into();
+        item.names = vec![];
+        item.prior_turns = vec![];
+        store.add(item, &entities).unwrap();
+        let mut pt = store.get(&format!("item:daodejing:{twin}")).unwrap().unwrap();
+        pt.id = format!("item:daodejing:2{twin}");
+        pt.text = format!("PORTUGUESEMARK {twin} o sabio esvazia os coracoes");
+        pt.language = "pt-BR".into();
+        pt.names = vec![];
+        pt.prior_turns = vec![];
+        store.add(pt, &entities).unwrap();
+    }
+}
+
+/// The Dao draft of `item`, its first referent citing the speaker, Laozi.
+fn citing_laozi(item: usize) -> String {
+    let mut v = serde_json::to_value(draft_of(item)).unwrap();
+    v["referents"][0]["entity"] = serde_json::json!("entity:laozi");
+    v.to_string()
+}
+
+/// Encode answers for the en-US and ja-JP items, all citing the sage.
+fn bilingual_answers() -> HashMap<String, String> {
+    let mut answers = HashMap::new();
+    for n in 1..=3 {
+        answers.insert(format!("item:daodejing:{n}"), citing_laozi(n));
+        answers.insert(format!("item:daodejing:1{n}"), citing_laozi(n));
+    }
+    answers
+}
+
+fn bilingual_fake() -> FakeModel {
+    let mut model = fake(&[]);
+    model.answers = bilingual_answers();
+    for (key, text, _) in JA_TEXTS {
+        model.lowered.insert(key.into(), text.into());
+    }
+    model
+}
+
+fn bilingual(ja: Option<&'static str>) -> Dao {
+    dao_panel(
+        |corpus, entities| add_languages(corpus, entities, ja),
+        &["ja-JP", "en-US"],
+    )
+}
+
+const LAOZI_JA: Option<&str> = Some("老子");
+
+fn lowering_texts(model: &FakeModel) -> Vec<&str> {
+    model
+        .seen
+        .iter()
+        .map(|(_, t)| t.as_str())
+        .filter(|t| t.starts_with(LOWER_INSTRUCTIONS))
+        .collect()
+}
+
+#[test]
+fn each_item_lowers_in_its_own_language() {
+    let mut dao = bilingual(LAOZI_JA);
+    assert_eq!(dao.run.record().panel, ["en-US", "ja-JP"], "sorted at open");
+    let mut model = bilingual_fake();
+    let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    let prompts = lowering_texts(&model);
+    assert_eq!(prompts.len(), 6, "three items in each language");
+    let (mut ja, mut en) = (0, 0);
+    for text in prompts {
+        if text.contains("\n\nlanguage: ja-JP\n\n") {
+            ja += 1;
+            assert!(text.contains(r#"{"entity:laozi":["老子"]}"#), "{text}");
+            assert!(!text.contains("Laozi"), "{text}");
+        } else {
+            en += 1;
+            assert!(text.contains("\n\nlanguage: en-US\n\n"), "{text}");
+            assert!(text.contains(r#"{"entity:laozi":["Laozi"]}"#), "{text}");
+            assert!(!text.contains("老子"), "{text}");
+        }
+    }
+    assert_eq!((ja, en), (3, 3));
+    // A ja-JP item is scored against its own text: the lowering that is the
+    // text reads as a perfect one.
+    let ja = r.language("ja-JP").unwrap();
+    assert_eq!((ja.train_scored, ja.validation_scored), (1, 2));
+    assert_eq!(ja.validation_mean.chrf, Some(100.0));
+    assert_eq!(ja.train_mean.meaning, Some(1.0));
+}
+
+#[test]
+fn a_cited_entity_without_a_form_in_the_items_language_refuses_at_lower() {
+    let mut dao = bilingual(None);
+    let mut model = bilingual_fake();
+    let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    let ja = r.language("ja-JP").unwrap();
+    assert_eq!(ja.validation_refused.lower, 2);
+    assert_eq!((ja.train_scored, ja.validation_scored), (0, 0));
+    let refused: Vec<_> = r
+        .train()
+        .iter()
+        .filter(|row| matches!(row.outcome, Outcome::Refused(Stage::Lower)))
+        .collect();
+    assert_eq!(refused.len(), 1, "the ja-JP Train item");
+    assert_eq!(refused[0].item, "item:daodejing:11");
+    let en = r.language("en-US").unwrap();
+    assert_eq!((en.train_scored, en.validation_scored), (1, 2));
+    assert_eq!(en.validation_refused, weksa::run::RefusalCounts::default());
+    assert_eq!(lowering_texts(&model).len(), 3, "no prompt for a form that is missing");
+}
+
+#[test]
+fn the_panel_filters_every_prompt() {
+    let mut dao = bilingual(LAOZI_JA);
+    let mut model = bilingual_fake();
+    // Two rounds, a cycle (the editor's prompt), a recall: every kind of prompt.
+    let mut last = None;
+    for _ in 0..2 {
+        last = Some(recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap()));
+    }
+    let tags = |r: &RoundRecord| -> Vec<String> {
+        r.languages().iter().map(|l| l.language.clone()).collect()
+    };
+    assert_eq!(tags(&last.unwrap()), ["en-US", "ja-JP"]);
+    model.candidate = Some((4, bilingual_answers()));
+    model.edit = Some(Ok(ONE_CONCEPT.to_string()));
+    run_cycle(&mut dao, &mut model);
+    let mut recite = reciter(&dao, second_half);
+    let reading = match dao.run.recall(&mut recite).unwrap() {
+        weksa::run::RecallOutcome::Read(r) => r,
+        _ => panic!("answered"),
+    };
+    let langs: Vec<&str> = reading.languages.iter().map(|l| l.language.as_str()).collect();
+    assert_eq!(langs, ["en-US", "ja-JP"]);
+    let shown = model.seen.iter().map(|(_, t)| t).chain(&recite.seen);
+    let mut count = 0;
+    for text in shown {
+        count += 1;
+        assert!(!text.contains("PORTUGUESE"), "a pt-BR item reached a prompt");
+        for n in 1..=3 {
+            assert!(!text.contains(&format!("item:daodejing:2{n}")));
+        }
+    }
+    assert!(count > 20, "{count}");
+    assert!(!mint_texts(&model).is_empty());
+    assert_eq!(dao.run.train().unwrap().len(), 2, "one Train item per panel language");
+}
+
+#[test]
+fn open_refuses_a_bad_panel() {
+    let train_only = |corpus: &Path, entities: &Path| {
+        let entities = weksa::EntityStore::open(entities).unwrap();
+        let mut store = CorpusStore::open(corpus).unwrap();
+        let mut item = store.get("item:daodejing:1").unwrap().unwrap();
+        item.id = "item:daodejing:31".into();
+        item.text = "Un texte francais.".into();
+        item.language = "fr-FR".into();
+        item.names = vec![];
+        item.prior_turns = vec![];
+        store.add(item, &entities).unwrap();
+    };
+    let dao = dao_over(train_only);
+    let (corpus, inventory, entities) = (&dao.corpus, &dao.inventory, &dao.entities);
+    drop(dao.run);
+    let tag = |s: &str| s.to_string();
+    for panel in [
+        vec![],
+        vec![tag("en-US"), tag("en-US")],
+        vec![tag("en-US"), tag("not a tag!")],
+        // No live item at all, and a Train item without a Validation one.
+        vec![tag("en-US"), tag("de-DE")],
+        vec![tag("en-US"), tag("fr-FR")],
+    ] {
+        let root = dao._dir.path().join(format!("panel-{}", panel.len()));
+        let created = RunStores::create(
+            &root,
+            "p",
+            RunPaths { corpus, inventory, entities },
+            "fake-model",
+            "bag",
+            weksa::run::LowererReach::ToolLessRelay,
+            ModelFamily::Unrecorded,
+            &panel,
+        );
+        let err = created.err();
+        assert_eq!(err, Some(RunError::Panel), "{panel:?}");
+        let shown = err.unwrap().to_string();
+        for t in &panel {
+            assert!(!shown.contains(t.as_str()), "{shown}");
+        }
+        assert!(!root.join("run.cc").exists(), "{panel:?}");
+        assert!(!root.join("inventory.cc").exists(), "{panel:?}");
+    }
+}
+
+#[test]
+fn round_means_are_per_language() {
+    let mut dao = bilingual(LAOZI_JA);
+    let mut model = bilingual_fake();
+    // One ja-JP Validation item is not an encodable draft: it counts 0.
+    model.answers.insert("item:daodejing:13".into(), "not a draft".into());
+    let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    let ja = r.language("ja-JP").unwrap();
+    // Validation: item 12 reads perfectly (chrF 100, meaning 1), item 13 is 0.
+    assert_eq!(ja.validation_mean.count, 2);
+    assert_eq!(ja.validation_mean.chrf, Some(50.0));
+    assert_eq!(ja.validation_mean.meaning, Some(0.5));
+    assert_eq!((ja.validation_scored, ja.validation_refused.parse), (1, 1));
+    assert_eq!(ja.train_mean.chrf, Some(100.0));
+
+    // en-US reads exactly as it does when it is the whole panel: the ja-JP
+    // items touch none of its numbers.
+    let mut alone = dao_over(|_, _| {});
+    let mut plain = fake(&good_answers());
+    let r2 = recorded(round(&mut alone.run, &mut plain, &Scorer::new(Bag)).unwrap());
+    assert_eq!(r.language("en-US"), r2.language("en-US"));
+    assert_eq!(r.languages().len(), 2);
+    assert_eq!(r2.languages().len(), 1);
+}
+
+#[test]
+fn floor_and_feedback_are_per_language() {
+    let mut dao = bilingual(LAOZI_JA);
+    // Round 1: everything lowers perfectly in ja-JP. Round 2: one ja-JP
+    // Validation item is refused. en-US reads the same twice.
+    let mut first = bilingual_fake();
+    recorded(round(&mut dao.run, &mut first, &Scorer::new(Bag)).unwrap());
+    let mut second = bilingual_fake();
+    second.answers.insert("item:daodejing:13".into(), "not a draft".into());
+    recorded(round(&mut dao.run, &mut second, &Scorer::new(Bag)).unwrap());
+
+    let mut model = bilingual_fake();
+    model.candidate = Some((4, bilingual_answers()));
+    model.edit = Some(Ok(ONE_CONCEPT.to_string()));
+    let d = run_cycle(&mut dao, &mut model);
+    let rows = d.panel();
+    assert_eq!(
+        rows.iter().map(|r| r.language.as_str()).collect::<Vec<_>>(),
+        ["en-US", "ja-JP"]
+    );
+    let (en, ja) = (&rows[0], &rows[1]);
+    assert_eq!(en.floor.composite, 0.0, "en-US read the same twice");
+    assert_eq!(en.threshold, LADDER_STEP);
+    assert_eq!(ja.floor.chrf, 50.0);
+    assert_eq!(ja.floor.meaning, 0.5);
+    assert_eq!(ja.floor.composite, 0.5);
+    assert_eq!(ja.threshold, 0.5);
+    assert_eq!(ja.base.composite, 1.0);
+
+    // The editor's one held-out number is each language's head composite on
+    // the ladder, in panel order.
+    let rounded = |x: f64| (x / LADDER_STEP).round() * LADDER_STEP;
+    let line = format!(
+        "last edit: none; validation composite at head: en-US {:.3}, ja-JP {:.3}",
+        rounded(en.base.composite),
+        rounded(ja.base.composite)
+    );
+    let mint = mint_texts(&model);
+    assert!(mint[0].contains(&format!("\n\n{line}\n\n")), "{}", mint[0]);
+}
+
+#[test]
+fn recall_probes_unspaced_lines() {
+    let dao = bilingual(LAOZI_JA);
+    let mut recite = reciter(&dao, second_half);
+    let reading = match dao.run.recall(&mut recite).unwrap() {
+        weksa::run::RecallOutcome::Read(r) => r,
+        _ => panic!("answered"),
+    };
+    let ja = reading.languages.iter().find(|l| l.language == "ja-JP").unwrap();
+    // Three lines written without spaces were skipped before.
+    assert_eq!((ja.n, ja.answered), (3, 3));
+    assert!((ja.chrf - 100.0).abs() < 1e-9);
+    let corpus = CorpusStore::open(&dao.corpus).unwrap();
+    for (key, ja_text, _) in JA_TEXTS {
+        let prompt = recite
+            .seen
+            .iter()
+            .find(|t| shown_opening(t).chars().next() == ja_text.chars().next())
+            .unwrap();
+        let item = corpus.get(key).unwrap().unwrap();
+        let (head, tail) = (shown_opening(prompt), held_back(&item.text, prompt));
+        assert!(!head.is_empty() && !tail.is_empty());
+        assert_eq!(format!("{head}{tail}"), item.text, "no spaces to lose");
+        assert!(!prompt.contains(tail));
+    }
+    // en-US still splits between words.
+    let en = reading.languages.iter().find(|l| l.language == "en-US").unwrap();
+    assert_eq!((en.n, en.answered), (3, 3));
+    for key in ["item:daodejing:1", "item:daodejing:2", "item:daodejing:3"] {
+        let item = corpus.get(key).unwrap().unwrap();
+        let prompt = recite
+            .seen
+            .iter()
+            .find(|t| t.contains("opening: ") && item.text.starts_with(shown_opening(t)))
+            .unwrap();
+        let head = shown_opening(prompt);
+        let next = item.text[head.len()..].chars().next().unwrap();
+        assert!(!next.is_alphanumeric(), "{key}: cut inside a word");
+    }
 }

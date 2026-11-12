@@ -1742,3 +1742,24 @@ fn loop_ablate_without_the_rounds_answers_says_so() {
     assert!(text.contains("holds no answer") && text.contains("head inventory"), "{text}");
     assert!(!text.contains("would not read"), "{text}");
 }
+
+#[test]
+fn panel_and_language_are_required() {
+    let d = tempfile::tempdir().unwrap();
+    dao_stores(d.path());
+    // No panel: a run says what it reads, or there is no run.
+    let o = weksa(
+        d.path(),
+        &[
+            "loop", "open", "canaryroot", "--label", "smoke", "--answerer", "m",
+            "--lowerer-reach", "tool-less-relay",
+        ],
+    );
+    assert!(!o.status.success());
+    assert!(out(&o).contains("--panel"), "{}", out(&o));
+    assert!(!d.path().join("canaryroot/run.cc").exists());
+    // No language: no language is the unmarked one.
+    let o = weksa(d.path(), &ADD[..ADD.len() - 2]);
+    assert!(!o.status.success());
+    assert!(out(&o).contains("--language"), "{}", out(&o));
+}

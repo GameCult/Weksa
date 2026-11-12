@@ -1152,6 +1152,9 @@ fn mean(xs: impl Iterator<Item = f64>) -> Option<f64> {
 
 type Scored = (ItemScore, ItemScore);
 
+/// A panel language's live items of one split, each with its round packet.
+type HeldSplit = (String, Split, Vec<(CorpusItem, Packet)>);
+
 /// One item's reference text, recorded lowering, replay, and drop and permute
 /// lowerings.
 type Lowered = (String, String, String, [Option<String>; 2]);
@@ -1205,7 +1208,7 @@ impl RunStores {
             .map_err(store)?
             .all()
             .map_err(store)?;
-        let mut splits: Vec<(String, Split, Vec<(CorpusItem, Packet)>)> = Vec::new();
+        let mut splits: Vec<HeldSplit> = Vec::new();
         for tag in &self.record.panel {
             for split in [Split::Train, Split::Validation] {
                 splits.push((tag.clone(), split, Vec::new()));
