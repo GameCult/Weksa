@@ -19,10 +19,12 @@ use crate::corpus::CorpusItemId;
 use crate::inventory::{
     Change, Family, InvId, Inventory, InventoryEntry, InventoryRevision, Slot, ValueKind,
 };
+use crate::ontology::{Condition, Layer, OntologyEntry};
 use crate::packet::{
     Constraints, Context, Discourse, EncoderId, Grade, Packet, PacketId, PacketKind, Predication,
     Provenance, ProvenanceSource, Referent, Relation, SCHEMA_VERSION, Stance, Trace,
 };
+use crate::speaker::Annotator;
 use crate::split::{fnv1a64, hex16};
 
 /// The meaning fields of a packet, as a model writes them.
@@ -268,6 +270,59 @@ impl EditDraft {
             frozen: false,
         };
         Some((revision, entries))
+    }
+}
+
+/// One ontology entry as a model writes it: no language, number, inventory
+/// revision or annotator.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EntryOntologyDraft {
+    pub layer: Layer,
+    #[serde(default)]
+    pub when: Vec<Condition>,
+    pub choice: String,
+    #[serde(default)]
+    pub examples: Vec<String>,
+}
+
+/// A batch of ontology entries as a model drafts them: the xenos door of a
+/// seed answer.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OntologyDraft {
+    pub entries: Vec<EntryOntologyDraft>,
+}
+
+impl OntologyDraft {
+    pub fn parse(answer: &str) -> Result<Self, DraftError> {
+        from_json(answer)
+    }
+
+    /// The entries this draft becomes: numbered from `first_n` in draft order,
+    /// all of `language` read at `inventory_rev`, annotated `annotator`.
+    /// Whether they are admissible is `OntologyStore::admit`'s to refuse.
+    pub fn into_entries(
+        self,
+        language: &str,
+        inventory_rev: u32,
+        first_n: u32,
+        annotator: &Annotator,
+    ) -> Vec<OntologyEntry> {
+        self.entries
+            .into_iter()
+            .zip(first_n..)
+            .map(|(d, n)| OntologyEntry {
+                language: language.to_string(),
+                n,
+                inventory_rev,
+                layer: d.layer,
+                when: d.when,
+                choice: d.choice,
+                examples: d.examples,
+                annotator: annotator.clone(),
+            })
+            .collect()
     }
 }
 

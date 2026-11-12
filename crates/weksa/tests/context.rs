@@ -602,7 +602,7 @@ mod lowering {
     fn lower_prompt_names_its_language() {
         let (view, inv, entities, item) = dao(2);
         for tag in ["en-US", "ja-JP", "pt-BR"] {
-            let prompt = Prompt::lower(&view, &item, tag, &inv, &entities).unwrap();
+            let prompt = Prompt::lower(&view, &item, tag, &inv, &entities, &weksa::Ontology::empty()).unwrap();
             let want = format!("{LOWER}\n\nlanguage: {tag}\n\npacket: ");
             assert!(prompt.text().starts_with(&want), "{tag}");
         }
@@ -614,10 +614,10 @@ mod lowering {
     #[test]
     fn lower_prompt_text_is_pinned() {
         let (view, inv, entities, item) = dao(2);
-        let prompt = Prompt::lower(&view, &item, "en-US", &inv, &entities).unwrap();
+        let prompt = Prompt::lower(&view, &item, "en-US", &inv, &entities, &weksa::Ontology::empty()).unwrap();
         let (head, listing) = prompt.text().split_once("inventory rev:3\n").unwrap();
         let expected = format!(
-            "{LOWER}\n\nlanguage: en-US\n\npacket: {}\n\nentities: {{}}\n\n",
+            "{LOWER}\n\nlanguage: en-US\n\npacket: {}\n\nentities: {{}}\n\nontology: none\n\n",
             concat!(
                 r#"{"context":{"setting":null,"medium":null,"participants":[],"audience":[]},"#,
                 r#""discourse":{"speech_act":"speech_act:1","addressee":null,"addressee_consent":null,"features":[]},"#,
@@ -676,7 +676,7 @@ mod lowering {
             let mut packet = packets().remove(2);
             packet.stance = stance.clone();
             let view = admitted(packet, &store, "daodejing/corpus.cc", &entities);
-            let prompt = Prompt::lower(&view, &item, "en-US", &inv, &entities).unwrap();
+            let prompt = Prompt::lower(&view, &item, "en-US", &inv, &entities, &weksa::Ontology::empty()).unwrap();
             (stance, prompt)
         };
         let three = [prompt_of(own), prompt_of(angry), prompt_of(Stance::default())];
@@ -713,7 +713,7 @@ mod lowering {
             ("sa-Latn", &["Nibuwa"]),
             ("en-US", &["Nibu", "Nibu's"]),
         ])]);
-        let prompt = Prompt::lower(&view, &item, "en-US", &cast.inventory().unwrap(), &held).unwrap();
+        let prompt = Prompt::lower(&view, &item, "en-US", &cast.inventory().unwrap(), &held, &weksa::Ontology::empty()).unwrap();
         assert!(
             prompt
                 .text()
@@ -743,7 +743,7 @@ mod lowering {
             ),
             (Held(vec![]), LowerError::UnknownEntity { entity: id }),
         ] {
-            assert_eq!(Prompt::lower(&view, &item, "en-US", &inv, &held).err(), Some(want));
+            assert_eq!(Prompt::lower(&view, &item, "en-US", &inv, &held, &weksa::Ontology::empty()).err(), Some(want));
         }
     }
 }

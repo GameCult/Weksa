@@ -1,0 +1,264 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OntologyEntry",
+  "description": "One choice of one language. Key `onto:<language>:<n>`.",
+  "type": "object",
+  "properties": {
+    "annotator": {
+      "$ref": "#/$defs/Annotator"
+    },
+    "choice": {
+      "type": "string"
+    },
+    "examples": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "inventory_rev": {
+      "description": "The inventory revision the conditions read against.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "language": {
+      "type": "string"
+    },
+    "layer": {
+      "$ref": "#/$defs/Layer"
+    },
+    "n": {
+      "description": "The entry's number within its language, from 1.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "when": {
+      "description": "Every condition must hold; none means the entry always applies.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Condition"
+      }
+    }
+  },
+  "required": [
+    "language",
+    "n",
+    "inventory_rev",
+    "layer",
+    "when",
+    "choice",
+    "examples",
+    "annotator"
+  ],
+  "$defs": {
+    "Annotator": {
+      "description": "Who annotated a document. A model's generator is an attestation string, held\nto the same form as every provenance string.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "Operator"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "Model": {
+              "type": "object",
+              "properties": {
+                "family": {
+                  "$ref": "#/$defs/ModelFamily"
+                },
+                "generator": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "family",
+                "generator"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Model"
+          ]
+        }
+      ]
+    },
+    "Condition": {
+      "description": "One feature of one slot of the view, tested. Only `Stance` and `Discourse`\nreach a lowering view today.",
+      "type": "object",
+      "properties": {
+        "feature": {
+          "$ref": "#/$defs/InvId"
+        },
+        "slot": {
+          "$ref": "#/$defs/Slot"
+        },
+        "test": {
+          "$ref": "#/$defs/Test"
+        }
+      },
+      "required": [
+        "slot",
+        "feature",
+        "test"
+      ]
+    },
+    "FeatValue": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "Grade": {
+              "$ref": "#/$defs/Grade"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Grade"
+          ]
+        },
+        {
+          "description": "A label the feature's inventory entry declares.",
+          "type": "object",
+          "properties": {
+            "Option": {
+              "$ref": "#/$defs/OptionLabel"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Option"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "Flag": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Flag"
+          ]
+        }
+      ]
+    },
+    "Grade": {
+      "type": "integer",
+      "maximum": 1000,
+      "minimum": 0
+    },
+    "InvId": {
+      "type": "string",
+      "pattern": "^(concept|frame|role|relation|speech_act|feature|referent_kind|extension):[1-9][0-9]*$"
+    },
+    "Layer": {
+      "description": "Which part of the language an entry shapes.",
+      "type": "string",
+      "enum": [
+        "Lexicon",
+        "Grammar",
+        "Discourse",
+        "Phonology",
+        "Orthography"
+      ]
+    },
+    "ModelFamily": {
+      "description": "The family of the model that wrote a line.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "Anthropic",
+            "OpenAi",
+            "Google",
+            "Alibaba",
+            "Meta",
+            "Mistral"
+          ]
+        },
+        {
+          "description": "Nothing records which family wrote the line.",
+          "type": "string",
+          "const": "Unrecorded"
+        }
+      ]
+    },
+    "OptionLabel": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,23}$"
+    },
+    "Slot": {
+      "description": "Where a feature may sit in a packet.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "Discourse",
+            "Referent",
+            "Predication",
+            "Relation",
+            "Stance"
+          ]
+        },
+        {
+          "description": "The speaker's relation to one party of the scene, held by `weksa.scene`\ndocuments; see `LoweringInput::with_scene`.",
+          "type": "string",
+          "const": "Scene"
+        },
+        {
+          "description": "The speaker's stable axes, held by `weksa.speaker` documents.",
+          "type": "string",
+          "const": "Speaker"
+        }
+      ]
+    },
+    "Test": {
+      "description": "What a feature's value must be for a condition to hold.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "AtLeast": {
+              "$ref": "#/$defs/Grade"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "AtLeast"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "AtMost": {
+              "$ref": "#/$defs/Grade"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "AtMost"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "Is": {
+              "$ref": "#/$defs/FeatValue"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Is"
+          ]
+        }
+      ]
+    }
+  }
+}

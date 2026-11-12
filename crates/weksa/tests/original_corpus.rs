@@ -274,6 +274,8 @@ fn the_recall_probe_covers_every_live_original_item_and_names_no_work() {
         tmp.path().join(f)
     };
     let (c, i, e) = (path("corpus.cc"), path("inventory.cc"), path("entity.cc"));
+    let o = tmp.path().join("ontology.cc");
+    std::fs::write(&o, [0x90]).unwrap();
     let run = RunStores::create(
         &tmp.path().join("run"),
         "orig",
@@ -281,6 +283,7 @@ fn the_recall_probe_covers_every_live_original_item_and_names_no_work() {
             corpus: &c,
             inventory: &i,
             entities: &e,
+            ontology: &o,
         },
         "m",
         "bag",
@@ -350,6 +353,7 @@ fn original_round(family: ModelFamily) -> (weksa::run::RunStores, weksa::run::Ro
     for f in ["corpus.cc", "entity.cc", "inventory.cc"] {
         std::fs::copy(src.join(f), tmp.join(f)).unwrap();
     }
+    std::fs::write(tmp.join("ontology.cc"), [0x90]).unwrap();
     let mut run = RunStores::create(
         &tmp.join("run"),
         "orig",
@@ -357,6 +361,7 @@ fn original_round(family: ModelFamily) -> (weksa::run::RunStores, weksa::run::Ro
             corpus: &tmp.join("corpus.cc"),
             inventory: &tmp.join("inventory.cc"),
             entities: &tmp.join("entity.cc"),
+            ontology: &tmp.join("ontology.cc"),
         },
         "nope",
         "bag",
@@ -506,6 +511,7 @@ fn no_test_item_is_offered_to_a_round_or_recall_or_recorded() {
     for f in ["corpus.cc", "entity.cc", "inventory.cc"] {
         std::fs::copy(src.join(f), tmp.path().join(f)).unwrap();
     }
+    std::fs::write(tmp.path().join("ontology.cc"), [0x90]).unwrap();
     let p = |f: &str| tmp.path().join(f);
     let mut run = RunStores::create(
         &p("run"),
@@ -514,6 +520,7 @@ fn no_test_item_is_offered_to_a_round_or_recall_or_recorded() {
             corpus: &p("corpus.cc"),
             inventory: &p("inventory.cc"),
             entities: &p("entity.cc"),
+            ontology: &p("ontology.cc"),
         },
         "nope",
         "bag",

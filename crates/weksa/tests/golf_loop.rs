@@ -24,8 +24,13 @@ fn rewrite_run(root: &Path, change: impl FnOnce(&mut RunRecord)) {
     cache.put(format!("run:{}", record.label), &record).unwrap();
 }
 
-fn paths(dir: &Path) -> (PathBuf, PathBuf, PathBuf) {
-    (dir.join("c.cc"), dir.join("i.cc"), dir.join("entities.cc"))
+fn paths(dir: &Path) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+    (
+        dir.join("c.cc"),
+        dir.join("i.cc"),
+        dir.join("entities.cc"),
+        common::ontology_in(dir),
+    )
 }
 
 fn hex(path: &Path) -> String {
@@ -37,7 +42,7 @@ fn a_run_pins_its_stores_and_refuses_drift() {
     let mut w = world();
     let dir = w.dir.path().to_path_buf();
     let root = dir.join("run");
-    let (c, i, e) = paths(&dir);
+    let (c, i, e, o) = paths(&dir);
     let at = |label: &str, model: &str| {
         RunStores::create(
             &root,
@@ -46,6 +51,7 @@ fn a_run_pins_its_stores_and_refuses_drift() {
                 corpus: &c,
                 inventory: &i,
                 entities: &e,
+                ontology: &o,
             },
             model,
             "bag",
@@ -141,7 +147,7 @@ fn a_run_works_on_its_own_copy_of_the_inventory() {
     let w = world();
     let dir = w.dir.path().to_path_buf();
     let root = dir.join("run");
-    let (c, i, e) = paths(&dir);
+    let (c, i, e, o) = paths(&dir);
     let source_bytes = std::fs::read(&i).unwrap();
     let mut run = RunStores::create(
         &root,
@@ -150,6 +156,7 @@ fn a_run_works_on_its_own_copy_of_the_inventory() {
             corpus: &c,
             inventory: &i,
             entities: &e,
+            ontology: &o,
         },
         "fake-model",
         "bag",
@@ -228,6 +235,7 @@ fn create_refuses_a_root_that_holds_an_inventory_and_never_truncates_it() {
                 corpus: &dao.corpus,
                 inventory,
                 entities: &dao.entities,
+                ontology: &dao.ontology,
             },
             "fake-model",
             "bag",
@@ -276,6 +284,7 @@ fn a_create_that_fails_leaves_no_inventory_and_the_retry_succeeds() {
                 corpus: &dao.corpus,
                 inventory,
                 entities,
+                ontology: &dao.ontology,
             },
             "fake-model",
             "bag",
@@ -388,10 +397,12 @@ fn a_store_changed_between_its_digest_and_its_open_is_drift() {
         assert!(dir.join(name).exists(), "{name}");
     }
     let (c, i, e) = (dir.join("c.cc"), dir.join("i.cc"), dir.join("entities.cc"));
+    let o = dir.join("ontology.cc");
     let paths = || weksa::run::RunPaths {
         corpus: &c,
         inventory: &i,
         entities: &e,
+        ontology: &o,
     };
     assert_eq!(
         RunStores::create_between(
@@ -440,10 +451,12 @@ fn window(
     let dir = w.dir.path().to_path_buf();
     let root = dir.join("run");
     let (c, i, e) = (dir.join("c.cc"), dir.join("i.cc"), dir.join("entities.cc"));
+    let o = dir.join("ontology.cc");
     let paths = weksa::run::RunPaths {
         corpus: &c,
         inventory: &i,
         entities: &e,
+        ontology: &o,
     };
     let created = RunStores::create_between(
         &root,
@@ -501,12 +514,13 @@ fn source_digests_cover_their_files() {
     let digest = |name: &str| fnv1a64(&read(name));
     // The prompt's partition and names come from split.rs, and the lowering
     // prompt reads lower.rs's target language and entity port and prints
-    // packet.rs's serde shapes: all four are covered.
-    let (context, split, lower, packet) = (
+    // packet.rs's serde shapes and ontology.rs's selection: all five are covered.
+    let (context, split, lower, packet, ontology) = (
         read("context.rs"),
         read("split.rs"),
         read("lower.rs"),
         read("packet.rs"),
+        read("ontology.rs"),
     );
     // Each file enters behind its length, so the parts have one framing.
     let framed = [
@@ -518,12 +532,14 @@ fn source_digests_cover_their_files() {
         &lower,
         (packet.len() as u64).to_le_bytes().as_slice(),
         &packet,
+        (ontology.len() as u64).to_le_bytes().as_slice(),
+        &ontology,
     ]
     .concat();
     assert_eq!(weksa::run::PROMPT_SOURCE_DIGEST, fnv1a64(&framed));
     assert_ne!(
         weksa::run::PROMPT_SOURCE_DIGEST,
-        fnv1a64(&[context.clone(), split.clone(), lower.clone(), packet.clone()].concat()),
+        fnv1a64(&[context.clone(), split.clone(), lower.clone(), packet.clone(), ontology.clone()].concat()),
         "bare concatenation is not the digest"
     );
     // Moving the boundary between the parts moves the digest.
@@ -532,6 +548,7 @@ fn source_digests_cover_their_files() {
         weksa::split::fnv1a64_of(&[b"a", b"bc"])
     );
     assert_ne!(weksa::run::PROMPT_SOURCE_DIGEST, digest("context.rs"));
+    assert_ne!(weksa::run::PROMPT_SOURCE_DIGEST, digest("ontology.rs"));
 }
 
 /// The encode prompt of `item:nibu:1` over `world()` at revision 4.
@@ -837,6 +854,7 @@ struct Dao {
     corpus: PathBuf,
     inventory: PathBuf,
     entities: PathBuf,
+    ontology: PathBuf,
     run: RunStores,
 }
 
@@ -866,6 +884,7 @@ fn dao_panel(edit: impl FnOnce(&Path, &Path), panel: &[&str]) -> Dao {
         copy("entity.cc", "e.cc"),
     );
     edit(&corpus, &entities);
+    let ontology = common::ontology_in(dir.path());
     let root = dir.path().join("run");
     let run = RunStores::create(
         &root,
@@ -874,6 +893,7 @@ fn dao_panel(edit: impl FnOnce(&Path, &Path), panel: &[&str]) -> Dao {
             corpus: &corpus,
             inventory: &inventory,
             entities: &entities,
+            ontology: &ontology,
         },
         "fake-model",
         "bag",
@@ -888,6 +908,7 @@ fn dao_panel(edit: impl FnOnce(&Path, &Path), panel: &[&str]) -> Dao {
         corpus,
         inventory,
         entities,
+        ontology,
         run,
     }
 }
@@ -1055,7 +1076,7 @@ fn lowering_prompts(dao: &Dao, inventory: &InventoryStore) -> Vec<(String, Promp
             let view = store
                 .admit(packet, inventory, &corpus, dao.run.entities())
                 .unwrap();
-            let prompt = Prompt::lower(&view, &key, "en-US", &inv, dao.run.entities()).unwrap();
+            let prompt = Prompt::lower(&view, &key, "en-US", &inv, dao.run.entities(), &weksa::Ontology::empty()).unwrap();
             (key.to_string(), prompt)
         })
         .collect()
@@ -1527,6 +1548,7 @@ fn errors_echo_no_input() {
         corpus: &missing,
         inventory: &missing,
         entities: &missing,
+        ontology: &missing,
     };
     let e = RunStores::create(
         &root,
@@ -1595,6 +1617,7 @@ fn errors_echo_no_input() {
             corpus: &dao.corpus,
             inventory: &dao.inventory,
             entities: &dao.entities,
+            ontology: &dao.ontology,
         },
         "fake-model",
         "bag",
@@ -2516,6 +2539,7 @@ fn a_changed_head_is_drift() {
             corpus: &dao.corpus,
             inventory: &dao.inventory,
             entities: &dao.entities,
+            ontology: &dao.ontology,
         },
         "fake-model",
         "bag",
@@ -2854,6 +2878,7 @@ fn a_summary_line_says_how_lowerings_were_answered() {
         corpus: &dao.corpus,
         inventory: &dao.inventory,
         entities: &dao.entities,
+        ontology: &dao.ontology,
     };
     RunStores::create(
         &root,
@@ -3577,6 +3602,7 @@ fn mixed_family_round(family: ModelFamily) -> u32 {
             corpus: &dir.join("c.cc"),
             inventory: &dir.join("i.cc"),
             entities: &dir.join("entities.cc"),
+            ontology: &dir.join("ontology.cc"),
         },
         "not-a-draft",
         "bag",
@@ -4363,7 +4389,7 @@ fn open_refuses_a_bad_panel() {
         let created = RunStores::create(
             &root,
             "p",
-            RunPaths { corpus, inventory, entities },
+            RunPaths { corpus, inventory, entities, ontology: &dao.ontology },
             "fake-model",
             "bag",
             weksa::run::LowererReach::ToolLessRelay,

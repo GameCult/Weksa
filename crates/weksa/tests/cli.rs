@@ -12,6 +12,8 @@ fn weksa(dir: &std::path::Path, args: &[&str]) -> Output {
             "./i.cc",
             "--entities",
             "./e.cc",
+            "--ontology",
+            "./o.cc",
         ])
         .args(args)
         .output()
@@ -316,6 +318,7 @@ fn schema_writes_the_published_files() {
             "weksa.loop_decision.schema.json",
             "weksa.loop_round.schema.json",
             "weksa.loop_run.schema.json",
+            "weksa.ontology_entry.schema.json",
             "weksa.scene.schema.json",
             "weksa.speaker.schema.json"
         ]
@@ -1337,6 +1340,7 @@ fn dao_stores(dir: &std::path::Path) {
     ] {
         std::fs::copy(src.join(from), dir.join(to)).unwrap();
     }
+    std::fs::write(dir.join("o.cc"), [0x90]).unwrap();
 }
 
 #[test]

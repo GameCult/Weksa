@@ -8,6 +8,7 @@ use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use unicode_normalization::UnicodeNormalization;
 use weksa::corpus::{CorpusItem, ModelFamily, NameSpan, Source, Turn};
+use weksa::encode::OntologyDraft;
 use weksa::entity::{Entity, EntityOrigin, LanguageForms, Pronunciation};
 use weksa::inventory::{proof_revision, seed};
 use weksa::packet::proof_packet;
@@ -17,7 +18,7 @@ use weksa::run::{
 };
 use weksa::score::ScoreInput;
 use weksa::{
-    AnswerFiles, CorpusStore, EntityId, EntityStore, InventoryStore, OllamaEmbedder, PacketStore,
+    Annotator, AnswerFiles, CorpusStore, EntityId, EntityStore, InventoryStore, OllamaEmbedder, OntologyStore, PacketStore,
     Scorer, Split, SplitScheme, StoreError, lower, pronounce, validate,
 };
 
@@ -36,6 +37,9 @@ struct Cli {
     /// The entity store.
     #[arg(long, global = true, default_value = "data/entity/entity.cc")]
     entities: PathBuf,
+    /// The language ontology store.
+    #[arg(long, global = true, default_value = "data/ontology/ontology.cc")]
+    ontology: PathBuf,
     #[command(subcommand)]
     command: Command,
 }
@@ -50,6 +54,8 @@ enum Command {
     Inventory(InventoryCommand),
     #[command(subcommand)]
     Entity(EntityCommand),
+    #[command(subcommand)]
+    Ontology(OntologyCommand),
     #[command(subcommand)]
     Packet(PacketCommand),
     /// Lower a stored packet to English text.
@@ -81,7 +87,7 @@ enum Command {
 
 #[derive(Subcommand)]
 enum LoopCommand {
-    /// Pin the global --corpus, --inventory and --entities as a run at ROOT.
+    /// Pin the global --corpus, --inventory, --entities and --ontology as a run at ROOT.
     Open {
         root: PathBuf,
         #[arg(long)]
@@ -105,8 +111,8 @@ enum LoopCommand {
         panel: Vec<String>,
     },
     /// Run one round of the run at ROOT. The stores are read only from the
-    /// run's record: the global --corpus, --inventory and --entities are not
-    /// read. Encode prompts are written first; once they are answered a rerun
+    /// run's record: the global --corpus, --inventory, --entities and --ontology
+    /// are not read. Encode prompts are written first; once they are answered a rerun
     /// writes the lowering prompts. The command exits 3 each time until every
     /// prompt has an answer.
     Round {
@@ -192,6 +198,28 @@ enum EntityCommand {
     /// Admit an entity, or append forms to a stored one.
     Put(Box<PutArgs>),
     /// Text projection of the entity store for review; not a store.
+    Dump,
+}
+
+#[derive(Subcommand)]
+enum OntologyCommand {
+    /// Admit a model's ontology draft (a JSON file) for one language as a
+    /// batch, numbered from the language's latest plus one and annotated as
+    /// the model that drafted it.
+    Admit {
+        answer: PathBuf,
+        #[arg(long)]
+        language: String,
+        /// The inventory revision the draft's conditions are read at.
+        #[arg(long)]
+        inventory_rev: u32,
+        #[arg(long)]
+        model_family: ModelFamilyArg,
+        /// The attestation string naming the drafting model.
+        #[arg(long)]
+        generator: String,
+    },
+    /// Text projection of the ontology for review; not a store.
     Dump,
 }
 
@@ -648,6 +676,48 @@ fn main() -> Result<()> {
                 println!("{} {:?}\n  forms: {:?}", e.id, e.origin, e.forms);
             }
         }
+        Command::Ontology(OntologyCommand::Admit {
+            answer,
+            language,
+            inventory_rev,
+            model_family,
+            generator,
+        }) => {
+            let text = std::fs::read_to_string(&answer).context("the draft would not read")?;
+            let draft = OntologyDraft::parse(&text)?;
+            let mut store = OntologyStore::open(&cli.ontology)?;
+            let first = store
+                .all()?
+                .iter()
+                .filter(|e| e.language == language)
+                .map(|e| e.n)
+                .max()
+                .unwrap_or(0)
+                + 1;
+            let annotator = Annotator::Model {
+                family: model_family.into(),
+                generator,
+            };
+            let entries = draft.into_entries(&language, inventory_rev, first, &annotator);
+            let count = entries.len();
+            let inventory = InventoryStore::open(&cli.inventory)?;
+            let outcome = store.admit(entries, &inventory).map_err(refused)?;
+            println!("{outcome:?} {count} entries of {language}");
+        }
+        Command::Ontology(OntologyCommand::Dump) => {
+            for e in OntologyStore::open(&cli.ontology)?.all()? {
+                println!(
+                    "{} {} rev:{} {:?}\n  when: {:?}\n  {}\n  e.g. {:?}",
+                    e.key(),
+                    e.layer.name(),
+                    e.inventory_rev,
+                    e.annotator,
+                    e.when,
+                    e.choice,
+                    e.examples
+                );
+            }
+        }
         Command::Inventory(InventoryCommand::Seed) => {
             let (rev, entries) = seed();
             let count = entries.len();
@@ -779,6 +849,7 @@ fn main() -> Result<()> {
                     corpus: &cli.corpus,
                     inventory: &cli.inventory,
                     entities: &cli.entities,
+                    ontology: &cli.ontology,
                 },
                 &answerer,
                 &embed_model,

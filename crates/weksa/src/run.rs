@@ -47,7 +47,8 @@ use crate::packet::{Packet, Stance};
 use crate::score::{CHRF_VERSION, chrf, Embedder, ItemScore, ScoreInput, Scorer, SplitMean, aggregate};
 use crate::split::{Split, SplitScheme, fnv1a64, fnv1a64_of, hex16};
 use crate::store::{
-    CorpusStore, EntityStore, InventoryStore, PacketStore, StoreError, open_cache_over,
+    CorpusStore, EntityStore, InventoryStore, OntologyStore, PacketStore, StoreError,
+    check_ontology_entry, open_cache_over,
 };
 use crate::validate::LoweringInput;
 
@@ -55,7 +56,9 @@ use crate::validate::LoweringInput;
 /// whose scheme and digest function decide which lines the prompt holds as
 /// Train and name every prompt, then `lower.rs`, whose `EntityForms` port and
 /// `entity()` the lowering prompt reads, then `packet.rs`, whose serde
-/// shapes the lowering prompt prints as the packet. Each file enters the digest
+/// shapes the lowering prompt prints as the packet, then `ontology.rs`, whose
+/// entry shape and `select` decide which ontology lines the lowering prompt
+/// prints. Each file enters the digest
 /// behind its length, so the parts cannot be re-cut into other parts with the
 /// same digest. Any edit to any of them, comments included, ends a run; code
 /// outside those files is not covered.
@@ -64,6 +67,7 @@ pub const PROMPT_SOURCE_DIGEST: u64 = fnv1a64_of(&[
     include_bytes!("split.rs"),
     include_bytes!("lower.rs"),
     include_bytes!("packet.rs"),
+    include_bytes!("ontology.rs"),
 ]);
 
 /// The least composite gain an edit must show over item noise to be kept, and
@@ -125,6 +129,13 @@ pub struct RunRecord {
     /// language is never offered, minted from, probed or scored.
     #[cultcache(key = 14)]
     pub panel: Vec<String>,
+    /// Canonical absolute path of the ontology store: read-only for the run,
+    /// pinned by `ontology_digest`.
+    #[cultcache(key = 15)]
+    pub ontology: String,
+    /// 16 hex of the ontology file's bytes.
+    #[cultcache(key = 16)]
+    pub ontology_digest: String,
 }
 
 /// How a run's lowering prompts reach the model that answers them (rulings
@@ -429,6 +440,7 @@ impl RoundRecord {
 pub enum DriftOf {
     Corpus,
     Entities,
+    Ontology,
     Prompts,
     Model,
     Embedder,
@@ -464,6 +476,9 @@ pub enum RunError {
     /// The panel is empty, repeats or misspells a language, or names one with no
     /// live Train or Validation item in the pinned corpus.
     Panel,
+    /// An ontology entry of a panel language does not read against the run's
+    /// head inventory at its revision.
+    Ontology,
 }
 
 impl fmt::Display for RunError {
@@ -473,7 +488,7 @@ impl fmt::Display for RunError {
             RunError::NoRun => f.write_str("the root holds no run"),
             RunError::Malformed(what) => write!(f, "malformed {what}"),
             RunError::Drift(DriftOf::Prompts) => f.write_str(
-                "drift in Prompts (the prompt source digest covers context.rs, split.rs, lower.rs and packet.rs)",
+                "drift in Prompts (the prompt source digest covers context.rs, split.rs, lower.rs, packet.rs and ontology.rs)",
             ),
             RunError::Drift(of) => write!(f, "drift in {of:?}"),
             RunError::NoInventory => f.write_str("the inventory holds no revision"),
@@ -485,6 +500,9 @@ impl fmt::Display for RunError {
             RunError::Embed => f.write_str("the embedder failed"),
             RunError::NoFloor => f.write_str("the run has no noise floor: record two rounds first"),
             RunError::NoValidation => f.write_str("a reading has no validation item"),
+            RunError::Ontology => f.write_str(
+                "an ontology entry of a panel language does not read against the run's inventory",
+            ),
             RunError::Panel => f.write_str(
                 "the panel is empty, repeats or misspells a language, or names one with no live Train or Validation item",
             ),
@@ -500,12 +518,13 @@ impl fmt::Debug for RunError {
 
 impl std::error::Error for RunError {}
 
-/// The three stores a run pins.
+/// The four stores a run pins.
 #[derive(Clone, Copy)]
 pub struct RunPaths<'a> {
     pub corpus: &'a Path,
     pub inventory: &'a Path,
     pub entities: &'a Path,
+    pub ontology: &'a Path,
 }
 
 /// A run's open stores, reopened only from its record. The one public producer
@@ -517,6 +536,7 @@ pub struct RunStores {
     corpus: CorpusStore,
     inventory: InventoryStore,
     entities: EntityStore,
+    ontology: OntologyStore,
 }
 
 /// The run's own copy of the inventory, made at `create`.
@@ -529,6 +549,9 @@ fn check_pins(cache: &CultCache, root: &Path, record: &RunRecord) -> Result<(), 
     }
     if file_digest(&record.entities).as_ref() != Some(&record.entity_digest) {
         return Err(RunError::Drift(DriftOf::Entities));
+    }
+    if file_digest(&record.ontology).as_ref() != Some(&record.ontology_digest) {
+        return Err(RunError::Drift(DriftOf::Ontology));
     }
     let (path, digest, _) = head_of(cache, root, record)?;
     if file_digest_at(&path).as_ref() != Some(&digest) {
@@ -663,6 +686,8 @@ impl RunStores {
             corpus: canonical(paths.corpus)?,
             inventory: canonical(paths.inventory)?,
             entities: canonical(paths.entities)?,
+            ontology: canonical(paths.ontology)?,
+            ontology_digest: String::new(),
             corpus_digest: String::new(),
             entity_digest: String::new(),
             prompt_digest: hex16(PROMPT_SOURCE_DIGEST),
@@ -684,11 +709,13 @@ impl RunStores {
                 corpus_digest: file_digest(&record.corpus).ok_or(RunError::Store)?,
                 entity_digest: file_digest(&record.entities).ok_or(RunError::Store)?,
                 inventory_digest: file_digest_at(&head).ok_or(RunError::Store)?,
+                ontology_digest: file_digest(&record.ontology).ok_or(RunError::Store)?,
                 ..record
             };
             between();
             let mut run = Self::with(root, cache, record)?;
             run.check_panel()?;
+            run.check_ontology()?;
             // The stores were read between the digests: unless they still match
             // the pins, what was opened is not what was pinned. Nothing is
             // recorded for a run that did not pin.
@@ -739,6 +766,7 @@ impl RunStores {
             corpus: CorpusStore::open(Path::new(&record.corpus)).map_err(store)?,
             inventory: InventoryStore::open(&head).map_err(store)?,
             entities: EntityStore::open(Path::new(&record.entities)).map_err(store)?,
+            ontology: OntologyStore::open(Path::new(&record.ontology)).map_err(store)?,
             cache,
             record,
         })
@@ -746,6 +774,18 @@ impl RunStores {
 
     pub fn record(&self) -> &RunRecord {
         &self.record
+    }
+
+    /// Every ontology entry of a panel language reads against the run's head
+    /// inventory at its own revision: the check the store applied at admission,
+    /// applied again to this inventory.
+    fn check_ontology(&self) -> Result<(), RunError> {
+        let inventory = self.inventory.inventory().map_err(|_| RunError::Store)?;
+        let entries = self.ontology.all().map_err(|_| RunError::Store)?;
+        entries
+            .iter()
+            .filter(|e| self.record.panel.contains(&e.language))
+            .try_for_each(|e| check_ontology_entry(e, &inventory).map_err(|_| RunError::Ontology))
     }
 
     /// Every panel language holds a live Train and a live Validation item.
@@ -1171,7 +1211,9 @@ impl RunStores {
     /// Train and Validation packet of plain round `n`, per panel language, asks the lowerer again
     /// (`model`, the replay), with the packet's stance emptied (drop) and with
     /// the next item's stance in its split (permute), and reads how far the
-    /// lowering moves against the round's own answer (`recorded`). Test and
+    /// lowering moves against the round's own answer (`recorded`). The variant
+    /// stance also changes which ontology entries are selected, so the figure is
+    /// the stance's whole effect on the lowering, packet and ontology together. Test and
     /// withdrawn items are never asked. Records nothing and writes nothing in
     /// `round-<n>`; the variant stores are rebuilt each call. An answer that
     /// is not a usable lowering drops its pair and is counted in `unusable`.
@@ -1190,6 +1232,7 @@ impl RunStores {
             .find(|r| r.n() == n && r.cycle().is_none())
             .ok_or(RunError::Malformed("round"))?;
         let inventory = self.inventory.inventory().map_err(store)?;
+        let ontology = self.ontology.ontology().map_err(store)?;
 
         let dir = self.ablation_dir(n);
         std::fs::create_dir_all(&dir).map_err(|e| RunError::Io(e.kind()))?;
@@ -1242,7 +1285,14 @@ impl RunStores {
                     let view = stores[slot]
                         .admit(packet, &self.inventory, &self.corpus, &self.entities)
                         .map_err(|_| RunError::Store)?;
-                    Prompt::lower(&view, &packet_item, &item.language, &inventory, &self.entities)
+                    Prompt::lower(
+                        &view,
+                        &packet_item,
+                        &item.language,
+                        &inventory,
+                        &self.entities,
+                        &ontology,
+                    )
                         .map_err(|_| RunError::Store)
                 };
                 let base = prompt_of(0, packet.clone())?;
@@ -1444,6 +1494,7 @@ fn score_round<M: ModelPort, E: Embedder>(
 ) -> Result<RoundOutcome, RunError> {
     let store = |_| RunError::Store;
     let inventory = inventory_store.inventory().map_err(store)?;
+    let ontology = run.ontology.ontology().map_err(store)?;
     let rev = inventory.latest().ok_or(RunError::NoInventory)?.n;
 
     let train = run.train().map_err(store)?;
@@ -1524,7 +1575,7 @@ fn score_round<M: ModelPort, E: Embedder>(
         // Each item is lowered in its own language: the only reference the
         // scorer has is the item's own text.
         let language = &items[*at].language;
-        let Ok(prompt) = Prompt::lower(view, id, language, &inventory, &run.entities) else {
+        let Ok(prompt) = Prompt::lower(view, id, language, &inventory, &run.entities, &ontology) else {
             fates[*at] = Fate::Refused(Stage::Lower, Some(packet_key.clone()));
             continue;
         };
@@ -2725,6 +2776,8 @@ mod tests {
             lowerer_reach: LowererReach::ToolLessRelay,
             answerer_family: ModelFamily::Unrecorded,
             panel: vec!["en-US".into()],
+            ontology: String::new(),
+            ontology_digest: String::new(),
         }
     }
 
@@ -2915,6 +2968,8 @@ mod tests {
                 copy("inventory.cc", "i.cc"),
                 copy("entity.cc", "e.cc"),
             );
+            let ontology = dir.path().join("o.cc");
+            fs::write(&ontology, [0x90]).unwrap();
             let root = dir.path().join("run");
             let mut run = RunStores::create(
                 &root,
@@ -2923,6 +2978,7 @@ mod tests {
                     corpus: &corpus,
                     inventory: &inventory,
                     entities: &entities,
+                    ontology: &ontology,
                 },
                 "fake-model",
                 "bag",

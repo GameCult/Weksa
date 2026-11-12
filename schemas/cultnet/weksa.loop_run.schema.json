@@ -49,6 +49,14 @@
       "description": "The answering model.",
       "type": "string"
     },
+    "ontology": {
+      "description": "Canonical absolute path of the ontology store: read-only for the run,\npinned by `ontology_digest`.",
+      "type": "string"
+    },
+    "ontology_digest": {
+      "description": "16 hex of the ontology file's bytes.",
+      "type": "string"
+    },
     "panel": {
       "description": "The languages the run offers, reads and decides on: BCP 47-form tags,\nsorted, unique, at least one, set once at open. An item of any other\nlanguage is never offered, minted from, probed or scored.",
       "type": "array",
@@ -73,7 +81,9 @@
     "chrf_version",
     "inventory_digest",
     "lowerer_reach",
-    "panel"
+    "panel",
+    "ontology",
+    "ontology_digest"
   ],
   "$defs": {
     "LowererReach": {

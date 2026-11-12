@@ -114,6 +114,15 @@ pub fn entities_in(dir: &std::path::Path) -> EntityStore {
     store
 }
 
+/// An empty ontology store at `<dir>/ontology.cc`, made if absent.
+pub fn ontology_in(dir: &std::path::Path) -> std::path::PathBuf {
+    let path = dir.join("ontology.cc");
+    if !path.exists() {
+        std::fs::write(&path, [0x90]).unwrap();
+    }
+    path
+}
+
 /// A run over the stores `world()` and `corpus()` keep in `dir`: `c.cc`,
 /// `i.cc` and `entities.cc`. Read at the call, so create it after the items.
 /// The run's en-US panel needs a live Train and a live Validation item: a
@@ -125,6 +134,7 @@ pub fn run_over(dir: &std::path::Path) -> weksa::run::RunStores {
         }
     }
     let entities = entities_in(dir);
+    ontology_in(dir);
     let mut corpus = CorpusStore::open(&dir.join("c.cc")).unwrap();
     for (n, split) in [(1, weksa::Split::Train), (2, weksa::Split::Validation)] {
         let held = corpus
@@ -147,6 +157,7 @@ pub fn run_over(dir: &std::path::Path) -> weksa::run::RunStores {
             corpus: &dir.join("c.cc"),
             inventory: &dir.join("i.cc"),
             entities: &dir.join("entities.cc"),
+            ontology: &dir.join("ontology.cc"),
         },
         "fake-model",
         "bag",
@@ -230,6 +241,7 @@ pub fn world() -> World {
     let dir = tempfile::tempdir().unwrap();
     let mut corpus = CorpusStore::open(&dir.path().join("c.cc")).unwrap();
     let entities = entities_in(dir.path());
+    ontology_in(dir.path());
     let train = group_in_bucket(10);
     let mut first = item_in("item:nibu:1", "Nibu says mind the hatch.", &train, cast());
     first.names = vec![NameSpan {
