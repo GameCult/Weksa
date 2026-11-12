@@ -35,9 +35,10 @@ use serde::Serialize;
 use crate::corpus::{CorpusItem, CorpusItemId};
 use crate::inventory::{Inventory, InventoryEntry, OptionLabel, Slot, ValueKind};
 use crate::lower::{EntityForms, LowerError, entity};
-use crate::ontology::{Ontology, select};
+use crate::encode::{EntryOntologyDraft, OntologyDraft};
+use crate::ontology::{Condition, Layer, Ontology, Test, select};
 use crate::packet::{
-    Context, Discourse, EntityId, Extension, Predication, Referent, Relation, Stance,
+    Context, Discourse, EntityId, Extension, FeatValue, Grade, Predication, Referent, Relation, Stance,
 };
 use crate::run::LADDER_STEP;
 use crate::split::{Checkpoint, Split, SplitScheme, fnv1a64, hex16};
@@ -92,7 +93,7 @@ Answer with one JSON object and nothing else: {\"text\": \"...\"}, the continuat
 pub const MINT_ONTOLOGY_INSTRUCTIONS: &str = "\
 Below are lines written in one language (the language line), the features an ontology condition may test, and the entries that language's ontology already has. Draft new entries: choices this language's culture makes, for a speaker in a stance and scene, about word, grammar, discourse, sound or script, that the lines show.
 Answer with one JSON object and nothing else: {\"entries\": [{\"layer\": \"...\", \"when\": [...], \"choice\": \"...\", \"examples\": [...]}]}. No code fence, no commentary.
-Give 1 to 8 entries. layer is one of lexicon, grammar, discourse, phonology, orthography. when holds at most 4 conditions, each {\"slot\": \"Stance\" | \"Discourse\" | \"Scene\", \"feature\": \"<id>\", \"test\": {\"AtLeast\": <permille>} | {\"AtMost\": <permille>} | {\"AtMostOrUnset\": <permille>} | {\"Is\": <value>}}, over the listed feature ids only; when may be empty when a choice holds for every line of the language. choice states a pattern the lines show, in at most 200 bytes, without quoting a line. examples are original short phrases of the language, never copied from the lines below, at most 3.";
+Give 1 to 8 entries. layer is exactly one of Lexicon, Grammar, Discourse, Phonology, Orthography. when holds at most 4 conditions, each {\"slot\": \"Stance\" | \"Discourse\" | \"Scene\", \"feature\": \"<id>\", \"test\": ...}, where <id> is the id printed before the colon of a listed feature (\"feature:10\", never its name) and its slot is one that feature lists. test is {\"AtLeast\": <permille>}, {\"AtMost\": <permille>} or {\"AtMostOrUnset\": <permille>} on a grade feature, or {\"Is\": {\"Option\": \"<label>\"}} on an options feature with one of its labels, or {\"Is\": {\"Flag\": true}} on a flag feature. The example line shows each form on listed features; its choice and examples are placeholders, not content to copy. when may be empty when a choice holds for every line of the language. choice states a pattern the lines show, in at most 200 bytes, without quoting a line. examples are original short phrases of the language, never copied from the lines below, at most 3, each at most 120 bytes.";
 
 /// The live Train items of a corpus, in key order. The only input minting
 /// reads; it cannot be built from a slice, and no accessor returns text or an
@@ -466,6 +467,53 @@ fn entry_line(entry: &InventoryEntry) -> String {
     line
 }
 
+/// The slot a condition on `entry` reads it in: the first of its slots a
+/// lowering view carries.
+fn condition_slot(entry: &InventoryEntry) -> Option<Slot> {
+    entry
+        .applies_to
+        .iter()
+        .copied()
+        .find(|s| matches!(s, Slot::Stance | Slot::Discourse | Slot::Scene))
+}
+
+/// One entry in the form the admit door reads, serialized from its own draft
+/// type so the taught shape cannot drift from the door: a condition on the
+/// first listed grade, options and flag feature each, over placeholder text.
+fn mint_example(readable: &[&InventoryEntry]) -> String {
+    let when = [
+        readable.iter().find(|e| e.value_kind == Some(ValueKind::Grade)).map(|e| {
+            (e, Test::AtLeast(Grade::new(500).expect("500 is a permille")))
+        }),
+        readable.iter().find_map(|e| match &e.value_kind {
+            Some(ValueKind::Options(set)) => {
+                let first = Vec::<OptionLabel>::from(set.clone()).remove(0);
+                Some((e, Test::Is(FeatValue::Option(first))))
+            }
+            _ => None,
+        }),
+        readable
+            .iter()
+            .find(|e| e.value_kind == Some(ValueKind::Flag))
+            .map(|e| (e, Test::Is(FeatValue::Flag(true)))),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(|(e, test)| {
+        Some(Condition { slot: condition_slot(e)?, feature: e.id, test })
+    })
+    .collect();
+    let draft = OntologyDraft {
+        entries: vec![EntryOntologyDraft {
+            layer: Layer::Grammar,
+            when,
+            choice: "a pattern the lines show".into(),
+            examples: vec!["a short phrase of your own".into()],
+        }],
+    };
+    serde_json::to_string(&draft).expect("a draft serializes")
+}
+
 /// Each entry of `inventory` live at `rev`, one `\n` and one line apiece: the
 /// listing both prompts print under `inventory rev:<rev>`.
 fn inventory_lines(inventory: &Inventory, rev: u32) -> String {
@@ -534,17 +582,11 @@ impl Prompt {
         if items.is_empty() {
             return None;
         }
-        let features: String = inventory
+        let readable: Vec<&InventoryEntry> = inventory
             .entries()
-            .filter(|e| {
-                e.live_at(rev)
-                    && e.value_kind.is_some()
-                    && e.applies_to
-                        .iter()
-                        .any(|s| matches!(s, Slot::Stance | Slot::Discourse | Slot::Scene))
-            })
-            .map(|e| format!("\n{}", entry_line(e)))
+            .filter(|e| e.live_at(rev) && e.value_kind.is_some() && condition_slot(e).is_some())
             .collect();
+        let features: String = readable.iter().map(|e| format!("\n{}", entry_line(e))).collect();
         let existing: String = ontology
             .entries()
             .iter()
@@ -556,6 +598,7 @@ impl Prompt {
             format!("language: {language}"),
             format!("features rev:{rev}{features}"),
             format!("entries{existing}"),
+            format!("example {}", mint_example(&readable)),
         ];
         parts.extend(items.iter().map(|item| block(item, None)));
         Some(Prompt {

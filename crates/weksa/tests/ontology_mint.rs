@@ -56,6 +56,7 @@ const REF_ONLY: &str = "feature:62";
 const PRED_ONLY: &str = "feature:63";
 const STANCE_RETIRED: &str = "feature:64";
 const SCENE_G: &str = "feature:65";
+const SCENE_OPT: &str = "feature:66";
 
 /// A fixture: items in en-US and ja-JP across every split and a withdrawal, an
 /// inventory with condition-readable and unreadable features, an ontology with
@@ -94,6 +95,7 @@ fn fixture(dir: &Path, panel: &[&str]) -> RunStores {
         f(PRED_ONLY, ValueKind::Grade, &[Slot::Predication]),
         f(STANCE_RETIRED, ValueKind::Grade, &[Slot::Stance]),
         f(SCENE_G, ValueKind::Grade, &[Slot::Scene]),
+        f(SCENE_OPT, ValueKind::Options(weksa::OptionSet::new(vec![weksa::OptionLabel::parse("below").unwrap(), weksa::OptionLabel::parse("above").unwrap()]).unwrap()), &[Slot::Scene]),
     ];
     let changes = features.iter().map(|e| Change::Add(e.id)).collect();
     let mut features = features;
@@ -359,4 +361,42 @@ fn a_mint_answer_admits_into_a_copy_and_a_new_run_pins_the_copy() {
         .into_entries("en-US", 3, 9, &annotator);
     let mut grown = OntologyStore::open(&copy).unwrap();
     assert!(grown.admit(entries, &inv).is_err());
+}
+
+/// The line after `example ` in a mint prompt.
+fn example_of(text: &str) -> &str {
+    text.lines().find_map(|l| l.strip_prefix("example ")).expect("the prompt carries an example")
+}
+
+#[test]
+fn the_mint_prompts_own_example_parses_and_admits_through_the_door() {
+    let dir = tempfile::tempdir().unwrap();
+    let run = fixture(dir.path(), &["en-US"]);
+    let mut m = Record::new(DRAFT);
+    run.mint_ontology(&mut m, "en-US").unwrap();
+    let example = example_of(&m.prompts[0].0);
+    // It teaches the door's spelling: a capitalized layer, feature ids, each test form.
+    assert!(example.contains(r#""layer":"Grammar""#), "{example}");
+    for form in [r#"{"AtLeast":500}"#, r#"{"Is":{"Option":"#, r#"{"Is":{"Flag":true}}"#] {
+        assert!(example.contains(form), "{form} in {example}");
+    }
+    let draft = weksa::encode::OntologyDraft::parse(example).unwrap();
+    let inv = InventoryStore::open(&dir.path().join("i.cc")).unwrap();
+    let copy = dir.path().join("grown.cc");
+    std::fs::copy(dir.path().join("ontology.cc"), &copy).unwrap();
+    let mut grown = OntologyStore::open(&copy).unwrap();
+    let annotator = Annotator::Model { family: ModelFamily::Anthropic, generator: "minter".into() };
+    grown.admit(draft.into_entries("en-US", 3, 2, &annotator), &inv).unwrap();
+}
+
+#[test]
+fn the_mint_example_names_only_features_the_prompt_lists() {
+    let dir = tempfile::tempdir().unwrap();
+    let run = fixture(dir.path(), &["en-US"]);
+    let mut m = Record::new(DRAFT);
+    run.mint_ontology(&mut m, "en-US").unwrap();
+    let example = example_of(&m.prompts[0].0);
+    for unreadable in [REF_ONLY, PRED_ONLY, STANCE_RETIRED] {
+        assert!(!example.contains(unreadable), "{unreadable}");
+    }
 }
