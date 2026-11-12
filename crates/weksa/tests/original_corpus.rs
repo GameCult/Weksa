@@ -961,14 +961,18 @@ fn committed_scenes_cover_original_groups() {
     }
 }
 
-/// ja-JP seed entries :4 to :8 over the stance and discourse grades that bear on
-/// them (hedge, certainty, sadness, affection, restraint, each also ABSENT):
-/// the pairs that gave opposed instructions (hedge against certainty,
-/// particles, final force) never hold together; and each of :5, :7, :8 still
-/// fires where it should (hedged at certainty 700-799, affection with certainty
-/// or restraint unrated), so a tightened bound does not pass as a disjoint one.
-#[test]
-fn ja_seed_pairs_never_co_select() {
+/// The sweep both seed-pair tests share: over a grid of grades per feature (each
+/// also ABSENT) and the production `Condition::holds`, no listed pair of one
+/// language's entries co-holds; and each witness entry fires where it should and
+/// stays silent where it should, so a tightened or dropped bound does not pass
+/// as a disjoint one. `glosses` names the swept features, in point order.
+fn sweep_seed_pairs<const N: usize>(
+    language: &str,
+    glosses: [&str; N],
+    pairs: &[(u32, u32)],
+    fires: &[(u32, [Option<u16>; N])],
+    silent: &[(u32, [Option<u16>; N])],
+) {
     use weksa::inventory::Slot;
     use weksa::ontology::{Condition, Test};
     use weksa::OntologyStore;
@@ -978,18 +982,18 @@ fn ja_seed_pairs_never_co_select() {
     std::fs::copy(data.join("ontology/ontology.cc"), &onto).unwrap();
     let inv = InventoryStore::open(&data.join("original/inventory.cc")).unwrap().inventory().unwrap();
     let id = |gloss: &str| inv.entries().find(|e| e.gloss == gloss).unwrap().id;
-    let feats = [id("hedge"), id("certainty"), id("sadness"), id("affection"), id("restraint")];
+    let feats = glosses.map(id);
     let entries = OntologyStore::open(&onto).unwrap().all().unwrap();
-    let ja = |n: u32| {
+    let entry = |n: u32| {
         entries
             .iter()
-            .find(|e| e.language == "ja-JP" && e.n == n)
-            .unwrap_or_else(|| panic!("onto:ja-JP:{n} is absent"))
+            .find(|e| e.language == language && e.n == n)
+            .unwrap_or_else(|| panic!("onto:{language}:{n} is absent"))
     };
-    type Point = [Option<u16>; 5];
+    type Point<const N: usize> = [Option<u16>; N];
     // The production evaluator over the slot's feature values: absent features
     // are left out of the list, as a view leaves them out.
-    let holds = |e: &weksa::OntologyEntry, point: &Point| {
+    let holds = |e: &weksa::OntologyEntry, point: &Point<N>| {
         use weksa::packet::{FeatValue, FeatureValue, Grade};
         e.when.iter().all(|c: &Condition| {
             assert!(matches!(c.slot, Slot::Stance | Slot::Discourse), "{}", e.key());
@@ -1010,43 +1014,94 @@ fn ja_seed_pairs_never_co_select() {
         })
     };
     let grid = [None, Some(0u16), Some(300), Some(500), Some(599), Some(600), Some(700), Some(799), Some(800), Some(1000)];
-    let pairs = [(5, 6), (4, 7), (6, 7), (6, 8)];
-    for p in 0..grid.len().pow(5) {
-        let point: Point = std::array::from_fn(|i| grid[p / grid.len().pow(i as u32) % grid.len()]);
-        for (a, b) in pairs {
+    for p in 0..grid.len().pow(N as u32) {
+        let point: Point<N> = std::array::from_fn(|i| grid[p / grid.len().pow(i as u32) % grid.len()]);
+        for &(a, b) in pairs {
             assert!(
-                !(holds(ja(a), &point) && holds(ja(b), &point)),
-                "onto:ja-JP:{a} and :{b} co-select at (hedge, certainty, sadness, affection, restraint) = {point:?}"
+                !(holds(entry(a), &point) && holds(entry(b), &point)),
+                "onto:{language}:{a} and :{b} co-select at {glosses:?} = {point:?}"
             );
         }
     }
-    // Reach: each entry fires at its witnesses and not just outside its core.
-    let (n, s) = (None, Some);
-    let fires: [(u32, Point); 9] = [
-        (5, [s(600), n, n, n, n]),
-        (5, [s(700), s(799), n, n, n]),
-        (5, [s(700), n, n, n, n]),
-        (7, [n, s(799), n, s(700), s(599)]),
-        (7, [n, n, n, s(700), n]),
-        (7, [s(1000), s(0), s(1000), s(600), s(0)]),
-        (8, [n, s(799), s(700), n, s(700)]),
-        (8, [n, n, s(600), n, s(600)]),
-        (6, [n, s(800), n, n, n]),
-    ];
     for (e, point) in fires {
-        assert!(holds(ja(e), &point), "onto:ja-JP:{e} does not fire at {point:?}");
+        assert!(holds(entry(*e), point), "onto:{language}:{e} does not fire at {point:?}");
     }
-    let silent: [(u32, Point); 6] = [
-        (8, [n, n, s(599), n, s(700)]),
-        (8, [n, n, n, n, s(700)]),
-        (5, [s(599), n, n, n, n]),
-        (7, [n, n, n, s(599), n]),
-        (7, [n, n, n, s(700), s(600)]),
-        (8, [n, n, s(600), n, s(599)]),
-    ];
     for (e, point) in silent {
-        assert!(!holds(ja(e), &point), "onto:ja-JP:{e} fires at {point:?}");
+        assert!(!holds(entry(*e), point), "onto:{language}:{e} fires at {point:?}");
     }
+}
+
+/// ja-JP seed entries :4 to :8 over the stance and discourse grades that bear on
+/// them (hedge, certainty, sadness, affection, restraint): the pairs that gave
+/// opposed instructions (hedge against certainty, particles, final force) never
+/// hold together; and each of :5, :7, :8 still fires where it should (hedged at
+/// certainty 700-799, affection with certainty or restraint unrated).
+#[test]
+fn ja_seed_pairs_never_co_select() {
+    let (n, s) = (None, Some);
+    sweep_seed_pairs(
+        "ja-JP",
+        ["hedge", "certainty", "sadness", "affection", "restraint"],
+        &[(5, 6), (4, 7), (6, 7), (6, 8)],
+        &[
+            (5, [s(600), n, n, n, n]),
+            (5, [s(700), s(799), n, n, n]),
+            (5, [s(700), n, n, n, n]),
+            (7, [n, s(799), n, s(700), s(599)]),
+            (7, [n, n, n, s(700), n]),
+            (7, [s(1000), s(0), s(1000), s(600), s(0)]),
+            (8, [n, s(799), s(700), n, s(700)]),
+            (8, [n, n, s(600), n, s(600)]),
+            (6, [n, s(800), n, n, n]),
+        ],
+        &[
+            (8, [n, n, s(599), n, s(700)]),
+            (8, [n, n, n, n, s(700)]),
+            (5, [s(599), n, n, n, n]),
+            (7, [n, n, n, s(599), n]),
+            (7, [n, n, n, s(700), s(600)]),
+            (8, [n, n, s(600), n, s(599)]),
+        ],
+    );
+}
+
+/// en-US seed entries :3, :5, :6, :8 over anger, restraint, hedge, certainty and
+/// affection: blunt anger never holds with a hedge or affection entry, and a
+/// hedge never holds with a flatly certain line, so the pairs that gave opposed
+/// instructions (no cushioning against softening, hedge against no hedge) are
+/// disjoint by condition; each of :3, :5, :6, :8 fires and stays silent at its
+/// witnesses, so a dropped or tightened bound does not pass as a disjoint one.
+/// :6 against the Scene entry :10 is kept apart by scoping in the text only.
+#[test]
+fn en_us_seed_pairs_never_co_select() {
+    let (n, s) = (None, Some);
+    sweep_seed_pairs(
+        "en-US",
+        ["anger", "restraint", "hedge", "certainty", "affection"],
+        &[(3, 5), (3, 8), (5, 6)],
+        &[
+            (3, [s(600), s(300), n, n, n]),
+            (3, [s(600), s(300), s(599), n, s(599)]),
+            (3, [s(1000), s(0), s(0), s(799), s(0)]),
+            (5, [n, n, s(600), n, n]),
+            (5, [n, n, s(700), s(799), n]),
+            (5, [s(1000), s(1000), s(600), n, n]),
+            (6, [n, n, n, s(800), n]),
+            (8, [n, n, n, n, s(600)]),
+            (8, [s(1000), s(0), n, n, s(600)]),
+        ],
+        &[
+            (3, [s(600), s(300), s(600), n, n]),
+            (3, [s(600), s(300), n, n, s(600)]),
+            (3, [s(599), s(300), n, n, n]),
+            (3, [s(600), s(301), n, n, n]),
+            (3, [s(600), n, n, n, n]),
+            (5, [n, n, s(599), n, n]),
+            (5, [n, n, s(700), s(800), n]),
+            (6, [n, n, n, s(799), n]),
+            (8, [n, n, n, n, s(599)]),
+        ],
+    );
 }
 
 /// The committed ontology's Scene-conditioned entries, over every scene relation
