@@ -90,11 +90,11 @@ The language ontology is `data/ontology/ontology.cc` (read it with
 reads for a stance, a discourse and a scene relation. Only an entry with a Scene condition names an
 address or politeness level; the relation, from `data/original/speaker-state.cc`, picks it. Its
 en-US and ja-JP entries and the keeper scenes are model-drafted or model-annotated, never Test evidence. Nothing yet grows them from accepted
-rounds; until that mint exists they change only by a new `weksa ontology admit`. ja-JP holds Scene
-entries for a below-status addressee and for same-level out-group and in-group intimate relations
-(`onto:ja-JP:10` to `:13`); it holds none for an above-status speaker, because a paired measure found
-the two that did made the lowerer match the reference register less often, and they are withdrawn
-until a native reader attests them.
+rounds; until that mint exists they change only by a new `weksa ontology admit`. ja-JP holds Scene entries `onto:ja-JP:10` to `:13`. It holds none for an above-status out-group
+addressee, and none for an above-status in-group addressee below intimacy 700 (`:12` still selects
+an in-group addressee at intimacy 700 or more, whatever the status). Two entries for the above-status
+cases were withdrawn: a paired measure found they made the lowerer match the reference register less
+often, and they stay out until a native reader attests them.
 
 For the first AquaSynth speech-training handoff, see
 [Tiny PanPhon v0.1 Speech Curriculum](./examples/speech-training/tiny-panphon-v0.1/README.md).

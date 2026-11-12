@@ -1017,6 +1017,16 @@ fn scene_entries_never_co_select_in_a_layer() {
                         .count();
                     assert_eq!(told, 0, "{rel:?}");
                 }
+                // onto:ja-JP:14's relation (above, in-group, intimacy 600) selects
+                // no ja-JP Scene entry in any layer: :12 needs intimacy 700.
+                if (st, ig, it) == ("above", true, 600) {
+                    let told = entries
+                        .iter()
+                        .filter(|e| e.language == "ja-JP")
+                        .filter(|e| e.when.iter().any(|c| c.slot == Slot::Scene) && selects(e, rel))
+                        .count();
+                    assert_eq!(told, 0, "{rel:?}");
+                }
             }
         }
     }
