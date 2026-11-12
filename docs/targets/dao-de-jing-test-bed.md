@@ -20,7 +20,7 @@ plus a separately recorded chosen gloss per lowering).
   is applied anywhere both meet.
 - Rebuild: `weksa --corpus C --inventory I --entities E` with `inventory seed`,
   `inventory proof`, `inventory dao`, `entity put entity:laozi ...`,
-  `corpus add ... --source public-domain` per item, then `packet dao <store>`.
+  `corpus add ... --language en-US --source public-domain` per item, then `packet dao <store>`.
 - Source: Project Gutenberg eBook 216, "The Tao Teh King, or the Tao and its
   Characteristics", Laozi, tr. James Legge (Sacred Books of the East 39, 1891).
   Gutenberg's licence (1.E.2) lets a work derived from texts not protected by US
