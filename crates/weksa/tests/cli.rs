@@ -1903,3 +1903,26 @@ fn inventory_admit_numbers_a_draft_and_refuses_an_empty_one() {
     let dump = out(&weksa(d.path(), &["inventory", "dump"]));
     assert!(dump.contains("bath_house") && dump.contains("fly_a_kite"), "{dump}");
 }
+
+#[test]
+fn inventory_admit_cap_is_256_and_a_refusal_writes_nothing() {
+    let d = tempfile::tempdir().unwrap();
+    assert!(weksa(d.path(), &["inventory", "seed"]).status.success());
+    let draft = |name: &str, n: usize| {
+        let adds: Vec<String> = (0..n)
+            .map(|i| format!(r#"{{"family":"Concept","gloss":"cap_probe_{i}"}}"#))
+            .collect();
+        let p = d.path().join(name);
+        std::fs::write(&p, format!(r#"{{"add":[{}]}}"#, adds.join(","))).unwrap();
+        p.to_str().unwrap().to_owned()
+    };
+    let before = out(&weksa(d.path(), &["inventory", "dump"]));
+
+    let refused = weksa(d.path(), &["inventory", "admit", &draft("over.json", 257)]);
+    assert!(!refused.status.success(), "{}", out(&refused));
+    assert_eq!(before, out(&weksa(d.path(), &["inventory", "dump"])));
+
+    let admitted = weksa(d.path(), &["inventory", "admit", &draft("cap.json", 256)]);
+    assert!(admitted.status.success(), "{}", out(&admitted));
+    assert!(out(&admitted).contains("admitted rev:2 with 256 entries"));
+}
