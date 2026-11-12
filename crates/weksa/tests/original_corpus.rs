@@ -240,6 +240,51 @@ fn the_first_six_original_items_are_unchanged() {
     }
 }
 
+/// Revision 5 of `data/original/inventory.cc` is the original bed's own
+/// lexicon: concepts and frames drafted by claude-sonnet-5-5 (Weksa Hands,
+/// model-drafted original-bed lexicon from Train and Validation passages) so an
+/// encoder can name baths, kites and persimmons. It is Validation-informed on
+/// purpose: numbers on this bed measure the lowering half (register, scene,
+/// ontology), never inventory generalization or convergence; scored runs use
+/// `data/interlingua`. The Dao De Jing inventory is its revision prefix.
+const ORIGINAL_REV5_ADDS: usize = 233;
+
+#[test]
+fn the_dao_inventory_is_a_prefix_of_the_original_inventory() {
+    use weksa::inventory::{Change, Family};
+    let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
+    let tmp = tempfile::tempdir().unwrap();
+    let open = |name: &str| {
+        let copy = tmp.path().join(format!("{name}.cc"));
+        std::fs::copy(data.join(name).join("inventory.cc"), &copy).unwrap();
+        InventoryStore::open(&copy).unwrap().inventory().unwrap()
+    };
+    let (dao, own) = (open("daodejing"), open("original"));
+    assert_eq!(dao.latest().unwrap().n, 4);
+    let latest = own.latest().unwrap();
+    assert_eq!((latest.n, latest.parent), (5, Some(4)));
+    for n in 1..=4 {
+        let revision = |inv: &weksa::Inventory| inv.revisions().find(|r| r.n == n).cloned();
+        assert_eq!(revision(&dao), revision(&own), "rev {n}");
+    }
+    let mut glosses = std::collections::BTreeSet::new();
+    for e in dao.entries() {
+        assert_eq!(own.entry(&e.id), Some(e), "{}", e.gloss);
+        glosses.insert(e.gloss.clone());
+    }
+    assert_eq!(latest.changes.len(), ORIGINAL_REV5_ADDS);
+    for change in &latest.changes {
+        let Change::Add(id) = change else {
+            panic!("rev 5 retires {change:?}");
+        };
+        let e = own.entry(id).unwrap();
+        assert!(matches!(id.family(), Family::Concept | Family::Frame), "{id}");
+        assert_eq!(e.introduced_rev, 5, "{id}");
+        assert!(glosses.insert(e.gloss.clone()), "{} repeats a gloss", e.gloss);
+    }
+    assert_eq!(own.entries().count(), dao.entries().count() + ORIGINAL_REV5_ADDS);
+}
+
 /// The committed seed ontology: every entry model-drafted, exactly the two
 /// panel languages, each with a Stance-conditioned entry, and every committed
 /// corpus opens a run over it (ruling `ja-ontology-owner-answer`: a model-drafted
@@ -956,6 +1001,16 @@ fn scene_entries_never_co_select_in_a_layer() {
                             e.layer.name()
                         );
                     }
+                }
+                // An above, out-group speaker is told by exactly one ja-JP
+                // Scene-conditioned grammar entry, at every intimacy.
+                if (st, ig) == ("above", false) {
+                    let told = entries
+                        .iter()
+                        .filter(|e| e.language == "ja-JP" && e.layer.name() == "grammar")
+                        .filter(|e| e.when.iter().any(|c| c.slot == Slot::Scene) && selects(e, rel))
+                        .count();
+                    assert_eq!(told, 1, "{rel:?}");
                 }
             }
         }
