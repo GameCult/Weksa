@@ -1287,7 +1287,7 @@ impl OntologyStore {
 /// The rules of one ontology entry against an inventory: the annotator, the
 /// bounded and normalized text of the choice and examples, the condition count
 /// and each condition's feature (slot `Stance`, `Discourse` or `Scene`, a grade
-/// feature for `AtLeast` and `AtMost`, an option or flag value for `Is`) read at
+/// feature for `AtLeast`, `AtMost` and `AtMostOrUnset`, an option or flag value for `Is`) read at
 /// `rev`. The store passes the entry's own `inventory_rev` on admission; a run
 /// passes its inventory's head, because beds number revisions independently.
 pub(crate) fn check_ontology_entry(

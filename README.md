@@ -95,6 +95,7 @@ addressee, and none for an above-status in-group addressee below intimacy 700 (`
 an in-group addressee at intimacy 700 or more, whatever the status). Two entries for the above-status
 cases were withdrawn: a paired measure found they made the lowerer match the reference register less
 often, and they stay out until a native reader attests them.
+ja-JP `:5` (hedging), `:7` (affection) and `:8` (restrained sadness) carry certainty and restraint conditions, through `AtMostOrUnset` bounds (an unrated certainty or restraint does not defeat them), so the hedging, certainty, affection, restraint and sadness entries never co-select on the pairs `:5`/`:6`, `:4`/`:7`, `:6`/`:7` and `:6`/`:8`; the store has no retire, so that was a rebuild of `data/ontology/ontology.cc` with the ja-JP text unchanged.
 
 For the first AquaSynth speech-training handoff, see
 [Tiny PanPhon v0.1 Speech Curriculum](./examples/speech-training/tiny-panphon-v0.1/README.md).
