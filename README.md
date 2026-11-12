@@ -5,7 +5,7 @@ culture, and constraint, and the planned lowerer that turns an agent's
 meaning packet into the reader's display language.
 
 **What is valuable here.** The interlingua standard and the lowering design: a
-meaning packet owns what is meant, a target-language profile owns register,
+meaning packet owns what is meant, speaker and scene state (planned; not yet live) own register,
 address and politeness, and a lowerer owns surface text and leaves a trace.
 
 **The problem it solves.** An agent's outward speech today is one English

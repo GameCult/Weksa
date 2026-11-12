@@ -58,7 +58,7 @@ The utterance lowerer does not own:
 - rendered audio
 - phoneme parity or synth-control truth
 
-The target-language cultural ontology profile owns:
+The target-language cultural ontology profile was drafted to own the following; no such profile store exists now (address, politeness and register belong to speaker and scene state, and `data/ontology/ontology.cc` holds per-language lexicon, grammar and discourse choices):
 
 - address, politeness, register, and social stance distinctions
 - idiom and metaphor risks
