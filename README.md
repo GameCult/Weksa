@@ -28,7 +28,7 @@ measured.
 - [Lowering target](./docs/targets/interlingua-lowering.md) and
   [its map](./docs/targets/interlingua-lowering-map.md): the design, scoring
   and cut sequence.
-- `data/`: the cultural ontology and target-language profile data.
+- `data/`: the committed stores (corpora, entities, inventory, language ontology) and research data; there are no target-language profiles.
 - `settings/`: setting-specific proving grounds for language projects.
 
 **Live versus planned.** Live: docs, fixtures, examples, ontology data and the
@@ -83,8 +83,9 @@ English, Brazilian Portuguese, Japanese, and later target-language dialogue.
 target-specific English receipt.
 
 The language ontology is `data/ontology/ontology.cc` (read it with
-`weksa ontology dump`): per language, the address, register, politeness and script
-choices a lowerer makes for a speaker in a stance. Its en-US and ja-JP entries are
+`weksa ontology dump`): per language, the lexicon, grammar and discourse choices a lowerer
+reads for a stance and discourse packet. The seed sets no address or politeness level; those
+belong to the speaker and scene state. Its en-US and ja-JP entries are
 model-drafted seeds, never Test evidence. Nothing yet grows them from accepted
 rounds; until that mint exists they change only by a new `weksa ontology admit`.
 

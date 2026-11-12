@@ -268,7 +268,7 @@ cultural_ontology_trace:
 No profile store exists. The per-language lowering choices live in
 `data/ontology/ontology.cc` (`weksa ontology dump`); the typed profiles that
 once sat under `.weksa/cultural-ontology/`, and the `weksa.target_cultural_ontology.*`
-base profiles named in the examples below, are deleted. Community and dialect
+base profiles, whose names an example below still carries, are deleted. Community and dialect
 profiles are owned by follow-up `language-ontology-communities`.
 
 Qdrant may store chunks, vectors, and payload filters for retrieval. It does
