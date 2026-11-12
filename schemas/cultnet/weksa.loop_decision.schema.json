@@ -98,10 +98,19 @@
     },
     "Metric": {
       "description": "Which metric an edit regressed.",
-      "type": "string",
-      "enum": [
-        "Chrf",
-        "Meaning"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "Chrf",
+            "Meaning"
+          ]
+        },
+        {
+          "description": "Only the panel rule reads it: [`decide_panel`].",
+          "type": "string",
+          "const": "Composite"
+        }
       ]
     },
     "PanelReading": {

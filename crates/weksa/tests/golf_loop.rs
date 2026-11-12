@@ -4259,6 +4259,15 @@ fn each_item_lowers_in_its_own_language() {
         }
     }
     assert_eq!((ja, en), (3, 3));
+    // No lowering prompt, in either language, holds any item's text, key or group.
+    let corpus = CorpusStore::open(&dao.corpus).unwrap();
+    for text in lowering_texts(&model) {
+        for item in corpus.all().unwrap() {
+            assert!(!text.contains(&item.text), "{}", item.id);
+            assert!(!text.contains(item.id.as_str()), "{}", item.id);
+            assert!(!text.contains(item.group.as_str()), "{}", item.id);
+        }
+    }
     // A ja-JP item is scored against its own text: the lowering that is the
     // text reads as a perfect one.
     let ja = r.language("ja-JP").unwrap();
@@ -4461,8 +4470,17 @@ fn recall_probes_unspaced_lines() {
         let (head, tail) = (shown_opening(prompt), held_back(&item.text, prompt));
         assert!(!head.is_empty() && !tail.is_empty());
         assert_eq!(format!("{head}{tail}"), item.text, "no spaces to lose");
+        let n = item.text.len();
+        assert!((n / 4..=3 * n / 4).contains(&head.len()), "{key}: near the byte middle");
         assert!(!prompt.contains(tail));
     }
+    // The unrelated-text floor was measured for English only: its clause
+    // prints once, on the en-US segment.
+    let line = reading.line();
+    assert_eq!(line.matches("unrelated English").count(), 1, "{line}");
+    let (first, second) = line.split_once(" | ").unwrap();
+    assert!(first.starts_with("recall en-US") && first.contains("unrelated English"), "{line}");
+    assert!(second.starts_with("recall ja-JP") && !second.contains("unrelated"), "{line}");
     // en-US still splits between words.
     let en = reading.languages.iter().find(|l| l.language == "en-US").unwrap();
     assert_eq!((en.n, en.answered), (3, 3));
@@ -4477,4 +4495,65 @@ fn recall_probes_unspaced_lines() {
         let next = item.text[head.len()..].chars().next().unwrap();
         assert!(!next.is_alphanumeric(), "{key}: cut inside a word");
     }
+}
+
+#[test]
+fn offer_by_key_is_the_panels_too() {
+    let dao = bilingual(LAOZI_JA);
+    assert!(dao.run.offer("item:daodejing:12").unwrap().is_ok(), "ja-JP is in the panel");
+    assert!(dao.run.offer("item:daodejing:2").unwrap().is_ok());
+    for pt in ["item:daodejing:21", "item:daodejing:22", "item:daodejing:23"] {
+        assert!(dao.run.offer(pt).is_err(), "{pt}: pt-BR is outside the panel");
+    }
+}
+
+#[test]
+fn a_cycle_decides_each_language_on_its_own_floor() {
+    let mut dao = bilingual(LAOZI_JA);
+    // en-US reads the same twice (floor 0); ja-JP loses a Validation item in
+    // round 2 (a wide floor).
+    let mut first = bilingual_fake();
+    recorded(round(&mut dao.run, &mut first, &Scorer::new(Bag)).unwrap());
+    let mut second = bilingual_fake();
+    second.answers.insert("item:daodejing:13".into(), "not a draft".into());
+    recorded(round(&mut dao.run, &mut second, &Scorer::new(Bag)).unwrap());
+    // The candidate degrades en-US a little and leaves ja-JP as it was.
+    let mut model = bilingual_fake();
+    model.candidate = Some((4, {
+        let mut candidate = bilingual_answers();
+        candidate.extend(keyed(&degraded_answers()));
+        candidate
+    }));
+    model.edit = Some(Ok(ONE_CONCEPT.to_string()));
+    let d = run_cycle(&mut dao, &mut model);
+    let (en, ja) = (&d.panel()[0], &d.panel()[1]);
+    assert_eq!((en.language.as_str(), ja.language.as_str()), ("en-US", "ja-JP"));
+    assert_eq!(en.floor.chrf, 0.0);
+    assert_eq!(ja.floor.chrf, 50.0);
+    // en-US fell by more than its own floor but by less than ja-JP's: the
+    // verdict is the rejection that en-US's floor makes, not NoGain.
+    let fall = en.base.chrf - en.candidate.unwrap().chrf;
+    assert!(fall > 1.0 && fall < ja.floor.chrf, "{fall}");
+    assert!(matches!(d.verdict(), Verdict::Rejected(Why::Regressed(_))), "{:?}", d.verdict());
+}
+
+#[test]
+fn ablation_reads_each_language_apart() {
+    let mut dao = bilingual(LAOZI_JA);
+    let mut model = bilingual_fake();
+    recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    let (mut rec, mut replay) = (bilingual_fake(), bilingual_fake());
+    let readings = match ablate(&dao, &mut rec, &mut replay).unwrap() {
+        weksa::run::AblationOutcome::Read(r) => r,
+        _ => panic!("answered"),
+    };
+    let shape: Vec<(&str, weksa::Split, u32)> = readings
+        .iter()
+        .map(|(l, split, r)| (l.as_str(), *split, r.n))
+        .collect();
+    use weksa::Split::{Train, Validation};
+    assert_eq!(
+        shape,
+        [("en-US", Train, 1), ("en-US", Validation, 2), ("ja-JP", Train, 1), ("ja-JP", Validation, 2)]
+    );
 }

@@ -41,7 +41,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::context::{EditFeedback, EncoderOffer, Prompt, TrainItems};
 use crate::corpus::{CorpusItem, CorpusItemId, ModelFamily, Source};
 use crate::encode::{EditDraft, LoweringDraft, PacketDraft, encoder_id};
-use crate::form::{is_attestation, is_language_tag, is_slug};
+use crate::form::{is_attestation, is_slug};
 use crate::model::{ModelPort, PortError};
 use crate::packet::{Packet, Stance};
 use crate::score::{CHRF_VERSION, chrf, Embedder, ItemScore, ScoreInput, Scorer, SplitMean, aggregate};
@@ -647,10 +647,9 @@ impl RunStores {
         }
         let mut panel = panel.to_vec();
         panel.sort();
-        if panel.is_empty()
-            || !panel.iter().all(|tag| is_language_tag(tag))
-            || panel.windows(2).any(|w| w[0] == w[1])
-        {
+        // A tag no item carries (misspelt, wrong case, not a tag) is refused by
+        // `check_panel` once the corpus is open.
+        if panel.is_empty() || panel.windows(2).any(|w| w[0] == w[1]) {
             return Err(RunError::Panel);
         }
         let cache = run_cache(root)?;
@@ -1723,6 +1722,8 @@ impl Reading {
 pub enum Metric {
     Chrf,
     Meaning,
+    /// Only the panel rule reads it: [`decide_panel`].
+    Composite,
 }
 
 /// Why an edit was rejected.
@@ -1776,7 +1777,11 @@ pub fn decide(base: &Reading, candidate: &Reading, floor: &Reading) -> Verdict {
 /// The accept rule across the panel, over one `(base, candidate, floor)` row
 /// per panel language in panel order: [`decide`] per language, unchanged, then
 /// Pareto non-regression. Any language that regresses rejects (the first in
-/// panel order names the metric); otherwise the edit is accepted when at least
+/// panel order names the metric); a language regresses when [`decide`] says so
+/// or when its composite falls below its base by more than its tolerance, the
+/// floor but never under one [`LADDER_STEP`] (compared in billionths, as
+/// [`decide`] does), because each metric inside its tolerance can still sum to
+/// a composite drop that two opposed accepts would ratchet. Otherwise the edit is accepted when at least
 /// one language gains past its own threshold, and rejected as no gain when none
 /// does. A language never buys another's regression: Wang, Lipton and Tsvetkov
 /// (EMNLP 2020) measure negative interference between languages sharing
@@ -1785,7 +1790,17 @@ pub fn decide(base: &Reading, candidate: &Reading, floor: &Reading) -> Verdict {
 pub fn decide_panel(rows: &[(Reading, Reading, Reading)]) -> Verdict {
     let verdicts: Vec<Verdict> = rows
         .iter()
-        .map(|(base, candidate, floor)| decide(base, candidate, floor))
+        .map(|(base, candidate, floor)| {
+            match decide(base, candidate, floor) {
+                Verdict::Rejected(Why::NoGain) | Verdict::Accepted
+                    if nano(candidate.composite - base.composite)
+                        < -nano(floor.composite.max(LADDER_STEP)) =>
+                {
+                    Verdict::Rejected(Why::Regressed(Metric::Composite))
+                }
+                verdict => verdict,
+            }
+        })
         .collect();
     if let Some(regressed) = verdicts
         .iter()
@@ -1921,6 +1936,7 @@ impl Decision {
                     Why::NoGain => "no-gain",
                     Why::Regressed(Metric::Chrf) => "regressed-chrf",
                     Why::Regressed(Metric::Meaning) => "regressed-meaning",
+                    Why::Regressed(Metric::Composite) => "regressed-composite",
                 }
             ),
         };
@@ -2376,6 +2392,31 @@ mod tests {
         assert_eq!(
             decide_panel(&[(base, reading(60.0, 0.9, 0.9), zero), (base, tiny_loss, zero)]),
             rejected(Why::Regressed(Metric::Chrf))
+        );
+        // Metrics each inside their tolerance, the composite past its own:
+        // another language's gain cannot buy it.
+        let sag = reading(49.6, 0.496, 0.4);
+        let tol = reading(0.5, 0.005, 0.05);
+        assert_eq!(decide(&base, &sag, &tol), rejected(Why::NoGain));
+        assert_eq!(
+            decide_panel(&[(base, gained, zero), (base, sag, tol)]),
+            rejected(Why::Regressed(Metric::Composite))
+        );
+        assert_eq!(
+            decide_panel(&[(base, sag, tol), (base, gained, zero)]),
+            rejected(Why::Regressed(Metric::Composite))
+        );
+        // Two edits that undo each other cannot both be accepted: the second
+        // undoes the first's gain by the first's loss, and one language falls.
+        let (a0, a1) = (reading(50.0, 0.5, 0.50), reading(50.0, 0.5, 0.60));
+        let (b0, b1) = (reading(50.0, 0.5, 0.50), reading(50.0, 0.5, 0.40));
+        assert_eq!(decide_panel(&[(a0, a1, zero), (b0, b1, zero)]), rejected(Why::Regressed(Metric::Composite)));
+        assert_eq!(decide_panel(&[(a1, a0, zero), (b1, b0, zero)]), rejected(Why::Regressed(Metric::Composite)));
+        // A fall inside the floor (and each metric inside its own) still accepts.
+        let wide = reading(50.0, 0.5, 0.05);
+        assert_eq!(
+            decide_panel(&[(base, gained, zero), (base, reading(49.6, 0.496, 0.47), wide)]),
+            Verdict::Accepted
         );
         // A one-language panel is decide().
         for candidate in [gained, regressed, flat, meaning_down] {
