@@ -258,10 +258,12 @@ impl<'cp> EncoderOffer<'cp> {
 
 /// What the editor is told of how its last edit fared: whether it was kept, and
 /// the held-out composite at the current inventory of each panel language,
-/// rounded to the nearest [`LADDER_STEP`]. A head composite changes only when an
-/// edit is accepted and an accept needs a gain above one step, so a run releases
-/// at most `1 / LADDER_STEP` distinct values per language (Blum and Hardt 2015,
-/// the Ladder). Nothing else about the held-out split is a field.
+/// rounded to the nearest [`LADDER_STEP`]. The heads change only when an edit is
+/// accepted, and an accept raises the panel's composite sum by more than one
+/// step, so a run over `L` languages releases at most `1.5 * L / LADDER_STEP`
+/// changes of this line (Blum and Hardt 2015, the Ladder; ruling
+/// `weksa-lowering:ruling:panel-accept-sum-rule`). Nothing else about the
+/// held-out split is a field.
 ///
 /// ```
 /// let f = weksa::context::EditFeedback::none();

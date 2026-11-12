@@ -67,10 +67,12 @@ pub const PROMPT_SOURCE_DIGEST: u64 = fnv1a64_of(&[
 ]);
 
 /// The least composite gain an edit must show over item noise to be kept, and
-/// the grid the editor's one held-out number is rounded to. A run releases at
-/// most `1 / LADDER_STEP` = 200 distinct head composites (the Ladder, Blum and
-/// Hardt 2015), because the head changes only on an accept and an accept needs
-/// a gain above one step.
+/// the grid the editor's one held-out number is rounded to. Every accept raises
+/// the panel's composite sum by more than one step and a composite lies in
+/// -0.5 to 1, so a run over `L` languages accepts, and changes the released
+/// heads, at most `1.5 * L / LADDER_STEP` times (`300` for one language; the
+/// Ladder, Blum and Hardt 2015; ruling
+/// `weksa-lowering:ruling:panel-accept-sum-rule`, see [`decide_panel`]).
 pub const LADDER_STEP: f64 = 0.005;
 
 /// What a run pinned at open. Key `run:<label>`.
@@ -1807,7 +1809,8 @@ pub fn decide(base: &Reading, candidate: &Reading, floor: &Reading) -> Verdict {
 /// readings ratchets every base to a favourable draw and strangles the loop
 /// (the convergence test would then fire on noise). Wang, Lipton and Tsvetkov
 /// (EMNLP 2020) measure negative interference between languages sharing
-/// parameters, which the per-language regression test still bounds.
+/// parameters, which the per-language regression test still bounds. The rule is
+/// ruling `weksa-lowering:ruling:panel-accept-sum-rule`.
 ///
 /// Termination (the Ladder bound, Blum and Hardt 2015): every accept raises
 /// the sum of the panel's composites by more than [`LADDER_STEP`]. A composite
@@ -1837,7 +1840,10 @@ pub fn decide_panel(rows: &[(Reading, Reading, Reading)]) -> Verdict {
 
 /// One panel language's row of a cycle: the head's Validation reading, the
 /// candidate's (none when the edit never reached a round), the language's
-/// measured floor and the threshold derived from it.
+/// measured floor and the threshold derived from it. The threshold decides only
+/// in a one-language panel ([`decide`]); with two or more languages it is
+/// recorded beside the floor and the accept is the sum rule of
+/// [`decide_panel`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct PanelReading {
     pub language: String,
@@ -2047,7 +2053,7 @@ fn readings_of(
 /// One edit-accept cycle. The editor is asked for one inventory edit from a
 /// prompt built over Train items, the head inventory and an [`EditFeedback`];
 /// the edit is admitted as a candidate revision in `<root>/cycle-<k>/inventory.cc`;
-/// a candidate round scores it; [`decide`] accepts or rejects on Validation
+/// a candidate round scores it; [`decide_panel`] accepts or rejects on Validation
 /// against the head's establishing round. Accepting is one write: the candidate
 /// round and the decision go into `run.cc` in one batch, and the decision names
 /// the new head. While any prompt is unanswered, or the candidate round fails,
@@ -2451,6 +2457,40 @@ mod tests {
         assert_eq!(net(LADDER_STEP + 4e-10), rejected(Why::NoGain));
         assert_eq!(net(LADDER_STEP + 6e-10), Verdict::Accepted);
         assert_eq!(net(LADDER_STEP + 2e-9), Verdict::Accepted);
+        // Liveness: no language need pass its own threshold. Two languages each
+        // gaining 0.6 of a step at zero floor accept; so does one gaining two
+        // steps under a 0.02 floor (its own threshold) with the others flat; so
+        // does a gain with another language falling inside its own floor.
+        let each = 0.6 * LADDER_STEP;
+        assert_eq!(
+            decide_panel(&[
+                (base, reading(50.0, 0.5, 0.5 + each), zero),
+                (base, reading(50.0, 0.5, 0.5 + each), zero)
+            ]),
+            Verdict::Accepted
+        );
+        let big_floor = reading(0.0, 0.0, 0.02);
+        assert_eq!(
+            decide_panel(&[(base, reading(50.0, 0.5, 0.5 + 2.0 * LADDER_STEP), big_floor), (base, flat, big_floor)]),
+            Verdict::Accepted
+        );
+        let own_floor = reading(0.0, 0.0, 0.004);
+        assert_eq!(
+            decide_panel(&[
+                (base, reading(50.0, 0.5, 0.51), reading(0.0, 0.0, 0.03)),
+                (base, reading(50.0, 0.5, 0.497), own_floor)
+            ]),
+            Verdict::Accepted,
+            "a fall inside the language's floor, net 0.007"
+        );
+        // The same fall with the net exactly a step rejects.
+        assert_eq!(
+            decide_panel(&[
+                (base, reading(50.0, 0.5, 0.508), reading(0.0, 0.0, 0.03)),
+                (base, reading(50.0, 0.5, 0.497), own_floor)
+            ]),
+            rejected(Why::NoGain)
+        );
         // The sum is over the deltas, with each language's fall counted.
         assert_eq!(
             decide_panel(&[(base, reading(50.0, 0.5, 0.504), zero), (base, small_fall, zero)]),

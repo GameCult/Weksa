@@ -114,7 +114,7 @@
       ]
     },
     "PanelReading": {
-      "description": "One panel language's row of a cycle: the head's Validation reading, the\ncandidate's (none when the edit never reached a round), the language's\nmeasured floor and the threshold derived from it.",
+      "description": "One panel language's row of a cycle: the head's Validation reading, the\ncandidate's (none when the edit never reached a round), the language's\nmeasured floor and the threshold derived from it. The threshold decides only\nin a one-language panel ([`decide`]); with two or more languages it is\nrecorded beside the floor and the accept is the sum rule of\n[`decide_panel`].",
       "type": "object",
       "properties": {
         "base": {
