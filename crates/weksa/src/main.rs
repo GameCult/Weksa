@@ -15,7 +15,7 @@ use weksa::packet::{FeatValue, FeatureValue, Grade};
 use weksa::packet::proof_packet;
 use weksa::model::RecordedAnswers;
 use weksa::run::{
-    AblationOutcome, CycleOutcome, LowererReach, RecallOutcome, RoundOutcome, RunPaths, RunStores, cycle, round,
+    AblationOutcome, CycleOutcome, LowererReach, OntologyMintOutcome, RecallOutcome, RoundOutcome, RunPaths, RunStores, cycle, round,
 };
 use weksa::score::ScoreInput;
 use weksa::{
@@ -131,6 +131,15 @@ enum LoopCommand {
     /// half). Prompts and answers live in `<ROOT>/recall`; the command exits 3
     /// until every prompt has an answer. A diagnostic, never a gate.
     Recall { root: PathBuf },
+    /// Draft ontology entries from the run's Train items of one language.
+    /// Prompts and answers live in `<ROOT>/ontology-mint`; the command exits 3
+    /// until the prompt has an answer. Admission is `weksa ontology admit`
+    /// into a copy, never into the run's pinned file.
+    MintOntology {
+        root: PathBuf,
+        #[arg(long)]
+        language: String,
+    },
     /// Ask whether the lowerer uses a packet's stance: for each live Train and
     /// Validation packet of round ROUND, ask again with the stance as it is,
     /// emptied, and swapped for the next item's, and read how far the lowering
@@ -1120,6 +1129,24 @@ fn main() -> Result<()> {
                     std::process::exit(3);
                 }
                 RecallOutcome::Read(reading) => println!("{}", reading.line()),
+            }
+        }
+        Command::Loop(LoopCommand::MintOntology { root, language }) => {
+            let run = RunStores::open(&root)?;
+            let mut files = AnswerFiles::new(run.ontology_mint_dir(), run.record().model.clone());
+            match run.mint_ontology(&mut files, &language)? {
+                OntologyMintOutcome::Unanswered { prompt } => {
+                    println!("unanswered {prompt}");
+                    std::process::exit(3);
+                }
+                OntologyMintOutcome::Drafted { prompt, entries } => println!(
+                    "drafted {entries} entries {}",
+                    run.ontology_mint_dir().join(format!("{prompt}.answer")).display()
+                ),
+                OntologyMintOutcome::Refused { code } => {
+                    println!("{code}");
+                    std::process::exit(1);
+                }
             }
         }
         Command::Loop(LoopCommand::Cycle { root, ollama_url }) => {

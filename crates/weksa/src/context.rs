@@ -14,6 +14,11 @@
 //! entries that `ontology::select` chose for the view; the caller never names
 //! entries.
 //!
+//! An ontology mint prompt is a second Train-only prompt: the [`TrainItems`] of
+//! one language, the inventory's Stance, Discourse and Scene features (the only
+//! ones a condition can read) and that language's existing entry lines. It reads
+//! no packet, no score and no held-out text.
+//!
 //! Item text may hold line breaks; the renderer indents every continuation line
 //! (`indented`), so item text cannot forge a `[key]` line or a paragraph.
 //! Item blocks are data from the run's pinned corpus, reached only through
@@ -28,7 +33,7 @@ use std::marker::PhantomData;
 use serde::Serialize;
 
 use crate::corpus::{CorpusItem, CorpusItemId};
-use crate::inventory::{Inventory, InventoryEntry, OptionLabel, ValueKind};
+use crate::inventory::{Inventory, InventoryEntry, OptionLabel, Slot, ValueKind};
 use crate::lower::{EntityForms, LowerError, entity};
 use crate::ontology::{Ontology, select};
 use crate::packet::{
@@ -81,6 +86,13 @@ Answer with one JSON object and nothing else: {\"text\": \"...\"}. No code fence
 pub const RECALL_INSTRUCTIONS: &str = "\
 Below is the opening of a passage, with what is known of where it comes from. Continue it exactly as its source words it, from memory, until the passage ends. If you do not remember it, give your best guess in the same voice.
 Answer with one JSON object and nothing else: {\"text\": \"...\"}, the continuation only, not the opening. No code fence, no commentary.";
+
+/// The instructions of an ontology mint: drafting entries for one language from
+/// its Train lines. Fixed per run by `PROMPT_SOURCE_DIGEST`.
+pub const MINT_ONTOLOGY_INSTRUCTIONS: &str = "\
+Below are lines written in one language (the language line), the features an ontology condition may test, and the entries that language's ontology already has. Draft new entries: choices this language's culture makes, for a speaker in a stance and scene, about word, grammar, discourse, sound or script, that the lines show.
+Answer with one JSON object and nothing else: {\"entries\": [{\"layer\": \"...\", \"when\": [...], \"choice\": \"...\", \"examples\": [...]}]}. No code fence, no commentary.
+Give 1 to 8 entries. layer is one of lexicon, grammar, discourse, phonology, orthography. when holds at most 4 conditions, each {\"slot\": \"Stance\" | \"Discourse\" | \"Scene\", \"feature\": \"<id>\", \"test\": {\"AtLeast\": <permille>} | {\"AtMost\": <permille>} | {\"AtMostOrUnset\": <permille>} | {\"Is\": <value>}}, over the listed feature ids only; when may be empty when a choice holds for every line of the language. choice states a pattern the lines show, in at most 200 bytes, without quoting a line. examples are original short phrases of the language, never copied from the lines below, at most 3.";
 
 /// The live Train items of a corpus, in key order. The only input minting
 /// reads; it cannot be built from a slice, and no accessor returns text or an
@@ -502,6 +514,56 @@ impl Prompt {
         }
     }
 
+    /// [`MINT_ONTOLOGY_INSTRUCTIONS`], the `language` line, the Stance,
+    /// Discourse and Scene features of `inventory` live at `rev` (grade, flag or
+    /// options: all a condition can read), the entries `ontology` already holds
+    /// for `language` as `<key> <choice>`, then the Train items of exactly
+    /// `language` in key order without prior turns. `None` when there is none.
+    pub(crate) fn mint_ontology(
+        train: &TrainItems,
+        language: &str,
+        inventory: &Inventory,
+        rev: u32,
+        ontology: &Ontology,
+    ) -> Option<Prompt> {
+        let items: Vec<&CorpusItem> = train
+            .items
+            .iter()
+            .filter(|item| item.language == language)
+            .collect();
+        if items.is_empty() {
+            return None;
+        }
+        let features: String = inventory
+            .entries()
+            .filter(|e| {
+                e.live_at(rev)
+                    && e.value_kind.is_some()
+                    && e.applies_to
+                        .iter()
+                        .any(|s| matches!(s, Slot::Stance | Slot::Discourse | Slot::Scene))
+            })
+            .map(|e| format!("\n{}", entry_line(e)))
+            .collect();
+        let existing: String = ontology
+            .entries()
+            .iter()
+            .filter(|e| e.language == language)
+            .map(|e| format!("\n{} {}", e.key(), e.choice))
+            .collect();
+        let mut parts = vec![
+            MINT_ONTOLOGY_INSTRUCTIONS.to_string(),
+            format!("language: {language}"),
+            format!("features rev:{rev}{features}"),
+            format!("entries{existing}"),
+        ];
+        parts.extend(items.iter().map(|item| block(item, None)));
+        Some(Prompt {
+            text: parts.join("\n\n"),
+            items: items.iter().map(|item| item.id.as_str().to_string()).collect(),
+        })
+    }
+
     /// [`ENCODE_INSTRUCTIONS`], the one offered item with its prior turns resolved
     /// against `train`, the entities a packet for it may cite, and the entries
     /// of `inventory` live at `rev`.
@@ -661,6 +723,18 @@ mod tests {
             line(None, vec![("en-US".into(), 0.5026), ("ja-JP".into(), 0.41)]),
             "last edit: none; validation composite at head: en-US 0.505, ja-JP 0.410"
         );
+    }
+
+    #[test]
+    fn an_ontology_mint_over_no_item_of_the_language_is_no_prompt() {
+        let inv = Inventory::default();
+        let train = TrainItems { items: vec![] };
+        assert!(Prompt::mint_ontology(&train, "en-US", &inv, 1, &Ontology::empty()).is_none());
+        let mut held = item("item:a:1", "x", &group_in(Split::Train), false);
+        held.language = "ja-JP".into();
+        let train = TrainItems { items: vec![held] };
+        assert!(Prompt::mint_ontology(&train, "en-US", &inv, 1, &Ontology::empty()).is_none());
+        assert!(Prompt::mint_ontology(&train, "ja-JP", &inv, 1, &Ontology::empty()).is_some());
     }
 
     #[test]
