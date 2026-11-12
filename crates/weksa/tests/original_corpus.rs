@@ -1067,8 +1067,10 @@ fn ja_seed_pairs_never_co_select() {
 
 /// en-US seed entries :3, :5, :6, :8 over anger, restraint, hedge, certainty and
 /// affection: blunt anger never holds with a hedge or affection entry, and a
-/// hedge never holds with a flatly certain line, so the pairs that gave opposed
-/// instructions (no cushioning against softening, hedge against no hedge) are
+/// hedge never holds with a flatly certain line, nor affection (:8, certainty
+/// bound 799) with one, so the pairs that gave opposed instructions (no
+/// cushioning against softening, hedge against no hedge, flat declaratives
+/// against softened phrasing and tags) are
 /// disjoint by condition; each of :3, :5, :6, :8 fires and stays silent at its
 /// witnesses, so a dropped or tightened bound does not pass as a disjoint one.
 /// :6 against the Scene entry :10 is kept apart by scoping in the text only.
@@ -1078,7 +1080,7 @@ fn en_us_seed_pairs_never_co_select() {
     sweep_seed_pairs(
         "en-US",
         ["anger", "restraint", "hedge", "certainty", "affection"],
-        &[(3, 5), (3, 8), (5, 6)],
+        &[(3, 5), (3, 8), (5, 6), (6, 8)],
         &[
             (3, [s(600), s(300), n, n, n]),
             (3, [s(600), s(300), s(599), n, s(599)]),
@@ -1089,6 +1091,7 @@ fn en_us_seed_pairs_never_co_select() {
             (6, [n, n, n, s(800), n]),
             (8, [n, n, n, n, s(600)]),
             (8, [s(1000), s(0), n, n, s(600)]),
+            (8, [n, n, n, s(799), s(600)]),
         ],
         &[
             (3, [s(600), s(300), s(600), n, n]),
@@ -1100,6 +1103,7 @@ fn en_us_seed_pairs_never_co_select() {
             (5, [n, n, s(700), s(800), n]),
             (6, [n, n, n, s(799), n]),
             (8, [n, n, n, n, s(599)]),
+            (8, [n, n, n, s(800), s(600)]),
         ],
     );
 }
