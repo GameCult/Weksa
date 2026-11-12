@@ -1452,6 +1452,50 @@ fn open_dao_run(d: &std::path::Path) {
     assert!(o.status.success(), "{}", out(&o));
 }
 
+/// `weksa loop mint-ontology`: exit 3 and a prompt file until answered, exit 0
+/// and the answer path once it is a draft, a missing language or one outside
+/// the panel refused, and nothing of the run written.
+#[test]
+fn loop_mint_ontology_protocol() {
+    let d = tempfile::tempdir().unwrap();
+    open_dao_run(d.path());
+    let root = d.path().join("canaryroot");
+    let held = |name: &str| std::fs::read(root.join(name)).unwrap();
+    let (run_cc, onto) = (held("run.cc"), std::fs::read(d.path().join("o.cc")).unwrap());
+    let mint = |args: &[&str]| weksa(d.path(), &[&["loop", "mint-ontology", "canaryroot"], args].concat());
+
+    let none = mint(&[]);
+    assert_eq!(none.status.code(), Some(2), "{}", out(&none));
+    assert!(!root.join("ontology-mint").exists());
+
+    let outside = mint(&["--language", "ja-JP"]);
+    assert_eq!(outside.status.code(), Some(1), "{}", out(&outside));
+    assert_eq!(out(&outside), "language-not-in-panel\n");
+    assert!(!root.join("ontology-mint").exists(), "a refused mint wrote a prompt");
+
+    let first = mint(&["--language", "en-US"]);
+    assert_eq!(first.status.code(), Some(3), "{}", out(&first));
+    let text = out(&first);
+    let digest = text.strip_prefix("unanswered ").unwrap().trim_end();
+    assert_eq!(digest.len(), 16, "{text}");
+    let dir = root.join("ontology-mint");
+    assert!(dir.join(format!("{digest}.prompt")).is_file());
+
+    let answer = dir.join(format!("{digest}.answer"));
+    std::fs::write(&answer, r#"{"entries":[{"layer":"Grammar","choice":"a pattern"}]}"#).unwrap();
+    let done = mint(&["--language", "en-US"]);
+    assert_eq!(done.status.code(), Some(0), "{}", out(&done));
+    assert_eq!(out(&done), format!("drafted 1 entries canaryroot/ontology-mint/{digest}.answer\n"));
+
+    std::fs::write(&answer, "not json").unwrap();
+    let bad = mint(&["--language", "en-US"]);
+    assert_eq!(bad.status.code(), Some(1), "{}", out(&bad));
+    assert_eq!(out(&bad), "syntax\n");
+
+    assert_eq!(held("run.cc"), run_cc, "the mint wrote the run record");
+    assert_eq!(std::fs::read(d.path().join("o.cc")).unwrap(), onto);
+}
+
 /// The family `loop open` pinned at `root`, read from the run record.
 fn pinned_family(d: &std::path::Path, root: &str, flag: &[&str]) -> weksa::corpus::ModelFamily {
     let mut args = vec![
