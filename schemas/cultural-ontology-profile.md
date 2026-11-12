@@ -5,8 +5,8 @@ This is the human-facing schema receipt for
 reviewed cultural ontology used during utterance lowering.
 
 Executable schema code does not exist yet. When it does, it must reconcile with
-this receipt, the meta-analysis paper, and the profiles under
-`data/target-language-ontology/`.
+this receipt, the meta-analysis paper, and the language ontology in
+`data/ontology/ontology.cc`.
 
 ## Authority
 

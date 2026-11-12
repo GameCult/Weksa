@@ -82,9 +82,10 @@ English, Brazilian Portuguese, Japanese, and later target-language dialogue.
 [Flavored English Lowering](./docs/flavored-english-lowering.md) remains the
 target-specific English receipt.
 
-See [Target-Language Cultural Ontology Profiles](./data/target-language-ontology/README.md)
-for the reviewable address, register, politeness, idiom, metaphor, and script
-distinctions that target lowerers must inspect before producing output.
+The language ontology is `data/ontology/ontology.cc` (read it with
+`weksa ontology dump`): per language, the address, register, politeness and script
+choices a lowerer makes for a speaker in a stance. Its en-US and ja-JP entries are
+model-drafted seeds, never Test evidence; accepted rounds grow them.
 
 For the first AquaSynth speech-training handoff, see
 [Tiny PanPhon v0.1 Speech Curriculum](./examples/speech-training/tiny-panphon-v0.1/README.md).

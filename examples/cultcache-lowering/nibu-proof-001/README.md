@@ -8,10 +8,6 @@ Prompt:
 
 - `prompts/nibu-cultcache-target-lowering.md`
 
-CultCache profile store:
-
-- `.weksa/cultural-ontology/starter-targets.cc`
-
 Expected target outputs:
 
 - `pt-BR-vanilla-brazilian.yaml`

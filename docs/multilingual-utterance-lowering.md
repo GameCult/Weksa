@@ -76,8 +76,8 @@ English remains a lowering target, not the pivot language. Existing flavored
 English fixtures continue to be useful, but new multilingual fixtures should
 show English as one realization in a set.
 
-The initial cultural ontology profile is
-`data/target-language-ontology/en-US.yaml`.
+The en-US choices are the `en-US` entries of `data/ontology/ontology.cc`
+(model-drafted seeds; read with `weksa ontology dump`).
 
 ### Brazilian Portuguese
 
@@ -94,16 +94,10 @@ The target lowerer should record:
   defaults
 - optional regional or cultural overlays when the source context earns them
 
-The initial cultural ontology profile is
-`data/target-language-ontology/pt-BR.yaml`.
-
-Umbanda-related scenes, speakers, ritual contexts, or referents may add the
-`data/target-language-ontology/pt-BR-umbanda.yaml` overlay. That overlay must
-not activate for generic Brazilian flavor.
-
-Regional or cultural variants should be selected through the overlay catalog at
-`data/target-language-ontology/pt-BR-overlays.yaml`. Planned overlay slots are
-not active profiles until reviewed examples and source context exist.
+No pt-BR ontology entry exists yet; the cut that adds pt-BR writes them to
+`data/ontology/ontology.cc`. Umbanda-related scenes, speakers, ritual contexts,
+or referents may later earn a regional or cultural variant, which must not
+activate for generic Brazilian flavor.
 
 ### Japanese
 
@@ -119,8 +113,8 @@ The target lowerer should record:
 - whether subject omission preserves or harms clarity
 - whether katakana, kanji, kana, or mixed script choices carry useful pressure
 
-The initial cultural ontology profile is
-`data/target-language-ontology/ja-JP.yaml`.
+The ja-JP choices are the `ja-JP` entries of `data/ontology/ontology.cc`
+(model-drafted seeds; read with `weksa ontology dump`).
 
 ## Packet Shape
 

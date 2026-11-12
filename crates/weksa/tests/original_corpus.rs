@@ -251,6 +251,69 @@ fn the_original_inventory_is_the_dao_revision_three() {
     assert!(InventoryStore::open(&copy).is_ok());
 }
 
+/// The committed seed ontology: every entry model-drafted, exactly the two
+/// panel languages, each with a Stance-conditioned entry, and every committed
+/// corpus opens a run over it (ruling `ja-ontology-owner-answer`: a model-drafted
+/// entry is labelled so and is never Test evidence).
+#[test]
+fn committed_ontology_is_model_drafted_and_reads_every_inventory() {
+    use weksa::OntologyStore;
+    use weksa::ontology::Condition;
+    use weksa::run::{LowererReach, RunPaths, RunStores};
+    use weksa::speaker::Annotator;
+    let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
+    let tmp = tempfile::tempdir().unwrap();
+    let onto = tmp.path().join("ontology.cc");
+    std::fs::copy(data.join("ontology/ontology.cc"), &onto).unwrap();
+    let entries = OntologyStore::open(&onto).unwrap().all().unwrap();
+    for e in &entries {
+        match &e.annotator {
+            Annotator::Model { family, generator } => {
+                assert_eq!(*family, ModelFamily::Anthropic, "{}", e.key());
+                assert!(generator.contains("claude"), "{}", e.key());
+            }
+            other => panic!("{} is {other:?}", e.key()),
+        }
+    }
+    let mut langs: Vec<&str> = entries.iter().map(|e| e.language.as_str()).collect();
+    langs.sort();
+    langs.dedup();
+    assert_eq!(langs, PANEL);
+    for lang in PANEL {
+        let stance = |c: &Condition| c.slot == weksa::inventory::Slot::Stance;
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.language == lang && e.when.iter().any(stance)),
+            "{lang} has no Stance-conditioned entry"
+        );
+    }
+    for (corpus, panel) in [("original", &PANEL[..]), ("daodejing", &PANEL[..1])] {
+        let dir = data.join(corpus);
+        let copy = |f: &str| {
+            std::fs::copy(dir.join(f), tmp.path().join(format!("{corpus}-{f}"))).unwrap();
+            tmp.path().join(format!("{corpus}-{f}"))
+        };
+        let (c, i, e) = (copy("corpus.cc"), copy("inventory.cc"), copy("entity.cc"));
+        RunStores::create(
+            &tmp.path().join(format!("run-{corpus}")),
+            corpus,
+            RunPaths {
+                corpus: &c,
+                inventory: &i,
+                entities: &e,
+                ontology: &onto,
+            },
+            "m",
+            "bag",
+            LowererReach::BriefedSubagent,
+            ModelFamily::Unrecorded,
+            &panel.iter().map(|l| l.to_string()).collect::<Vec<_>>(),
+        )
+        .unwrap_or_else(|e| panic!("{corpus}: {e:?}"));
+    }
+}
+
 /// The probe over the real original corpus: every item is offered, none names a
 /// work, and a model that answers with unrelated words reads at the noise floor.
 #[test]

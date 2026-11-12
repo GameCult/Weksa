@@ -10,8 +10,6 @@ You are reviewing one target lowering produced from the Nibu interlingua packet.
   `examples/english-lowering/nibu-proof-001/projected-context.yaml`
 - Lowering prompt:
   `prompts/nibu-cultcache-target-lowering.md`
-- CultCache profile store:
-  `.weksa/cultural-ontology/starter-targets.cc`
 
 The source meaning is:
 
