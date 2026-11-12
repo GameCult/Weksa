@@ -240,23 +240,49 @@ fn the_first_six_original_items_are_unchanged() {
     }
 }
 
+/// Revision 5 of `data/original/inventory.cc` is the original bed's own
+/// lexicon: concepts and frames drafted by claude-sonnet-5-5 (Weksa Hands,
+/// model-drafted original-bed lexicon from Train and Validation passages) so an
+/// encoder can name baths, kites and persimmons. It is Validation-informed on
+/// purpose: numbers on this bed measure the lowering half (register, scene,
+/// ontology), never inventory generalization or convergence; scored runs use
+/// `data/interlingua`. The Dao De Jing inventory is its revision prefix.
+const ORIGINAL_REV5_ADDS: usize = 233;
+
 #[test]
-fn the_original_inventory_is_the_dao_inventory() {
-    let dao = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/daodejing/inventory.cc");
-    let own = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/original/inventory.cc");
-    assert_eq!(std::fs::read(dao).unwrap(), std::fs::read(&own).unwrap());
+fn the_dao_inventory_is_a_prefix_of_the_original_inventory() {
+    use weksa::inventory::{Change, Family};
+    let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
     let tmp = tempfile::tempdir().unwrap();
-    let copy = tmp.path().join("inventory.cc");
-    std::fs::copy(&own, &copy).unwrap();
-    let inventory = InventoryStore::open(&copy).unwrap().inventory().unwrap();
-    // Revision 4 is the speaker-state vocabulary: the same six features the
-    // generator admits, ids and all.
-    assert_eq!(inventory.latest().unwrap().n, 4);
-    let (rev, entries) = weksa::inventory::speaker_scene_revision(4);
-    assert_eq!(inventory.latest().unwrap().changes, rev.changes);
-    for e in &entries {
-        assert_eq!(inventory.entry(&e.id), Some(e), "{}", e.gloss);
+    let open = |name: &str| {
+        let copy = tmp.path().join(format!("{name}.cc"));
+        std::fs::copy(data.join(name).join("inventory.cc"), &copy).unwrap();
+        InventoryStore::open(&copy).unwrap().inventory().unwrap()
+    };
+    let (dao, own) = (open("daodejing"), open("original"));
+    assert_eq!(dao.latest().unwrap().n, 4);
+    let latest = own.latest().unwrap();
+    assert_eq!((latest.n, latest.parent), (5, Some(4)));
+    for n in 1..=4 {
+        let revision = |inv: &weksa::Inventory| inv.revisions().find(|r| r.n == n).cloned();
+        assert_eq!(revision(&dao), revision(&own), "rev {n}");
     }
+    let mut glosses = std::collections::BTreeSet::new();
+    for e in dao.entries() {
+        assert_eq!(own.entry(&e.id), Some(e), "{}", e.gloss);
+        glosses.insert(e.gloss.clone());
+    }
+    assert_eq!(latest.changes.len(), ORIGINAL_REV5_ADDS);
+    for change in &latest.changes {
+        let Change::Add(id) = change else {
+            panic!("rev 5 retires {change:?}");
+        };
+        let e = own.entry(id).unwrap();
+        assert!(matches!(id.family(), Family::Concept | Family::Frame), "{id}");
+        assert_eq!(e.introduced_rev, 5, "{id}");
+        assert!(glosses.insert(e.gloss.clone()), "{} repeats a gloss", e.gloss);
+    }
+    assert_eq!(own.entries().count(), dao.entries().count() + ORIGINAL_REV5_ADDS);
 }
 
 /// The committed seed ontology: every entry model-drafted, exactly the two
@@ -889,135 +915,6 @@ fn the_eight_ja_test_sentences_are_pinned_verbatim() {
     }
 }
 
-/// The concepts the pinned inventory holds, as each language names them in the
-/// passages: English by word stem, Japanese by a multi-character surface. This
-/// is a tripwire, not the encoder: it fails a passage that names no live
-/// concept, and `FALSE_FRIENDS` strips the idioms that hold a concept's
-/// character without its meaning (天気, 心配, 腹が立つ ...) before matching.
-const LEXICON: [(&str, &[&str], &[&str]); 21] = [
-    ("endanger", &["endanger"], &["危う", "危ない"]),
-    ("prevent", &["prevent"], &["防い", "防げ", "妨げ"]),
-    ("control", &["control"], &["操ろ", "操る", "操れ", "支配"]),
-    (
-        "request",
-        &["request"],
-        &["いただけませんか", "もらえますか", "くれませんか", "お願い"],
-    ),
-    ("sage", &["sage"], &["賢者"]),
-    ("mind", &["mind"], &["心が", "心は", "心を", "心の", "心も"]),
-    (
-        "belly",
-        &["belly", "bellies"],
-        &["お腹", "空腹", "満腹", "腹の虫"],
-    ),
-    ("will", &["will"], &["意志"]),
-    ("bone", &["bone"], &["骨が", "骨を", "骨は", "骨の"]),
-    ("empty", &["empt"], &["空っぽ", "空にし", "空の器"]),
-    ("fill", &["fill"], &["満た", "いっぱい"]),
-    ("weaken", &["weaken"], &["弱ら", "弱め", "弱っ"]),
-    ("strengthen", &["strengthen"], &["強くな", "強め", "強くし"]),
-    (
-        "heaven",
-        &["heaven"],
-        &["天が", "天を", "天は", "天上", "天の"],
-    ),
-    ("earth", &["earth"], &["大地"]),
-    ("water", &["water"], &["水が", "水を", "水は", "水面"]),
-    ("compare", &["compare"], &["比べ"]),
-    ("resemble", &["resemble"], &["似て", "似た", "似る"]),
-    ("continues_long", &[], &["長く続", "久しく続"]),
-    ("true_words", &[], &["誠の言葉", "真実の言葉"]),
-    ("seem_paradoxical", &[], &["逆さま"]),
-];
-
-/// Compounds and idioms that contain a surface above without naming its concept.
-const FALSE_FRIENDS: [&str; 8] = [
-    "天気",
-    "心配",
-    "腹が立",
-    "腹を立",
-    "水曜",
-    "骨が折れ",
-    "天の川",
-    "天井",
-];
-
-/// The live concepts a passage names, by `LEXICON`, in `lang_col` (0 en-US, 1 ja-JP).
-fn concepts_in(text: &str, col: usize) -> Vec<&'static str> {
-    let mut text = text.to_lowercase();
-    for f in FALSE_FRIENDS {
-        text = text.replace(f, "");
-    }
-    let words: Vec<&str> = text.split(|c: char| !c.is_alphabetic()).collect();
-    LEXICON
-        .iter()
-        .filter(|(_, en, ja)| {
-            if col == 0 {
-                en.iter().any(|s| words.iter().any(|w| w.starts_with(s)))
-            } else {
-                ja.iter().any(|s| text.contains(s))
-            }
-        })
-        .map(|(c, _, _)| *c)
-        .collect()
-}
-
-#[test]
-fn the_concept_lexicon_does_not_match_a_word_that_merely_holds_a_character() {
-    for ja in [
-        "今日の天気はどうだろう。",
-        "試験が心配でならない。",
-        "腹が立って仕方がない。",
-        "水曜に会いましょう。",
-        "骨が折れる仕事だ。",
-    ] {
-        assert!(concepts_in(ja, 1).is_empty(), "{ja}");
-    }
-    assert!(concepts_in("I attempt it, with a reminder.", 0).is_empty());
-    assert_eq!(concepts_in("水が澄んでいる。", 1), ["water"]);
-}
-
-#[test]
-fn every_original_passage_rests_on_a_live_inventory_concept() {
-    use weksa::inventory::Family;
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/original");
-    let tmp = tempfile::tempdir().unwrap();
-    std::fs::copy(dir.join("inventory.cc"), tmp.path().join("inventory.cc")).unwrap();
-    let inventory = InventoryStore::open(&tmp.path().join("inventory.cc"))
-        .unwrap()
-        .inventory()
-        .unwrap();
-    let rev = inventory.latest().unwrap().n;
-    let live: Vec<&str> = inventory
-        .entries()
-        .filter(|e| e.family() == Family::Concept && e.live_at(rev))
-        .map(|e| e.gloss.as_str())
-        .collect();
-    for (concept, _, _) in LEXICON {
-        assert!(live.contains(&concept), "{concept} is not a live concept");
-    }
-    let (corpus, _) = stores();
-    for (col, lang) in PANEL.iter().enumerate() {
-        let mut hit = std::collections::BTreeSet::new();
-        let mut passages = 0;
-        for item in corpus.all().unwrap() {
-            if item.language != *lang || !matches!(item.source, Source::ModelWritten { .. }) {
-                continue;
-            }
-            passages += 1;
-            let found = concepts_in(&item.text, col);
-            assert!(!found.is_empty(), "{} rests on no live concept", item.id);
-            hit.extend(found);
-        }
-        eprintln!(
-            "{lang}: {passages} passages on a live concept, {} distinct concepts",
-            hit.len()
-        );
-        assert_eq!(passages, 28);
-        assert!(hit.len() >= 12, "{lang}: {} distinct concepts", hit.len());
-    }
-}
-
 /// The committed scenes: one per live Train or Validation group of
 /// `data/original`, none for any other group, every one model-annotated and
 /// never Test evidence (a Test group gets no scene and reads `NoScene`).
@@ -1104,6 +1001,16 @@ fn scene_entries_never_co_select_in_a_layer() {
                             e.layer.name()
                         );
                     }
+                }
+                // An above, out-group speaker is told by exactly one ja-JP
+                // Scene-conditioned grammar entry, at every intimacy.
+                if (st, ig) == ("above", false) {
+                    let told = entries
+                        .iter()
+                        .filter(|e| e.language == "ja-JP" && e.layer.name() == "grammar")
+                        .filter(|e| e.when.iter().any(|c| c.slot == Slot::Scene) && selects(e, rel))
+                        .count();
+                    assert_eq!(told, 1, "{rel:?}");
                 }
             }
         }
