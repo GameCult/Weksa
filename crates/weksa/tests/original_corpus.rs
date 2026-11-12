@@ -962,9 +962,11 @@ fn committed_scenes_cover_original_groups() {
 }
 
 /// ja-JP seed entries :4 to :8 over the stance and discourse grades that bear on
-/// them (hedge, certainty, sadness, affection, restraint): the pairs that gave
-/// opposed instructions (hedge against certainty, particles, final force) never
-/// hold together. Fails if :5, :7 or :8 loses a conditioning clause.
+/// them (hedge, certainty, sadness, affection, restraint, each also ABSENT):
+/// the pairs that gave opposed instructions (hedge against certainty,
+/// particles, final force) never hold together; and each of :5, :7, :8 still
+/// fires where it should (hedged at certainty 700-799, affection with certainty
+/// or restraint unrated), so a tightened bound does not pass as a disjoint one.
 #[test]
 fn ja_seed_pairs_never_co_select() {
     use weksa::inventory::Slot;
@@ -984,30 +986,57 @@ fn ja_seed_pairs_never_co_select() {
             .find(|e| e.language == "ja-JP" && e.n == n)
             .unwrap_or_else(|| panic!("onto:ja-JP:{n} is absent"))
     };
-    let holds = |e: &weksa::OntologyEntry, point: &[u16; 5]| {
+    type Point = [Option<u16>; 5];
+    let holds = |e: &weksa::OntologyEntry, point: &Point| {
         e.when.iter().all(|c: &Condition| {
             assert!(matches!(c.slot, Slot::Stance | Slot::Discourse), "{}", e.key());
             let at = feats
                 .iter()
                 .position(|f| *f == c.feature)
                 .unwrap_or_else(|| panic!("{} reads a feature this test does not sweep", e.key()));
-            match &c.test {
-                Test::AtLeast(g) => point[at] >= g.get(),
-                Test::AtMost(g) => point[at] <= g.get(),
-                other => panic!("{} has {other:?}", e.key()),
+            match (&c.test, point[at]) {
+                (Test::AtLeast(g), Some(v)) => v >= g.get(),
+                (Test::AtMost(g) | Test::AtMostOrUnset(g), Some(v)) => v <= g.get(),
+                (Test::AtMostOrUnset(_), None) => true,
+                (Test::AtLeast(_) | Test::AtMost(_), None) => false,
+                (other, _) => panic!("{} has {other:?}", e.key()),
             }
         })
     };
-    let grid = [0u16, 300, 500, 599, 600, 700, 799, 800, 1000];
+    let grid = [None, Some(0u16), Some(300), Some(500), Some(599), Some(600), Some(700), Some(799), Some(800), Some(1000)];
     let pairs = [(5, 6), (4, 7), (6, 7), (6, 8)];
     for p in 0..grid.len().pow(5) {
-        let point: [u16; 5] = std::array::from_fn(|i| grid[p / grid.len().pow(i as u32) % grid.len()]);
+        let point: Point = std::array::from_fn(|i| grid[p / grid.len().pow(i as u32) % grid.len()]);
         for (a, b) in pairs {
             assert!(
                 !(holds(ja(a), &point) && holds(ja(b), &point)),
                 "onto:ja-JP:{a} and :{b} co-select at (hedge, certainty, sadness, affection, restraint) = {point:?}"
             );
         }
+    }
+    // Reach: each entry fires at its witnesses and not just outside its core.
+    let (n, s) = (None, Some);
+    let fires: [(u32, Point); 8] = [
+        (5, [s(700), s(799), n, n, n]),
+        (5, [s(700), n, n, n, n]),
+        (7, [n, s(799), n, s(700), s(599)]),
+        (7, [n, n, n, s(700), n]),
+        (7, [s(1000), s(0), s(1000), s(600), s(0)]),
+        (8, [n, s(799), s(700), n, s(700)]),
+        (8, [n, n, s(600), n, s(600)]),
+        (6, [n, s(800), n, n, n]),
+    ];
+    for (e, point) in fires {
+        assert!(holds(ja(e), &point), "onto:ja-JP:{e} does not fire at {point:?}");
+    }
+    let silent: [(u32, Point); 4] = [
+        (5, [s(599), n, n, n, n]),
+        (7, [n, n, n, s(599), n]),
+        (7, [n, n, n, s(700), s(600)]),
+        (8, [n, n, s(600), n, s(599)]),
+    ];
+    for (e, point) in silent {
+        assert!(!holds(ja(e), &point), "onto:ja-JP:{e} fires at {point:?}");
     }
 }
 
