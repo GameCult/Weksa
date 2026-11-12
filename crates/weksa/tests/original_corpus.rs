@@ -1006,15 +1006,16 @@ fn scene_entries_never_co_select_in_a_layer() {
                         );
                     }
                 }
-                // An above, out-group speaker is told by exactly one ja-JP
-                // Scene-conditioned grammar entry, at every intimacy.
+                // An above, out-group speaker is told by no ja-JP Scene-conditioned
+                // grammar entry, at every intimacy: the ja entry that did
+                // (onto:ja-JP:15) is withdrawn pending native-reader attestation.
                 if (st, ig) == ("above", false) {
                     let told = entries
                         .iter()
                         .filter(|e| e.language == "ja-JP" && e.layer.name() == "grammar")
                         .filter(|e| e.when.iter().any(|c| c.slot == Slot::Scene) && selects(e, rel))
                         .count();
-                    assert_eq!(told, 1, "{rel:?}");
+                    assert_eq!(told, 0, "{rel:?}");
                 }
             }
         }
