@@ -547,7 +547,8 @@ mod lowering {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data").join(sub)
     }
 
-    fn admitted(
+    /// The admitted view, its scene never read.
+    fn admitted_unread(
         packet: Packet,
         inv: &InventoryStore,
         corpus: &str,
@@ -559,6 +560,37 @@ mod lowering {
             .unwrap()
             .admit(packet, inv, &corpus, entities)
             .unwrap()
+    }
+
+    /// The admitted view with its scene read over an empty speaker-state store.
+    fn admitted(
+        packet: Packet,
+        inv: &InventoryStore,
+        corpus: &str,
+        entities: &EntityStore,
+    ) -> LoweringInput {
+        let view = admitted_unread(packet, inv, corpus, entities);
+        let dir = tempfile::tempdir().unwrap();
+        let state = weksa::SpeakerStateStore::open(&dir.path().join("s.cc")).unwrap();
+        let corpus = CorpusStore::open(&data(corpus)).unwrap();
+        view.with_scene(&inv.inventory().unwrap(), &state, &corpus).unwrap()
+    }
+
+    #[test]
+    fn lowering_prompt_refuses_an_unread_scene() {
+        let cast = InventoryStore::open(&data("interlingua/inventory.cc")).unwrap();
+        let entities = EntityStore::open(&data("entity/entity.cc")).unwrap();
+        let inv = cast.inventory().unwrap();
+        let item = CorpusItemId::parse("item:nibu:1").unwrap();
+        let held = Held(vec![nibu(&[("en-US", &["Nibu"])])]);
+        let unread = admitted_unread(proof_packet(), &cast, "corpus/corpus.cc", &entities);
+        let empty = weksa::Ontology::empty();
+        assert_eq!(
+            Prompt::lower(&unread, &item, "en-US", &inv, &held, &empty).err(),
+            Some(LowerError::SceneUnread)
+        );
+        let read = admitted(proof_packet(), &cast, "corpus/corpus.cc", &entities);
+        assert!(Prompt::lower(&read, &item, "en-US", &inv, &held, &empty).is_ok());
     }
 
     fn dao(index: usize) -> (LoweringInput, Inventory, EntityStore, CorpusItemId) {

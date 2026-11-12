@@ -66,6 +66,14 @@
     },
     "prompt_digest": {
       "type": "string"
+    },
+    "speaker_state": {
+      "description": "Canonical absolute path of the speaker-state store (scenes): read-only\nfor the run, pinned by `speaker_state_digest`.",
+      "type": "string"
+    },
+    "speaker_state_digest": {
+      "description": "16 hex of the speaker-state file's bytes.",
+      "type": "string"
     }
   },
   "required": [
@@ -83,7 +91,9 @@
     "lowerer_reach",
     "panel",
     "ontology",
-    "ontology_digest"
+    "ontology_digest",
+    "speaker_state",
+    "speaker_state_digest"
   ],
   "$defs": {
     "LowererReach": {

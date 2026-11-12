@@ -37,7 +37,7 @@ use crate::packet::{
 use crate::run::LADDER_STEP;
 use crate::split::{Checkpoint, Split, SplitScheme, fnv1a64, hex16};
 use crate::store::{CorpusStore, normalized};
-use crate::validate::LoweringInput;
+use crate::validate::{LoweringInput, SceneRead};
 
 /// The instructions a mint prompt starts with: the editor's whole brief. Fixed
 /// per run by `PROMPT_SOURCE_DIGEST`.
@@ -71,7 +71,7 @@ A feature is {feature, value}; value is {\"Grade\": 0 to 1000}, {\"Option\": lab
 /// Fixed per run by `PROMPT_SOURCE_DIGEST`.
 pub const LOWER_INSTRUCTIONS: &str = "\
 Say the packet below in the language on the language line, as one utterance of its speaker: all of its meaning and nothing it does not carry.
-Every id is the inventory's listed below and every feature value is as listed; a grade is permille, 0 to 1000. The stance is the speaker's felt affect and restraint: it shapes how the utterance is said, not what it says. The ontology lines are choices this language makes for this speaker and stance: realize each where the packet allows; they add no meaning.
+Every id is the inventory's listed below and every feature value is as listed; a grade is permille, 0 to 1000. The stance is the speaker's felt affect and restraint: it shapes how the utterance is said, not what it says. The ontology lines are choices this language makes for this speaker, stance and scene: realize each where the packet allows; they add no meaning.
 A referent with an entity is named by one of that entity's forms on the entities line.
 Answer with one JSON object and nothing else: {\"text\": \"...\"}. No code fence, no commentary.";
 
@@ -89,7 +89,7 @@ Answer with one JSON object and nothing else: {\"text\": \"...\"}, the continuat
 /// ```no_run
 /// # let dir = tempfile::tempdir().unwrap();
 /// # let p = |n: &str| dir.path().join(n);
-/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc"), ontology: &p("o.cc") };
+/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc"), ontology: &p("o.cc"), speaker_state: &p("s.cc") };
 /// # let panel = ["en-US".to_string()];
 /// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded, &panel).unwrap();
 /// let t = run.train().unwrap();
@@ -104,7 +104,7 @@ Answer with one JSON object and nothing else: {\"text\": \"...\"}, the continuat
 /// # let dir = tempfile::tempdir().unwrap();
 /// # let p = |n: &str| dir.path().join(n);
 /// # for n in ["c.cc", "i.cc", "e.cc", "o.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
-/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc"), ontology: &p("o.cc") };
+/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc"), ontology: &p("o.cc"), speaker_state: &p("s.cc") };
 /// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded, &["en-US".to_string()]).unwrap();
 /// let t = run.train().unwrap();
 /// let _u = t.clone();
@@ -115,7 +115,7 @@ Answer with one JSON object and nothing else: {\"text\": \"...\"}, the continuat
 /// # let dir = tempfile::tempdir().unwrap();
 /// # let p = |n: &str| dir.path().join(n);
 /// # for n in ["c.cc", "i.cc", "e.cc", "o.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
-/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc"), ontology: &p("o.cc") };
+/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc"), ontology: &p("o.cc"), speaker_state: &p("s.cc") };
 /// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded, &["en-US".to_string()]).unwrap();
 /// let t = run.train().unwrap();
 /// s(&t);
@@ -337,7 +337,7 @@ impl EditFeedback {
 /// ```no_run
 /// # let dir = tempfile::tempdir().unwrap();
 /// # let p = |n: &str| dir.path().join(n);
-/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc"), ontology: &p("o.cc") };
+/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc"), ontology: &p("o.cc"), speaker_state: &p("s.cc") };
 /// # let panel = ["en-US".to_string()];
 /// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded, &panel).unwrap();
 /// let t = run.train().unwrap();
@@ -356,7 +356,7 @@ impl EditFeedback {
 /// # let dir = tempfile::tempdir().unwrap();
 /// # let p = |n: &str| dir.path().join(n);
 /// # for n in ["c.cc", "i.cc", "e.cc", "o.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
-/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc"), ontology: &p("o.cc") };
+/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc"), ontology: &p("o.cc"), speaker_state: &p("s.cc") };
 /// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded, &["en-US".to_string()]).unwrap();
 /// let t = run.train().unwrap();
 /// let inv = run.inventory().inventory().unwrap();
@@ -369,7 +369,7 @@ impl EditFeedback {
 /// # let dir = tempfile::tempdir().unwrap();
 /// # let p = |n: &str| dir.path().join(n);
 /// # for n in ["c.cc", "i.cc", "e.cc", "o.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
-/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc"), ontology: &p("o.cc") };
+/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc"), ontology: &p("o.cc"), speaker_state: &p("s.cc") };
 /// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded, &["en-US".to_string()]).unwrap();
 /// let t = run.train().unwrap();
 /// let inv = run.inventory().inventory().unwrap();
@@ -528,9 +528,11 @@ impl Prompt {
     /// `input` (no kind, constraints, scene, speaker or group), the forms in
     /// `language` of every entity its referents cite, the `ontology:` section
     /// and the entries of `inventory` live at the view's revision. The section
-    /// holds the entries `ontology::select` chooses from the view's stance and
-    /// discourse features and `language`, never the caller; the view's speaker
-    /// and group are still never read. `item`
+    /// holds the entries `ontology::select` chooses from the view's stance,
+    /// discourse and the scene relation `with_scene` read, and `language`,
+    /// never the caller; the scene's values are never printed, only the entries
+    /// they select. A view whose scene was never read is refused
+    /// ([`LowerError::SceneUnread`]). `item`
     /// goes only to [`Prompt::item_keys`], never into the text. A speaker's
     /// entity id appears
     /// only when the encoder cites that entity on a referent, which is naming a
@@ -545,6 +547,9 @@ impl Prompt {
         entities: &dyn EntityForms,
         ontology: &Ontology,
     ) -> Result<Prompt, LowerError> {
+        if input.scene_read() == &SceneRead::Unread {
+            return Err(LowerError::SceneUnread);
+        }
         let mut forms: BTreeMap<&str, Vec<String>> = BTreeMap::new();
         for id in input.referents().iter().filter_map(|r| r.entity.as_ref()) {
             let found = entity(entities, id)?;

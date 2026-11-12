@@ -14,6 +14,8 @@ fn weksa(dir: &std::path::Path, args: &[&str]) -> Output {
             "./e.cc",
             "--ontology",
             "./o.cc",
+            "--speaker-state",
+            "./s.cc",
         ])
         .args(args)
         .output()
@@ -1341,6 +1343,7 @@ fn dao_stores(dir: &std::path::Path) {
         std::fs::copy(src.join(from), dir.join(to)).unwrap();
     }
     std::fs::write(dir.join("o.cc"), [0x90]).unwrap();
+    std::fs::write(dir.join("s.cc"), [0x90]).unwrap();
 }
 
 #[test]

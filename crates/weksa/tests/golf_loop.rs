@@ -24,12 +24,13 @@ fn rewrite_run(root: &Path, change: impl FnOnce(&mut RunRecord)) {
     cache.put(format!("run:{}", record.label), &record).unwrap();
 }
 
-fn paths(dir: &Path) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+fn paths(dir: &Path) -> (PathBuf, PathBuf, PathBuf, PathBuf, PathBuf) {
     (
         dir.join("c.cc"),
         dir.join("i.cc"),
         dir.join("entities.cc"),
         common::ontology_in(dir),
+        common::speaker_state_in(dir),
     )
 }
 
@@ -42,7 +43,7 @@ fn a_run_pins_its_stores_and_refuses_drift() {
     let mut w = world();
     let dir = w.dir.path().to_path_buf();
     let root = dir.join("run");
-    let (c, i, e, o) = paths(&dir);
+    let (c, i, e, o, s) = paths(&dir);
     let at = |label: &str, model: &str| {
         RunStores::create(
             &root,
@@ -52,6 +53,7 @@ fn a_run_pins_its_stores_and_refuses_drift() {
                 inventory: &i,
                 entities: &e,
                 ontology: &o,
+                speaker_state: &s,
             },
             model,
             "bag",
@@ -147,7 +149,7 @@ fn a_run_works_on_its_own_copy_of_the_inventory() {
     let w = world();
     let dir = w.dir.path().to_path_buf();
     let root = dir.join("run");
-    let (c, i, e, o) = paths(&dir);
+    let (c, i, e, o, s) = paths(&dir);
     let source_bytes = std::fs::read(&i).unwrap();
     let mut run = RunStores::create(
         &root,
@@ -157,6 +159,7 @@ fn a_run_works_on_its_own_copy_of_the_inventory() {
             inventory: &i,
             entities: &e,
             ontology: &o,
+            speaker_state: &s,
         },
         "fake-model",
         "bag",
@@ -236,6 +239,7 @@ fn create_refuses_a_root_that_holds_an_inventory_and_never_truncates_it() {
                 inventory,
                 entities: &dao.entities,
                 ontology: &dao.ontology,
+                speaker_state: &common::speaker_state_beside(&dao.ontology),
             },
             "fake-model",
             "bag",
@@ -285,6 +289,7 @@ fn a_create_that_fails_leaves_no_inventory_and_the_retry_succeeds() {
                 inventory,
                 entities,
                 ontology: &dao.ontology,
+                speaker_state: &common::speaker_state_beside(&dao.ontology),
             },
             "fake-model",
             "bag",
@@ -398,11 +403,13 @@ fn a_store_changed_between_its_digest_and_its_open_is_drift() {
     }
     let (c, i, e) = (dir.join("c.cc"), dir.join("i.cc"), dir.join("entities.cc"));
     let o = dir.join("ontology.cc");
+    let s = common::speaker_state_beside(&o);
     let paths = || weksa::run::RunPaths {
         corpus: &c,
         inventory: &i,
         entities: &e,
         ontology: &o,
+        speaker_state: &s,
     };
     assert_eq!(
         RunStores::create_between(
@@ -457,6 +464,7 @@ fn window(
         inventory: &i,
         entities: &e,
         ontology: &o,
+        speaker_state: &common::speaker_state_beside(&o),
     };
     let created = RunStores::create_between(
         &root,
@@ -905,6 +913,7 @@ fn dao_build(
             inventory: &inventory,
             entities: &entities,
             ontology: &ontology,
+            speaker_state: &common::speaker_state_beside(&ontology),
         },
         "fake-model",
         "bag",
@@ -1087,6 +1096,8 @@ fn lowering_prompts(dao: &Dao, inventory: &InventoryStore) -> Vec<(String, Promp
             let view = store
                 .admit(packet, inventory, &corpus, dao.run.entities())
                 .unwrap();
+            let state = weksa::SpeakerStateStore::open(&dir.path().join("s.cc")).unwrap();
+            let view = view.with_scene(&inv, &state, &corpus).unwrap();
             let prompt = Prompt::lower(&view, &key, "en-US", &inv, dao.run.entities(), &weksa::Ontology::empty()).unwrap();
             (key.to_string(), prompt)
         })
@@ -1560,6 +1571,7 @@ fn errors_echo_no_input() {
         inventory: &missing,
         entities: &missing,
         ontology: &missing,
+        speaker_state: &common::speaker_state_beside(&missing),
     };
     let e = RunStores::create(
         &root,
@@ -1629,6 +1641,7 @@ fn errors_echo_no_input() {
             inventory: &dao.inventory,
             entities: &dao.entities,
             ontology: &dao.ontology,
+            speaker_state: &common::speaker_state_beside(&dao.ontology),
         },
         "fake-model",
         "bag",
@@ -2551,6 +2564,7 @@ fn a_changed_head_is_drift() {
             inventory: &dao.inventory,
             entities: &dao.entities,
             ontology: &dao.ontology,
+            speaker_state: &common::speaker_state_beside(&dao.ontology),
         },
         "fake-model",
         "bag",
@@ -2891,6 +2905,7 @@ fn a_summary_line_says_how_lowerings_were_answered() {
         inventory: &dao.inventory,
         entities: &dao.entities,
         ontology: &dao.ontology,
+        speaker_state: &common::speaker_state_beside(&dao.ontology),
     };
     RunStores::create(
         &root,
@@ -3615,6 +3630,7 @@ fn mixed_family_round(family: ModelFamily) -> u32 {
             inventory: &dir.join("i.cc"),
             entities: &dir.join("entities.cc"),
             ontology: &dir.join("ontology.cc"),
+            speaker_state: &common::speaker_state_beside(&dir.join("ontology.cc")),
         },
         "not-a-draft",
         "bag",
@@ -4402,7 +4418,7 @@ fn open_refuses_a_bad_panel() {
         let created = RunStores::create(
             &root,
             "p",
-            RunPaths { corpus, inventory, entities, ontology: &dao.ontology },
+            RunPaths { corpus, inventory, entities, ontology: &dao.ontology, speaker_state: &common::speaker_state_beside(&dao.ontology) },
             "fake-model",
             "bag",
             weksa::run::LowererReach::ToolLessRelay,
@@ -4762,6 +4778,7 @@ fn create_refuses_an_entry_its_inventory_cannot_read() {
                 inventory: &dir.join("i.cc"),
                 entities: &dir.join("e.cc"),
                 ontology,
+                speaker_state: &common::speaker_state_beside(&ontology),
             },
             "fake-model",
             "bag",

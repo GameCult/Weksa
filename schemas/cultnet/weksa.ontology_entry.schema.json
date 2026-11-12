@@ -89,7 +89,7 @@
       ]
     },
     "Condition": {
-      "description": "One feature of one slot of the view, tested. Only `Stance` and `Discourse`\nreach a lowering view today.",
+      "description": "One feature of one slot of the view, tested. `Stance`, `Discourse` and\n`Scene` reach a lowering view; `Speaker` does not yet.",
       "type": "object",
       "properties": {
         "feature": {

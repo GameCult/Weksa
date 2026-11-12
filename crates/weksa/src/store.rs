@@ -1320,8 +1320,11 @@ pub(crate) fn check_ontology_entry(
     }
     let mut out = Vec::new();
     for c in &e.when {
-        if !matches!(c.slot, Slot::Stance | Slot::Discourse) {
-            return Err(malformed(&key, "a condition reads slot Stance or Discourse"));
+        if !matches!(c.slot, Slot::Stance | Slot::Discourse | Slot::Scene) {
+            return Err(malformed(
+                &key,
+                "a condition reads slot Stance, Discourse or Scene",
+            ));
         }
         if matches!(c.test, Test::Is(FeatValue::Grade(_))) {
             return Err(malformed(&key, "Is names an option or a flag"));

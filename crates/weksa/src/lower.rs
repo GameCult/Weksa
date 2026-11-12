@@ -182,6 +182,8 @@ pub enum LowerError {
     AskerNotAddressee { predication: NodeId },
     /// The entity port failed to read.
     EntityRead { entity: EntityId, why: String },
+    /// A lowering prompt was asked of a view whose scene was never read.
+    SceneUnread,
 }
 
 impl fmt::Display for LowerError {
@@ -203,6 +205,7 @@ impl fmt::Display for LowerError {
             LowerError::ConsentMissing { .. } => "request lacks the addressee's consent",
             LowerError::AskerNotAddressee { .. } => "request agent is not the addressee",
             LowerError::EntityRead { .. } => "entity port failed to read",
+            LowerError::SceneUnread => "the view's scene was never read",
         })
     }
 }

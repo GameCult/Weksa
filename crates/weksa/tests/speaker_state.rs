@@ -26,7 +26,7 @@ struct W {
 fn world() -> W {
     let dir = tempfile::tempdir().unwrap();
     let mut inventory = InventoryStore::open(&dir.path().join("i.cc")).unwrap();
-    for (rev, entries) in [seed(), proof_revision(), speaker_scene_revision()] {
+    for (rev, entries) in [seed(), proof_revision(), speaker_scene_revision(3)] {
         inventory.admit_revision(rev, entries).unwrap();
     }
     let entities = entities_in(dir.path());
@@ -60,7 +60,7 @@ fn feat(gloss: &str, value: FeatValue) -> FeatureValue {
     let feature = seed()
         .1
         .into_iter()
-        .chain(speaker_scene_revision().1)
+        .chain(speaker_scene_revision(3).1)
         .find(|e| e.gloss == gloss)
         .unwrap_or_else(|| panic!("no feature {gloss}"))
         .id;

@@ -551,7 +551,7 @@ pub fn proof_revision() -> (InventoryRevision, Vec<InventoryEntry>) {
 /// arrive as community ids with cut `language-ontology`. Hand-seeded like
 /// [`proof_revision`] until the loop's minting round owns the vocabulary; the
 /// features take the ids after the seed's.
-pub fn speaker_scene_revision() -> (InventoryRevision, Vec<InventoryEntry>) {
+pub fn speaker_scene_revision(n: u32) -> (InventoryRevision, Vec<InventoryEntry>) {
     let taken = seed()
         .1
         .iter()
@@ -593,15 +593,15 @@ pub fn speaker_scene_revision() -> (InventoryRevision, Vec<InventoryEntry>) {
             gloss: gloss.to_string(),
             value_kind: Some(kind),
             applies_to: vec![slot],
-            introduced_rev: 3,
+            introduced_rev: n,
             retired_rev: None,
         });
     }
     let changes = entries.iter().map(|e| Change::Add(e.id)).collect();
     (
         InventoryRevision {
-            n: 3,
-            parent: Some(2),
+            n,
+            parent: Some(n - 1),
             changes,
             frozen: false,
         },
