@@ -1,12 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Decision",
-  "description": "One closed edit-accept cycle: digests and numbers, no text. Key\n`run:<label>:cycle:<k>`. Only [`cycle`] builds one.\n\n```\nfn f(d: &weksa::run::Decision) -> u32 { d.k() }\n```\n\nEvery field is given, so the literal below fails only on privacy; its twin is\nthe same literal in the unit test `a_decision_literal_compiles_in_the_lib`.\n\n```compile_fail,E0451\nuse weksa::run::{Call, Decision, Reading, Verdict};\nfn f() -> Decision {\n    let r = Reading { chrf: 0.0, meaning: 0.0, composite: 0.0 };\n    Decision {\n        k: 1,\n        base_round: 1,\n        base_rev: 1,\n        base_inventory_digest: String::new(),\n        edit: Call { prompt: String::new(), items: vec![] },\n        edit_answer_digest: None,\n        candidate_rev: None,\n        candidate_inventory_digest: None,\n        candidate_round: None,\n        base: r,\n        candidate: None,\n        floor: r,\n        threshold: 0.0,\n        verdict: Verdict::Accepted,\n    }\n}\n```",
+  "description": "One closed edit-accept cycle: digests and numbers, no text. Key\n`run:<label>:cycle:<k>`. Only [`cycle`] builds one.\n\n```\nfn f(d: &weksa::run::Decision) -> u32 { d.k() }\n```\n\nEvery field is given, so the literal below fails only on privacy; its twin is\nthe same literal in the unit test `a_decision_literal_compiles_in_the_lib`.\n\n```compile_fail,E0451\nuse weksa::run::{Call, Decision, Verdict};\nfn f() -> Decision {\n    Decision {\n        k: 1,\n        base_round: 1,\n        base_rev: 1,\n        base_inventory_digest: String::new(),\n        edit: Call { prompt: String::new(), items: vec![] },\n        edit_answer_digest: None,\n        candidate_rev: None,\n        candidate_inventory_digest: None,\n        candidate_round: None,\n        panel: vec![],\n        verdict: Verdict::Accepted,\n    }\n}\n```",
   "type": "object",
   "properties": {
-    "base": {
-      "$ref": "#/$defs/Reading"
-    },
     "base_inventory_digest": {
       "type": "string"
     },
@@ -20,16 +17,6 @@
       "type": "integer",
       "format": "uint32",
       "minimum": 0
-    },
-    "candidate": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/Reading"
-        },
-        {
-          "type": "null"
-        }
-      ]
     },
     "candidate_inventory_digest": {
       "type": [
@@ -64,17 +51,17 @@
         "null"
       ]
     },
-    "floor": {
-      "$ref": "#/$defs/Reading"
-    },
     "k": {
       "type": "integer",
       "format": "uint32",
       "minimum": 0
     },
-    "threshold": {
-      "type": "number",
-      "format": "double"
+    "panel": {
+      "description": "One row per panel language, in panel order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PanelReading"
+      }
     },
     "verdict": {
       "$ref": "#/$defs/Verdict"
@@ -86,10 +73,8 @@
     "base_rev",
     "base_inventory_digest",
     "edit",
-    "base",
-    "floor",
-    "threshold",
-    "verdict"
+    "verdict",
+    "panel"
   ],
   "$defs": {
     "Call": {
@@ -113,10 +98,54 @@
     },
     "Metric": {
       "description": "Which metric an edit regressed.",
-      "type": "string",
-      "enum": [
-        "Chrf",
-        "Meaning"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "Chrf",
+            "Meaning"
+          ]
+        },
+        {
+          "description": "The composite fell, or a reading was not a finite number.",
+          "type": "string",
+          "const": "Composite"
+        }
+      ]
+    },
+    "PanelReading": {
+      "description": "One panel language's row of a cycle: the head's Validation reading, the\ncandidate's (none when the edit never reached a round), the language's\nmeasured floor and the threshold derived from it. The threshold decides only\nin a one-language panel ([`decide`]); with two or more languages it is\nrecorded beside the floor and the accept is the sum rule of\n[`decide_panel`].",
+      "type": "object",
+      "properties": {
+        "base": {
+          "$ref": "#/$defs/Reading"
+        },
+        "candidate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Reading"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "floor": {
+          "$ref": "#/$defs/Reading"
+        },
+        "language": {
+          "type": "string"
+        },
+        "threshold": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "language",
+        "base",
+        "floor",
+        "threshold"
       ]
     },
     "Reading": {

@@ -8,7 +8,9 @@
 //! consts in this module; every prompt also lists the inventory at the run's
 //! revision. A mint prompt is the editor's: it reads [`TrainItems`], an
 //! [`Inventory`] and an [`EditFeedback`] and nothing else, so no held-out text,
-//! key or per-item score can reach it.
+//! key or per-item score can reach it. A lowering prompt names the language it
+//! is said in on a language line; every language is named by its tag, none by a
+//! default.
 //!
 //! Item text may hold line breaks; the renderer indents every continuation line
 //! (`indented`), so item text cannot forge a `[key]` line or a paragraph.
@@ -25,7 +27,7 @@ use serde::Serialize;
 
 use crate::corpus::{CorpusItem, CorpusItemId};
 use crate::inventory::{Inventory, InventoryEntry, OptionLabel, ValueKind};
-use crate::lower::{EntityForms, LowerError, TARGET_LANGUAGE, entity};
+use crate::lower::{EntityForms, LowerError, entity};
 use crate::packet::{
     Context, Discourse, EntityId, Extension, Predication, Referent, Relation, Stance,
 };
@@ -37,7 +39,7 @@ use crate::validate::LoweringInput;
 /// The instructions a mint prompt starts with: the editor's whole brief. Fixed
 /// per run by `PROMPT_SOURCE_DIGEST`.
 pub const MINT_INSTRUCTIONS: &str = "\
-Propose one edit to the inventory below, so that the lines below can be encoded and lowered to English more faithfully.
+Propose one edit to the inventory below, so that the lines below can be encoded and lowered, each in its own language, more faithfully.
 Answer with one JSON object and nothing else: no code fence, no commentary.
 Shape: {\"add\": [{\"family\", \"gloss\", \"value_kind\", \"applies_to\"}], \"retire\": [ids]}; 1 to 8 changes in all, adds and retires together.
 - family: one of Concept, Frame, Role, Relation, SpeechAct, Feature, ReferentKind, Extension.
@@ -65,7 +67,7 @@ A feature is {feature, value}; value is {\"Grade\": 0 to 1000}, {\"Option\": lab
 /// The instructions a lowering prompt starts with: the lowerer's whole brief.
 /// Fixed per run by `PROMPT_SOURCE_DIGEST`.
 pub const LOWER_INSTRUCTIONS: &str = "\
-Say the packet below in English (en-US), as one utterance of its speaker: all of its meaning and nothing it does not carry.
+Say the packet below in the language on the language line, as one utterance of its speaker: all of its meaning and nothing it does not carry.
 Every id is the inventory's listed below and every feature value is as listed; a grade is permille, 0 to 1000. The stance is the speaker's felt affect and restraint: it shapes how the utterance is said, not what it says.
 A referent with an entity is named by one of that entity's forms on the entities line.
 Answer with one JSON object and nothing else: {\"text\": \"...\"}. No code fence, no commentary.";
@@ -81,14 +83,14 @@ Answer with one JSON object and nothing else: {\"text\": \"...\"}, the continuat
 /// reads; it cannot be built from a slice, and no accessor returns text or an
 /// item.
 ///
-/// ```
+/// ```no_run
 /// # let dir = tempfile::tempdir().unwrap();
 /// # let p = |n: &str| dir.path().join(n);
-/// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
 /// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
-/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded).unwrap();
+/// # let panel = ["en-US".to_string()];
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded, &panel).unwrap();
 /// let t = run.train().unwrap();
-/// assert!(t.is_empty());
+/// let _ = t.len();
 /// ```
 ///
 /// ```compile_fail
@@ -100,7 +102,7 @@ Answer with one JSON object and nothing else: {\"text\": \"...\"}, the continuat
 /// # let p = |n: &str| dir.path().join(n);
 /// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
 /// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
-/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded).unwrap();
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded, &["en-US".to_string()]).unwrap();
 /// let t = run.train().unwrap();
 /// let _u = t.clone();
 /// ```
@@ -111,7 +113,7 @@ Answer with one JSON object and nothing else: {\"text\": \"...\"}, the continuat
 /// # let p = |n: &str| dir.path().join(n);
 /// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
 /// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
-/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded).unwrap();
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded, &["en-US".to_string()]).unwrap();
 /// let t = run.train().unwrap();
 /// s(&t);
 /// ```
@@ -120,11 +122,14 @@ pub struct TrainItems {
 }
 
 impl TrainItems {
-    pub(crate) fn from_corpus(corpus: &CorpusStore) -> anyhow::Result<Self> {
+    /// The live Train items whose language is in `panel`.
+    pub(crate) fn from_corpus(corpus: &CorpusStore, panel: &[String]) -> anyhow::Result<Self> {
         let items = corpus
             .all()?
             .into_iter()
-            .filter(|item| SplitScheme::V1.live(item) == Some(Split::Train))
+            .filter(|item| {
+                SplitScheme::V1.live(item) == Some(Split::Train) && panel.contains(&item.language)
+            })
             .collect();
         Ok(Self { items })
     }
@@ -252,11 +257,13 @@ impl<'cp> EncoderOffer<'cp> {
 }
 
 /// What the editor is told of how its last edit fared: whether it was kept, and
-/// the held-out composite at the current inventory, rounded to the nearest
-/// [`LADDER_STEP`]. The head composite changes only when an edit is accepted and
-/// an accept needs a gain above one step, so a run releases at most
-/// `1 / LADDER_STEP` distinct values (Blum and Hardt 2015, the Ladder). Nothing
-/// else about the held-out split is a field.
+/// the held-out composite at the current inventory of each panel language,
+/// rounded to the nearest [`LADDER_STEP`]. The heads change only when an edit is
+/// accepted, and an accept raises the panel's composite sum by more than one
+/// step, so a run over `L` languages releases at most `1.5 * L / LADDER_STEP`
+/// changes of this line (Blum and Hardt 2015, the Ladder; ruling
+/// `weksa-lowering:ruling:panel-accept-sum-rule`). Nothing else about the
+/// held-out split is a field.
 ///
 /// ```
 /// let f = weksa::context::EditFeedback::none();
@@ -266,18 +273,18 @@ impl<'cp> EncoderOffer<'cp> {
 /// Its fields are private:
 ///
 /// ```compile_fail,E0451
-/// let _ = weksa::context::EditFeedback { last: None, head: None };
+/// let _ = weksa::context::EditFeedback { last: None, head: vec![] };
 /// ```
 ///
 /// and only the run builds one with a reading:
 ///
 /// ```compile_fail,E0624
-/// let _ = weksa::context::EditFeedback::new(Some(true), Some(0.5));
+/// let _ = weksa::context::EditFeedback::new(Some(true), vec![]);
 /// ```
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct EditFeedback {
     last: Option<bool>,
-    head: Option<f64>,
+    head: Vec<(String, f64)>,
 }
 
 impl EditFeedback {
@@ -285,16 +292,20 @@ impl EditFeedback {
     pub fn none() -> Self {
         Self {
             last: None,
-            head: None,
+            head: Vec::new(),
         }
     }
 
-    /// `last`: whether the previous edit was accepted; `head`: the composite at
-    /// the current inventory, rounded here to the nearest [`LADDER_STEP`].
-    pub(crate) fn new(last: Option<bool>, head: Option<f64>) -> Self {
+    /// `last`: whether the previous edit was accepted; `head`: each panel
+    /// language's composite at the current inventory, in panel order, rounded
+    /// here to the nearest [`LADDER_STEP`].
+    pub(crate) fn new(last: Option<bool>, head: Vec<(String, f64)>) -> Self {
         Self {
             last,
-            head: head.map(|x| (x / LADDER_STEP).round() * LADDER_STEP),
+            head: head
+                .into_iter()
+                .map(|(tag, x)| (tag, (x / LADDER_STEP).round() * LADDER_STEP))
+                .collect(),
         }
     }
 
@@ -304,7 +315,15 @@ impl EditFeedback {
             Some(false) => "rejected",
             None => "none",
         };
-        let head = self.head.map_or("none".to_string(), |x| format!("{x:.3}"));
+        let head = if self.head.is_empty() {
+            "none".to_string()
+        } else {
+            self.head
+                .iter()
+                .map(|(tag, x)| format!("{tag} {x:.3}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         format!("last edit: {last}; validation composite at head: {head}")
     }
 }
@@ -312,12 +331,12 @@ impl EditFeedback {
 /// Text for a model call, and the keys of the items it holds. The only
 /// constructors are [`Prompt::mint`], [`Prompt::encode`] and [`Prompt::lower`].
 ///
-/// ```
+/// ```no_run
 /// # let dir = tempfile::tempdir().unwrap();
 /// # let p = |n: &str| dir.path().join(n);
-/// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
 /// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
-/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded).unwrap();
+/// # let panel = ["en-US".to_string()];
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded, &panel).unwrap();
 /// let t = run.train().unwrap();
 /// let inv = run.inventory().inventory().unwrap();
 /// let feedback = weksa::context::EditFeedback::none();
@@ -335,7 +354,7 @@ impl EditFeedback {
 /// # let p = |n: &str| dir.path().join(n);
 /// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
 /// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
-/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded).unwrap();
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded, &["en-US".to_string()]).unwrap();
 /// let t = run.train().unwrap();
 /// let inv = run.inventory().inventory().unwrap();
 /// let feedback = weksa::context::EditFeedback::none();
@@ -348,7 +367,7 @@ impl EditFeedback {
 /// # let p = |n: &str| dir.path().join(n);
 /// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
 /// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
-/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded).unwrap();
+/// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded, &["en-US".to_string()]).unwrap();
 /// let t = run.train().unwrap();
 /// let inv = run.inventory().inventory().unwrap();
 /// let feedback = weksa::context::EditFeedback::none();
@@ -502,17 +521,19 @@ impl Prompt {
         }
     }
 
-    /// [`LOWER_INSTRUCTIONS`], the meaning of `input` (no kind, constraints,
-    /// scene, speaker or group), the en-US forms of every entity its referents
-    /// cite, and the entries of `inventory` live at the view's revision. `item`
+    /// [`LOWER_INSTRUCTIONS`], the `language: <tag>` line, the meaning of
+    /// `input` (no kind, constraints, scene, speaker or group), the forms in
+    /// `language` of every entity its referents cite, and the entries of `inventory` live at the view's revision. `item`
     /// goes only to [`Prompt::item_keys`], never into the text. The view's
     /// speaker and group fields are never read; a speaker's entity id appears
     /// only when the encoder cites that entity on a referent, which is naming a
     /// cited entity like any other. A cited entity the port lacks, or one with
-    /// no en-US form, is an error and no prompt.
+    /// no form in `language`, is an error and no prompt. The caller chooses the
+    /// language; the view has none.
     pub fn lower(
         input: &LoweringInput,
         item: &CorpusItemId,
+        language: &str,
         inventory: &Inventory,
         entities: &dyn EntityForms,
     ) -> Result<Prompt, LowerError> {
@@ -520,7 +541,7 @@ impl Prompt {
         for id in input.referents().iter().filter_map(|r| r.entity.as_ref()) {
             let found = entity(entities, id)?;
             let named = found
-                .forms_in(TARGET_LANGUAGE)
+                .forms_in(language)
                 .filter(|f| !f.is_empty())
                 .ok_or_else(|| LowerError::NoForm { entity: id.clone() })?;
             forms.insert(id.as_str(), named.to_vec());
@@ -536,7 +557,7 @@ impl Prompt {
         };
         let rev = input.inventory_rev();
         let text = format!(
-            "{LOWER_INSTRUCTIONS}\n\npacket: {}\n\nentities: {}\n\ninventory rev:{rev}{}",
+            "{LOWER_INSTRUCTIONS}\n\nlanguage: {language}\n\npacket: {}\n\nentities: {}\n\ninventory rev:{rev}{}",
             serde_json::to_string(&meaning).expect("a meaning is plain data"),
             serde_json::to_string(&forms).expect("forms are plain data"),
             inventory_lines(inventory, rev)
@@ -583,34 +604,50 @@ mod tests {
 
     #[test]
     fn the_feedback_line_prints_exact_values() {
+        let en = |x: f64| vec![("en-US".to_string(), x)];
         let line = |last, head| EditFeedback::new(last, head).line();
         assert_eq!(
             EditFeedback::none().line(),
             "last edit: none; validation composite at head: none"
         );
         assert_eq!(
-            line(Some(true), Some(0.5)),
-            "last edit: accepted; validation composite at head: 0.500"
+            line(Some(true), en(0.5)),
+            "last edit: accepted; validation composite at head: en-US 0.500"
         );
         assert_eq!(
-            line(Some(false), Some(0.0)),
-            "last edit: rejected; validation composite at head: 0.000"
+            line(Some(false), en(0.0)),
+            "last edit: rejected; validation composite at head: en-US 0.000"
         );
-        assert_eq!(line(None, None), EditFeedback::none().line());
+        assert_eq!(line(None, vec![]), EditFeedback::none().line());
         // The head is rounded to the nearest step before it is printed.
         assert_eq!(
-            line(None, Some(0.5012)),
-            "last edit: none; validation composite at head: 0.500"
+            line(None, en(0.5012)),
+            "last edit: none; validation composite at head: en-US 0.500"
         );
         assert_eq!(
-            line(None, Some(0.5026)),
-            "last edit: none; validation composite at head: 0.505"
+            line(None, en(0.5026)),
+            "last edit: none; validation composite at head: en-US 0.505"
         );
         assert_eq!(
-            line(None, Some(0.9999)),
-            "last edit: none; validation composite at head: 1.000"
+            line(None, en(0.9999)),
+            "last edit: none; validation composite at head: en-US 1.000"
         );
-        assert_eq!(EditFeedback::new(None, Some(0.5026)).head, Some(0.505));
+        // One value per panel language, in the order given.
+        assert_eq!(
+            line(None, vec![("en-US".into(), 0.5026), ("ja-JP".into(), 0.41)]),
+            "last edit: none; validation composite at head: en-US 0.505, ja-JP 0.410"
+        );
+    }
+
+    #[test]
+    fn a_mint_prompt_over_no_train_items_is_the_brief_the_feedback_and_the_listing() {
+        let none = TrainItems { items: vec![] };
+        let prompt = Prompt::mint(&none, &Inventory::default(), 0, &EditFeedback::none());
+        assert_eq!(
+            prompt.text(),
+            format!("{MINT_INSTRUCTIONS}\n\nlast edit: none; validation composite at head: none\n\ninventory rev:0")
+        );
+        assert!(prompt.item_keys().is_empty());
     }
 
     #[test]

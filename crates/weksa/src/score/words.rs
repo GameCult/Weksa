@@ -13,8 +13,10 @@
 //! word, never one word per character: per-character words would make every
 //! honest single-word gloss share bigrams with a held-out sentence, which is
 //! the leak signature. A change between such a run and any other script also
-//! ends a word. A leak in these scripts shows at n = 1 and in chrF; a
-//! dictionary segmenter is the ja-JP panel's to add.
+//! ends a word. The n >= 2 coverage signature is therefore blind on these
+//! scripts: a leak there shows at n = 1 and in max pairwise chrF, which is
+//! character n-grams and script-blind. A dictionary segmenter is follow-up
+//! `ja-word-segmenter`.
 
 use caseless::default_case_fold_str;
 use unicode_normalization::UnicodeNormalization;

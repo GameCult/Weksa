@@ -51,6 +51,7 @@ fn a_run_pins_its_stores_and_refuses_drift() {
             "bag",
             weksa::run::LowererReach::ToolLessRelay,
             ModelFamily::Unrecorded,
+            &["en-US".to_string()],
         )
     };
 
@@ -154,6 +155,7 @@ fn a_run_works_on_its_own_copy_of_the_inventory() {
         "bag",
         weksa::run::LowererReach::ToolLessRelay,
         ModelFamily::Unrecorded,
+        &["en-US".to_string()],
     )
     .unwrap();
 
@@ -231,6 +233,7 @@ fn create_refuses_a_root_that_holds_an_inventory_and_never_truncates_it() {
             "bag",
             weksa::run::LowererReach::ToolLessRelay,
             ModelFamily::Unrecorded,
+            &["en-US".to_string()],
         )
     };
 
@@ -278,6 +281,7 @@ fn a_create_that_fails_leaves_no_inventory_and_the_retry_succeeds() {
             "bag",
             weksa::run::LowererReach::ToolLessRelay,
             ModelFamily::Unrecorded,
+            &["en-US".to_string()],
         )
     };
     // A directory opens for reading and fails mid-copy, after the destination exists.
@@ -398,6 +402,7 @@ fn a_store_changed_between_its_digest_and_its_open_is_drift() {
             "bag",
             weksa::run::LowererReach::ToolLessRelay,
             ModelFamily::Unrecorded,
+            &["en-US".to_string()],
             || more(&mut w)
         )
         .err(),
@@ -415,6 +420,7 @@ fn a_store_changed_between_its_digest_and_its_open_is_drift() {
         "bag",
         weksa::run::LowererReach::ToolLessRelay,
         ModelFamily::Unrecorded,
+        &["en-US".to_string()],
     )
     .unwrap();
 }
@@ -447,6 +453,7 @@ fn window(
         "bag",
         weksa::run::LowererReach::ToolLessRelay,
         ModelFamily::Unrecorded,
+        &["en-US".to_string()],
         || change(&mut w, &root),
     )
     .err();
@@ -841,6 +848,12 @@ fn dao() -> Dao {
 /// A Dao run whose stores `edit` (given the corpus and entity paths) changed
 /// before the run pinned them.
 fn dao_over(edit: impl FnOnce(&Path, &Path)) -> Dao {
+    dao_panel(edit, &["en-US"])
+}
+
+/// `dao_over` with the run opened on `panel`.
+fn dao_panel(edit: impl FnOnce(&Path, &Path), panel: &[&str]) -> Dao {
+    let panel: Vec<String> = panel.iter().map(|t| t.to_string()).collect();
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/daodejing");
     let dir = tempfile::tempdir().unwrap();
     let copy = |from: &str, to: &str| {
@@ -866,6 +879,7 @@ fn dao_over(edit: impl FnOnce(&Path, &Path)) -> Dao {
         "bag",
         weksa::run::LowererReach::ToolLessRelay,
         ModelFamily::Unrecorded,
+        &panel,
     )
     .unwrap();
     Dao {
@@ -923,15 +937,15 @@ fn round_over_the_dao_stores_scores_train_and_validation() {
     };
     assert_eq!(two_dp(chrf), 44.18);
     assert!(meaning.is_some());
-    assert_eq!((r.train_mean().count, r.train_mean().chrf), (1, Some(chrf)));
+    assert_eq!((r.language("en-US").unwrap().train_mean.count, r.language("en-US").unwrap().train_mean.chrf), (1, Some(chrf)));
 
     // Validation: means and refusal counts only.
-    let v = r.validation_mean();
+    let v = &r.language("en-US").unwrap().validation_mean;
     assert_eq!(v.count, 2);
     assert!((v.chrf.unwrap() - 78.56).abs() < 0.01, "{:?}", v.chrf);
     assert!(v.meaning.is_some());
-    assert_eq!(r.validation_refused(), Default::default());
-    assert_eq!((r.train_scored(), r.validation_scored()), (1, 2));
+    assert_eq!(r.language("en-US").unwrap().validation_refused, Default::default());
+    assert_eq!((r.language("en-US").unwrap().train_scored, r.language("en-US").unwrap().validation_scored), (1, 2));
 
     // The record carries the run's pins.
     assert_eq!(r.prompt_digest(), pinned.prompt_digest);
@@ -1041,7 +1055,7 @@ fn lowering_prompts(dao: &Dao, inventory: &InventoryStore) -> Vec<(String, Promp
             let view = store
                 .admit(packet, inventory, &corpus, dao.run.entities())
                 .unwrap();
-            let prompt = Prompt::lower(&view, &key, &inv, dao.run.entities()).unwrap();
+            let prompt = Prompt::lower(&view, &key, "en-US", &inv, dao.run.entities()).unwrap();
             (key.to_string(), prompt)
         })
         .collect()
@@ -1139,7 +1153,7 @@ fn unanswered_round_writes_nothing() {
     let mut files = AnswerFiles::new(dao.run.next_round_dir().unwrap(), "fake-model".into());
     let r = recorded(round(&mut dao.run, &mut files, &Scorer::new(Bag)).unwrap());
     assert_eq!((r.n(), r.calls().len()), (1, 6));
-    assert_eq!(two_dp(r.train_mean().chrf.unwrap()), 44.18);
+    assert_eq!(two_dp(r.language("en-US").unwrap().train_mean.chrf.unwrap()), 44.18);
 
     // Round 2 asks again, encode first.
     let mut files = AnswerFiles::new(dao.run.next_round_dir().unwrap(), "fake-model".into());
@@ -1261,15 +1275,15 @@ fn refusal_stages_are_counted() {
     assert_eq!(r.train()[0].outcome, Outcome::Refused(Stage::Parse));
     assert_eq!(r.train()[0].packet, None);
     // A refused item is in the mean as 0: n counts every item, scored the real ones.
-    let m = r.train_mean();
+    let m = &r.language("en-US").unwrap().train_mean;
     assert_eq!((m.count, m.chrf, m.meaning), (1, Some(0.0), Some(0.0)));
-    assert_eq!((r.train_scored(), r.validation_scored()), (0, 1));
-    assert_eq!(r.validation_refused().parse, 0);
+    assert_eq!((r.language("en-US").unwrap().train_scored, r.language("en-US").unwrap().validation_scored), (0, 1));
+    assert_eq!(r.language("en-US").unwrap().validation_refused.parse, 0);
     assert_eq!(
-        (r.validation_refused().admit, r.validation_refused().lower),
+        (r.language("en-US").unwrap().validation_refused.admit, r.language("en-US").unwrap().validation_refused.lower),
         (1, 0)
     );
-    let m = r.validation_mean();
+    let m = &r.language("en-US").unwrap().validation_mean;
     assert_eq!(m.count, 2);
     assert!(m.chrf.unwrap() > 0.0, "the relation item lowered and scored");
 
@@ -1291,29 +1305,29 @@ fn refusal_stages_are_counted() {
         None,
         "a refused packet is not stored"
     );
-    let v = b_only.validation_refused();
+    let v = b_only.language("en-US").unwrap().validation_refused;
     assert_eq!((v.parse, v.admit, v.lower), (1, 0, 0));
     assert_eq!(
-        b_only.validation_mean().count,
+        b_only.language("en-US").unwrap().validation_mean.count,
         2,
         "every Validation item counts"
     );
-    assert_eq!(b_only.validation_scored(), 1);
-    let b_half = b_only.validation_mean().chrf.unwrap();
+    assert_eq!(b_only.language("en-US").unwrap().validation_scored, 1);
+    let b_half = b_only.language("en-US").unwrap().validation_mean.chrf.unwrap();
     assert!(
         (b_half - 74.99 / 2.0).abs() < 0.01,
         "(74.99 + 0) / 2 = {b_half}"
     );
 
     let a_only = run([good_answers()[0].1.clone(), good_answers()[1].1.clone(), junk]);
-    assert_eq!(a_only.validation_refused().parse, 1);
-    let a_half = a_only.validation_mean().chrf.unwrap();
+    assert_eq!(a_only.language("en-US").unwrap().validation_refused.parse, 1);
+    let a_half = a_only.language("en-US").unwrap().validation_mean.chrf.unwrap();
     assert!(
         (a_half - 82.12 / 2.0).abs() < 0.01,
         "(82.12 + 0) / 2 = {a_half}"
     );
     // The halves add to the full mean: (a + 0) / 2 + (0 + b) / 2 = (a + b) / 2.
-    let whole = full.validation_mean().chrf.unwrap();
+    let whole = full.language("en-US").unwrap().validation_mean.chrf.unwrap();
     assert!(
         (a_half + b_half - whole).abs() < 1e-9,
         "{a_half} + {b_half} vs {whole}"
@@ -1322,7 +1336,7 @@ fn refusal_stages_are_counted() {
         b_half < whole && a_half < whole,
         "refusing never raises the mean"
     );
-    assert_eq!(full.validation_scored(), 2);
+    assert_eq!(full.language("en-US").unwrap().validation_scored, 2);
 }
 
 #[test]
@@ -1356,10 +1370,10 @@ fn non_utf8_encode_answer_is_a_parse_refusal() {
     let r = recorded(round(&mut dao.run, &mut files, &Scorer::new(Bag)).unwrap());
     assert_eq!(r.calls().len(), 5);
     // Item 3 is Validation: its refusal is a Parse refusal and the round stands.
-    let v = r.validation_refused();
+    let v = r.language("en-US").unwrap().validation_refused;
     assert_eq!((v.parse, v.admit, v.lower), (1, 0, 0));
-    assert_eq!((r.train_scored(), r.validation_scored()), (1, 1));
-    assert_eq!(r.validation_mean().count, 2);
+    assert_eq!((r.language("en-US").unwrap().train_scored, r.language("en-US").unwrap().validation_scored), (1, 1));
+    assert_eq!(r.language("en-US").unwrap().validation_mean.count, 2);
     assert_eq!(dao.run.rounds().unwrap(), [r]);
 }
 
@@ -1402,7 +1416,7 @@ fn a_failed_round_leaves_nothing_a_rerun_collides_with() {
         "{:?}",
         r.train()[0]
     );
-    assert_eq!(r.validation_refused(), Default::default());
+    assert_eq!(r.language("en-US").unwrap().validation_refused, Default::default());
     let stored = PacketStore::open(&dao.root.join("round-1/packets.cc"))
         .unwrap()
         .all()
@@ -1441,7 +1455,7 @@ fn a_stale_packet_store_in_an_unrecorded_round_dir_is_discarded_at_start() {
         "the revised draft is not refused as a changed packet: {:?}",
         r.train()[0]
     );
-    assert_eq!(r.validation_refused(), Default::default());
+    assert_eq!(r.language("en-US").unwrap().validation_refused, Default::default());
     let stored = PacketStore::open(&dir.join("packets.cc"))
         .unwrap()
         .all()
@@ -1467,11 +1481,11 @@ fn the_round_line_prints_each_split_under_its_own_name() {
     let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
     let line = dao.run.round_line(&r);
     // Train is item 1 alone, Validation items 2 and 3; the numbers differ.
-    let (t, v) = (r.train_mean(), r.validation_mean());
+    let (t, v) = (&r.language("en-US").unwrap().train_mean, &r.language("en-US").unwrap().validation_mean);
     assert_eq!(
         line,
         format!(
-            "round 1 rev 3 train n=1 scored=1 chrf={:.2} meaning={:.4} refused=0 validation n=2 scored=2 chrf={:.2} meaning={:.4} refused parse=0 admit=0 lower=0 lowering=tool-less-relay",
+            "round 1 rev 3 en-US train n=1 scored=1 chrf={:.2} meaning={:.4} refused=0 validation n=2 scored=2 chrf={:.2} meaning={:.4} refused parse=0 admit=0 lower=0 lowering=tool-less-relay",
             t.chrf.unwrap(),
             t.meaning.unwrap(),
             v.chrf.unwrap(),
@@ -1522,6 +1536,7 @@ fn errors_echo_no_input() {
         "bag",
         weksa::run::LowererReach::ToolLessRelay,
         ModelFamily::Unrecorded,
+        &["en-US".to_string()],
     )
     .err()
     .unwrap();
@@ -1534,6 +1549,7 @@ fn errors_echo_no_input() {
         "bag",
         weksa::run::LowererReach::ToolLessRelay,
         ModelFamily::Unrecorded,
+        &["en-US".to_string()],
     )
     .err()
     .unwrap();
@@ -1546,6 +1562,7 @@ fn errors_echo_no_input() {
         "bag",
         weksa::run::LowererReach::ToolLessRelay,
         ModelFamily::Unrecorded,
+        &["en-US".to_string()],
     )
     .err()
     .unwrap();
@@ -1583,6 +1600,7 @@ fn errors_echo_no_input() {
         "bag",
         weksa::run::LowererReach::ToolLessRelay,
         ModelFamily::Unrecorded,
+        &["en-US".to_string()],
     )
     .unwrap();
     let mut model = cycle_fake(&format!("{{\"{canary}\":1}}"));
@@ -1717,13 +1735,13 @@ fn head_rev(root: &Path) -> u32 {
 }
 
 fn validation(r: &RoundRecord) -> Reading {
-    Reading::of(r.validation_mean()).unwrap()
+    Reading::of(&r.language("en-US").unwrap().validation_mean).unwrap()
 }
 
 /// The feedback line the editor is shown for a head round, built from outside.
 fn feedback_line(last: &str, head: &RoundRecord) -> String {
     let rounded = (validation(head).composite / LADDER_STEP).round() * LADDER_STEP;
-    format!("last edit: {last}; validation composite at head: {rounded:.3}")
+    format!("last edit: {last}; validation composite at head: en-US {rounded:.3}")
 }
 
 fn mint_texts(model: &FakeModel) -> Vec<&str> {
@@ -1751,19 +1769,19 @@ fn cycle_accepts_a_gain_past_the_floor() {
     );
     assert_eq!((d.base_rev(), d.candidate_rev()), (3, Some(4)));
     assert_eq!(d.verdict(), Verdict::Accepted);
-    assert_eq!(d.threshold(), LADDER_STEP);
+    assert_eq!(d.panel()[0].threshold, LADDER_STEP);
     assert_eq!(
-        *d.floor(),
+        d.panel()[0].floor,
         Reading {
             chrf: 0.0,
             meaning: 0.0,
             composite: 0.0
         }
     );
-    assert_eq!(*d.base(), validation(&rounds[0]));
+    assert_eq!(d.panel()[0].base, validation(&rounds[0]));
     let record = dao.run.rounds().unwrap().remove(2);
-    assert_eq!(d.candidate(), Some(&validation(&record)));
-    assert!(d.candidate().unwrap().composite - d.base().composite > LADDER_STEP);
+    assert_eq!(d.panel()[0].candidate, Some(validation(&record)));
+    assert!(d.panel()[0].candidate.unwrap().composite - d.panel()[0].base.composite > LADDER_STEP);
 
     // The candidate round was scored under the candidate file, as cycle 1's.
     let file = dao.root.join("cycle-1/inventory.cc");
@@ -1787,11 +1805,11 @@ fn cycle_accepts_a_gain_past_the_floor() {
     assert_eq!(d.edit().prompt, model.seen[0].0);
 
     // The line, with the readings printed to four places.
-    let (b, c) = (d.base().composite, d.candidate().unwrap().composite);
+    let (b, c) = (d.panel()[0].base.composite, d.panel()[0].candidate.unwrap().composite);
     assert_eq!(
         dao.run.cycle_line(&d),
         format!(
-            "cycle 1 rev 3->4 base={b:.4} candidate={c:.4} floor=0.0000 threshold=0.0050 accepted lowering=tool-less-relay"
+            "cycle 1 rev 3->4 en-US base={b:.4} candidate={c:.4} floor=0.0000 threshold=0.0050 accepted lowering=tool-less-relay"
         )
     );
 
@@ -1822,7 +1840,7 @@ fn cycle_accepts_a_gain_past_the_floor() {
     assert_eq!(d2.candidate_rev(), Some(5));
     assert_eq!(d2.candidate_round(), Some(5));
     assert_eq!(d2.verdict(), Verdict::Rejected(Why::NoGain));
-    assert_eq!(*d2.floor(), *d.floor(), "the floor is measured once");
+    assert_eq!(d2.panel()[0].floor, d.panel()[0].floor, "the floor is measured once");
     assert_eq!(head_rev(&dao.root), 4, "a rejected edit moves nothing");
     assert!(
         mint_texts(&second)[0].contains(&feedback_line("accepted", &dao.run.rounds().unwrap()[2])),
@@ -1846,12 +1864,12 @@ fn cycle_rejects_no_gain_and_keeps_the_head() {
     let d = run_cycle(&mut dao, &mut model);
     assert_eq!(d.verdict(), Verdict::Rejected(Why::NoGain));
     assert_eq!((d.candidate_rev(), d.candidate_round()), (Some(4), Some(3)));
-    assert_eq!(d.candidate(), Some(d.base()));
-    let c = d.base().composite;
+    assert_eq!(d.panel()[0].candidate, Some(d.panel()[0].base));
+    let c = d.panel()[0].base.composite;
     assert_eq!(
         dao.run.cycle_line(&d),
         format!(
-            "cycle 1 rev 3->4 base={c:.4} candidate={c:.4} floor=0.0000 threshold=0.0050 rejected no-gain lowering=tool-less-relay"
+            "cycle 1 rev 3->4 en-US base={c:.4} candidate={c:.4} floor=0.0000 threshold=0.0050 rejected no-gain lowering=tool-less-relay"
         )
     );
     assert_eq!(head_rev(&dao.root), 3);
@@ -1911,10 +1929,10 @@ fn distinct_replicates_set_the_floor_and_a_gain_inside_it_is_no_gain() {
     // (round 1) is the floor, which is past a step and inside the noise.
     let mut model = cycle_fake(ONE_CONCEPT);
     let d = run_cycle(&mut dao, &mut model);
-    assert_eq!(*d.floor(), want);
-    assert_eq!(d.threshold(), want.composite);
-    assert_eq!(d.candidate(), Some(&b));
-    assert!(d.candidate().unwrap().composite - d.base().composite > LADDER_STEP);
+    assert_eq!(d.panel()[0].floor, want);
+    assert_eq!(d.panel()[0].threshold, want.composite);
+    assert_eq!(d.panel()[0].candidate, Some(b));
+    assert!(d.panel()[0].candidate.unwrap().composite - d.panel()[0].base.composite > LADDER_STEP);
     assert_eq!(d.verdict(), Verdict::Rejected(Why::NoGain));
     assert_eq!(head_rev(&dao.root), 3);
 }
@@ -2101,7 +2119,7 @@ fn unanswered_cycle_writes_nothing() {
     let mint = std::fs::read_to_string(&mint_file).unwrap();
     assert_eq!(format!("{:016x}", fnv1a64(mint.as_bytes())), asked[0]);
     assert!(mint.starts_with(MINT_INSTRUCTIONS));
-    assert!(mint.contains("\n\nlast edit: none; validation composite at head: 0.435\n\n"));
+    assert!(mint.contains("\n\nlast edit: none; validation composite at head: en-US 0.435\n\n"));
     assert!(mint.contains("\n\ninventory rev:3\n"));
     assert_eq!(mint.matches("[item:").count(), 1, "one Train block");
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
@@ -2349,7 +2367,7 @@ fn edit_refusals_are_decisions() {
         let d = run_cycle(&mut dao, &mut model);
         assert_eq!(d.verdict(), Verdict::Rejected(why), "{name}");
         assert_eq!(
-            (d.candidate_rev(), d.candidate_round(), d.candidate()),
+            (d.candidate_rev(), d.candidate_round(), d.panel()[0].candidate),
             (None, None, None),
             "{name}"
         );
@@ -2377,8 +2395,8 @@ fn edit_refusals_are_decisions() {
         assert_eq!(
             dao.run.cycle_line(&d),
             format!(
-                "cycle 1 rev 3->none base={:.4} candidate=none floor=0.0000 threshold=0.0050 rejected {tag} lowering=tool-less-relay",
-                d.base().composite
+                "cycle 1 rev 3->none en-US base={:.4} candidate=none floor=0.0000 threshold=0.0050 rejected {tag} lowering=tool-less-relay",
+                d.panel()[0].base.composite
             ),
             "{name}"
         );
@@ -2419,20 +2437,8 @@ fn cycle_needs_a_floor() {
         "the run has no noise floor: record two rounds first"
     );
 
-    // Rounds whose Validation items are all withdrawn have no reading.
-    let mut dao = dao_over(|corpus, _| {
-        let mut store = weksa::CorpusStore::open(corpus).unwrap();
-        for n in [2, 3] {
-            store.withdraw(&format!("item:daodejing:{n}")).unwrap();
-        }
-    });
-    for _ in 0..2 {
-        let mut m = fake(&[(1, json(&draft_of(1)))]);
-        let r = recorded(round(&mut dao.run, &mut m, &Scorer::new(Bag)).unwrap());
-        assert_eq!(r.validation_mean().count, 0);
-    }
-    let mut model = cycle_fake(ONE_CONCEPT);
-    assert_eq!(none(&mut dao, &mut model), Some(RunError::NoValidation));
+    // A panel language with no live Validation item never reaches a round:
+    // `create` refuses it (open_refuses_a_bad_panel).
     assert_eq!(
         RunError::NoValidation.to_string(),
         "a reading has no validation item"
@@ -2515,6 +2521,7 @@ fn a_changed_head_is_drift() {
         "bag",
         weksa::run::LowererReach::ToolLessRelay,
         ModelFamily::Unrecorded,
+        &["en-US".to_string()],
     )
     .unwrap();
     assert_eq!(
@@ -2673,6 +2680,11 @@ fn the_lowerer_sees_no_item_text() {
         item.text = "CANARYVALIDATIONTEXT of the zebra".into();
         item.names = vec![];
         item.prior_turns = vec![];
+        store.add(item.clone(), &entities).unwrap();
+        // A held-out ja-JP line too: the panel is en-US, so it is never offered.
+        item.id = "item:canary:2".into();
+        item.text = "CANARYJAPANESE 検証テキスト".into();
+        item.language = "ja-JP".into();
         store.add(item, &entities).unwrap();
     });
     let mut model = fake(&good_answers());
@@ -2682,7 +2694,7 @@ fn the_lowerer_sees_no_item_text() {
 
     let corpus = weksa::CorpusStore::open(&dao.corpus).unwrap();
     let items = corpus.all().unwrap();
-    assert!(items.len() >= 6, "the canary and the five Legge items");
+    assert!(items.len() >= 7, "the canaries and the five Legge items");
     let packet_keys: Vec<String> = PacketStore::open(&dao.root.join("round-1/packets.cc"))
         .unwrap()
         .all()
@@ -2772,10 +2784,10 @@ fn lowering_refusals_count_at_lower() {
             r.train()[0].packet.is_some(),
             "{what}: the admitted packet is kept on the Train row"
         );
-        let v = r.validation_refused();
+        let v = r.language("en-US").unwrap().validation_refused;
         assert_eq!((v.parse, v.admit, v.lower), (0, 0, 2), "{what}");
-        assert_eq!((r.train_scored(), r.validation_scored()), (0, 0), "{what}");
-        let m = r.validation_mean();
+        assert_eq!((r.language("en-US").unwrap().train_scored, r.language("en-US").unwrap().validation_scored), (0, 0), "{what}");
+        let m = &r.language("en-US").unwrap().validation_mean;
         assert_eq!((m.count, m.chrf), (2, Some(0.0)), "{what}");
     }
 }
@@ -2851,6 +2863,7 @@ fn a_summary_line_says_how_lowerings_were_answered() {
         "bag",
         LowererReach::BriefedSubagent,
         ModelFamily::Unrecorded,
+        &["en-US".to_string()],
     )
     .unwrap();
     let run = RunStores::open(&root).unwrap();
@@ -2873,12 +2886,12 @@ fn lowering_text_at_the_bound_is_scored_and_line_breaks_are_text() {
         model.raw_lowering = Some(Ok(serde_json::json!({ "text": text }).to_string()));
         let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
         assert_eq!(
-            (r.train_scored(), r.validation_scored()),
+            (r.language("en-US").unwrap().train_scored, r.language("en-US").unwrap().validation_scored),
             (1, 2),
             "{}",
             text.len()
         );
-        assert_eq!(r.validation_refused(), Default::default());
+        assert_eq!(r.language("en-US").unwrap().validation_refused, Default::default());
     }
 }
 
@@ -2934,9 +2947,9 @@ fn a_lowering_prompt_that_cannot_be_built_refuses_at_lower_and_keeps_the_packet(
     let kept = row.packet.as_deref().expect("the admitted packet's key is kept");
     let packets = PacketStore::open(&dao.root.join("round-1/packets.cc")).unwrap();
     assert!(packets.get(kept).unwrap().is_some());
-    let v = r.validation_refused();
+    let v = r.language("en-US").unwrap().validation_refused;
     assert_eq!((v.parse, v.admit, v.lower), (0, 0, 1));
-    assert_eq!((r.train_scored(), r.validation_scored()), (1, 2));
+    assert_eq!((r.language("en-US").unwrap().train_scored, r.language("en-US").unwrap().validation_scored), (1, 2));
     // Five items encoded, three lowering prompts built and asked.
     assert_eq!(r.calls().len(), 5 + 3);
 }
@@ -3145,7 +3158,7 @@ fn parse_reasons_never_echo_answer() {
         a[1].1 = answer;
         let mut model = fake(&a);
         let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
-        assert_eq!(r.validation_refused().parse, 1);
+        assert_eq!(r.language("en-US").unwrap().validation_refused.parse, 1);
         let line = dao.run.round_line(&r);
         assert!(!line.contains(canary) && !line.contains("CANARY"), "{line}");
         let bytes = std::fs::read(dao.root.join("run.cc")).unwrap();
@@ -3154,7 +3167,7 @@ fn parse_reasons_never_echo_answer() {
     }
 }
 
-/// A run record as written before `answerer_family` (key 13) existed.
+/// A run record as written before `answerer_family` (key 13) and `panel` (key 14) existed.
 #[derive(Clone, Debug, schemars::JsonSchema, cultcache_rs::DatabaseEntry)]
 #[cultcache(type = "weksa.loop_run")]
 struct PreFamilyRun {
@@ -3184,8 +3197,8 @@ struct PreFamilyRun {
     lowerer_reach: weksa::run::LowererReach,
 }
 
-/// A round record as written before `parse_reasons` and `own_family`, and
-/// before `admit_rules` had a default.
+/// A round record as written with the pooled means (keys 11 to 15) and before
+/// `parse_reasons`, `own_family` and `languages`.
 #[derive(Clone, Debug, schemars::JsonSchema, cultcache_rs::DatabaseEntry)]
 #[cultcache(type = "weksa.loop_round")]
 struct LegacyRound {
@@ -3226,7 +3239,7 @@ struct LegacyRound {
 }
 
 #[test]
-fn records_from_before_the_new_fields_decode_with_defaults() {
+fn a_run_from_before_does_not_open() {
     let mut dao = dao();
     let mut model = fake(&good_answers());
     let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
@@ -3243,11 +3256,11 @@ fn records_from_before_the_new_fields_decode_with_defaults() {
         chrf_version: r.chrf_version().into(),
         calls: r.calls().to_vec(),
         train: r.train().to_vec(),
-        train_mean: r.train_mean().clone(),
-        validation_mean: r.validation_mean().clone(),
-        validation_refused: r.validation_refused(),
-        train_scored: r.train_scored(),
-        validation_scored: r.validation_scored(),
+        train_mean: r.language("en-US").unwrap().train_mean.clone(),
+        validation_mean: r.language("en-US").unwrap().validation_mean.clone(),
+        validation_refused: r.language("en-US").unwrap().validation_refused,
+        train_scored: r.language("en-US").unwrap().train_scored,
+        validation_scored: r.language("en-US").unwrap().validation_scored,
         inventory_digest: r.inventory_digest().into(),
         cycle: r.cycle(),
     };
@@ -3266,25 +3279,33 @@ fn records_from_before_the_new_fields_decode_with_defaults() {
         lowerer_reach: rec.lowerer_reach,
     };
     drop(dao.run);
-    let mut cache = CultCache::new();
-    cache.register_entry_type::<PreFamilyRun>().unwrap();
-    cache.register_entry_type::<LegacyRound>().unwrap();
-    cache
-        .add_generic_backing_store(SingleFileMessagePackBackingStore::new(root.join("run.cc")))
-        .unwrap();
-    cache.pull_all_backing_stores().unwrap();
-    cache.put("run:dao".to_string(), &run).unwrap();
-    cache.put("run:dao:round:1".to_string(), &legacy).unwrap();
-    drop(cache);
-
+    let store = || SingleFileMessagePackBackingStore::new(root.join("run.cc"));
+    // A run record without a panel (no key 14) is a scratch run off git.
+    {
+        let mut cache = CultCache::new();
+        cache.register_entry_type::<PreFamilyRun>().unwrap();
+        cache.register_entry_type::<LegacyRound>().unwrap();
+        cache.add_generic_backing_store(store()).unwrap();
+        cache.pull_all_backing_stores().unwrap();
+        cache.put("run:dao".to_string(), &run).unwrap();
+        cache.put("run:dao:round:1".to_string(), &legacy).unwrap();
+    }
+    assert_eq!(RunStores::open(&root).err(), Some(RunError::Store));
+    // A round with the pooled means (keys 11 to 15) and no languages is
+    // unreadable, under a record that has its panel.
+    let _ = std::fs::remove_file(root.join("run.cc"));
+    {
+        let mut cache = CultCache::new();
+        cache.register_entry_type::<RunRecord>().unwrap();
+        cache.register_entry_type::<LegacyRound>().unwrap();
+        cache.add_generic_backing_store(store()).unwrap();
+        cache.pull_all_backing_stores().unwrap();
+        cache.put("run:dao".to_string(), &rec).unwrap();
+        cache.put("run:dao:round:1".to_string(), &legacy).unwrap();
+    }
+    // No round of that run can be read: it stops at its first round or cycle.
     let reopened = RunStores::open(&root).unwrap();
-    assert_eq!(reopened.record().answerer_family, ModelFamily::Unrecorded);
-    let rounds = reopened.rounds().unwrap();
-    assert_eq!(rounds.len(), 1);
-    assert_eq!(rounds[0].n(), 1);
-    assert!(rounds[0].admit_rules().is_empty());
-    assert!(rounds[0].parse_reasons().is_empty());
-    assert_eq!(rounds[0].own_family(), 0);
+    assert!(reopened.rounds().is_err());
 }
 
 #[test]
@@ -3310,10 +3331,24 @@ fn the_published_run_and_round_schemas_require_none_of_the_new_fields() {
     }
 }
 
-/// Answers a recall probe from the corpus: the item's own second half, a
-/// fixed wrong text, or junk.
+/// What a recall prompt shows of its item: the text after `opening: `.
+fn shown_opening(prompt: &str) -> &str {
+    prompt.rsplit_once("opening: ").expect("a recall prompt has an opening").1
+}
+
+/// The item's text after the opening the prompt showed.
+fn held_back<'a>(text: &'a str, prompt: &str) -> &'a str {
+    let opening = shown_opening(prompt);
+    text.strip_prefix(opening)
+        .unwrap_or_else(|| panic!("the opening is a prefix of the item"))
+        .trim()
+}
+
+/// Answers a recall probe from the corpus: the item's own held-back half (its
+/// text after the opening the prompt showed), a fixed wrong text, or junk.
 struct Reciter {
     corpus: weksa::store::CorpusStore,
+    /// Given the item's held-back half.
     answer: fn(&str) -> String,
     /// An item whose text holds this gets an answer file that is not UTF-8.
     unreadable: Option<&'static str>,
@@ -3331,14 +3366,12 @@ impl ModelPort for Reciter {
         if self.unreadable.is_some_and(|t| item.text.contains(t)) {
             return Err(PortError::Io(std::io::ErrorKind::InvalidData));
         }
-        Ok((self.answer)(&item.text))
+        Ok((self.answer)(held_back(&item.text, prompt.text())))
     }
 }
 
-fn second_half(text: &str) -> String {
-    let words: Vec<&str> = text.split_whitespace().collect();
-    let draft = serde_json::json!({ "text": words[words.len() / 2..].join(" ") });
-    draft.to_string()
+fn second_half(held_back: &str) -> String {
+    serde_json::json!({ "text": held_back }).to_string()
 }
 
 fn reciter(dao: &Dao, answer: fn(&str) -> String) -> Reciter {
@@ -3355,20 +3388,26 @@ fn a_recall_probe_asks_for_the_second_half_of_each_live_item_and_never_shows_it(
     use weksa::run::RecallOutcome;
     let dao = dao();
     let mut perfect = reciter(&dao, second_half);
-    let RecallOutcome::Read(r) = dao.run.recall(&mut perfect).unwrap() else {
+    let RecallOutcome::Read(reading) = dao.run.recall(&mut perfect).unwrap() else {
         panic!("every prompt was answered");
     };
+    let r = reading.languages[0].clone();
     // Items 1 (Train) and 2, 3 (Validation) are live; 4 and 5 are not offered.
     assert_eq!((r.n, r.answered), (3, 3));
     assert!((r.chrf - 100.0).abs() < 1e-9, "{}", r.chrf);
     assert_eq!(perfect.seen.len(), 3);
     for (text, key) in perfect.seen.iter().zip(["item:daodejing:1", "item:daodejing:2", "item:daodejing:3"]) {
         let item = perfect.corpus.get(key).unwrap().unwrap();
-        let rest = item.text.split_whitespace().collect::<Vec<_>>();
-        let tail = rest[rest.len() / 2..].join(" ");
-        let head = rest[..rest.len() / 2].join(" ");
-        assert!(text.contains(&head), "{key}: the opening is shown");
-        assert!(!text.contains(&tail), "{key}: the held half is not shown");
+        // The opening is a proper prefix of the item, cut at a word boundary
+        // near its middle; the rest is held back.
+        let head = shown_opening(text);
+        let tail = held_back(&item.text, text);
+        assert!(!head.is_empty() && !tail.is_empty(), "{key}");
+        let squeeze = |t: &str| t.split_whitespace().collect::<String>();
+        assert_eq!(squeeze(&item.text), squeeze(&format!("{head}{tail}")), "{key}: head and tail are the item");
+        let n = item.text.len();
+        assert!((n / 4..=3 * n / 4).contains(&head.len()), "{key}: near the middle");
+        assert!(!text.contains(tail), "{key}: the held half is not shown");
     }
 }
 
@@ -3377,15 +3416,17 @@ fn a_recall_of_the_wrong_words_or_no_answer_reads_low_and_a_missing_answer_waits
     use weksa::run::RecallOutcome;
     let dao = dao();
     let mut wrong = reciter(&dao, |_| r#"{"text":"zzz qqq xxx"}"#.to_string());
-    let RecallOutcome::Read(r) = dao.run.recall(&mut wrong).unwrap() else {
+    let RecallOutcome::Read(reading) = dao.run.recall(&mut wrong).unwrap() else {
         panic!("answered");
     };
+    let r = reading.languages[0].clone();
     assert_eq!((r.n, r.answered), (3, 3));
     assert!(r.chrf < 10.0, "{}", r.chrf);
     let mut junk = reciter(&dao, |_| "not json".to_string());
-    let RecallOutcome::Read(r) = dao.run.recall(&mut junk).unwrap() else {
+    let RecallOutcome::Read(reading) = dao.run.recall(&mut junk).unwrap() else {
         panic!("answered");
     };
+    let r = reading.languages[0].clone();
     assert_eq!((r.n, r.answered, r.chrf), (3, 0, 0.0));
     // With no answers on disk the files port waits on all three prompts.
     let mut files = AnswerFiles::new(dao.run.recall_dir(), "m".into());
@@ -3429,10 +3470,10 @@ fn a_recall_mean_is_over_every_probe_an_unreadable_answer_counts_0_and_a_withdra
     let both = |dao: &Dao, unreadable: Option<&'static str>| {
         let mut m = reciter(dao, second_half);
         m.unreadable = unreadable;
-        let RecallOutcome::Read(r) = dao.run.recall(&mut m).unwrap() else {
+        let RecallOutcome::Read(reading) = dao.run.recall(&mut m).unwrap() else {
             panic!("answered");
         };
-        r
+        reading.languages[0].clone()
     };
     let full = both(&dao, None);
     assert_eq!(
@@ -3541,16 +3582,17 @@ fn mixed_family_round(family: ModelFamily) -> u32 {
         "bag",
         LowererReach::ToolLessRelay,
         family,
+        &["en-US".to_string()],
     )
     .unwrap();
     let scorer = weksa::score::Scorer::new(OneBag);
     match round(&mut run, &mut NotADraft, &scorer).unwrap() {
         RoundOutcome::Recorded(r) => {
-            // Seven items were offered: the world's own cast item and mix 1 to 6;
+            // Eight items were offered: the world's two cast items and mix 1 to 6;
             // the Test-group and withdrawn items were not.
             assert_eq!(
                 r.parse_reasons().iter().map(|c| c.count).sum::<u32>(),
-                7,
+                8,
                 "offered items"
             );
             r.own_family()
@@ -3697,7 +3739,7 @@ fn read(
     outcome: weksa::run::AblationOutcome,
 ) -> Vec<(weksa::Split, weksa::run::AblationReading)> {
     match outcome {
-        weksa::run::AblationOutcome::Read(r) => r,
+        weksa::run::AblationOutcome::Read(r) => r.into_iter().map(|(_, split, x)| (split, x)).collect(),
         weksa::run::AblationOutcome::Unanswered { prompts } => panic!("unanswered {prompts:?}"),
     }
 }
@@ -4107,5 +4149,411 @@ fn a_split_where_no_replay_is_usable_reads_none_throughout() {
     assert_eq!(
         reading[0].1.line(),
         "ablation n=0 unusable=2 replay chrf=none meaning=none | drop n=0 chrf=none meaning=none moved=0 ref_gain_chrf=none ref_gain_meaning=none | permute n=0 chrf=none meaning=none moved=0 ref_gain_chrf=none ref_gain_meaning=none"
+    );
+}
+
+// ---- the panel: each item is lowered in its own language ----
+
+const JA_TEXTS: [(&str, &str, usize); 3] = [
+    ("item:daodejing:11", "賢者は民の心を空にし、腹を満たし、志を弱め、骨を強くする。", 1),
+    ("item:daodejing:12", "天は長く、地は久しい。", 2),
+    ("item:daodejing:13", "上善は水のようである。", 3),
+];
+
+/// The Dao corpus with a ja-JP twin of each live item (same group, so the same
+/// split) and a pt-BR twin of each; Laozi, the speaker the packets cite, gains
+/// `ja` as a ja-JP form when given.
+fn add_languages(corpus: &Path, entities: &Path, ja: Option<&str>) {
+    let mut entities = weksa::EntityStore::open(entities).unwrap();
+    if let Some(form) = ja {
+        let mut laozi = entities.get(&common::eid("laozi")).unwrap().unwrap();
+        laozi.forms.push(weksa::LanguageForms {
+            language: "ja-JP".into(),
+            forms: vec![form.into()],
+            pronunciation: None,
+        });
+        entities.put(laozi).unwrap();
+    }
+    let mut store = CorpusStore::open(corpus).unwrap();
+    for (key, text, twin) in JA_TEXTS {
+        let mut item = store.get(&format!("item:daodejing:{twin}")).unwrap().unwrap();
+        item.id = key.into();
+        item.text = text.into();
+        item.language = "ja-JP".into();
+        item.names = vec![];
+        item.prior_turns = vec![];
+        store.add(item, &entities).unwrap();
+        let mut pt = store.get(&format!("item:daodejing:{twin}")).unwrap().unwrap();
+        pt.id = format!("item:daodejing:2{twin}");
+        pt.text = format!("PORTUGUESEMARK {twin} o sabio esvazia os coracoes");
+        pt.language = "pt-BR".into();
+        pt.names = vec![];
+        pt.prior_turns = vec![];
+        store.add(pt, &entities).unwrap();
+    }
+}
+
+/// The Dao draft of `item`, its first referent citing the speaker, Laozi.
+fn citing_laozi(item: usize) -> String {
+    let mut v = serde_json::to_value(draft_of(item)).unwrap();
+    v["referents"][0]["entity"] = serde_json::json!("entity:laozi");
+    v.to_string()
+}
+
+/// Encode answers for the en-US and ja-JP items, all citing the sage.
+fn bilingual_answers() -> HashMap<String, String> {
+    let mut answers = HashMap::new();
+    for n in 1..=3 {
+        answers.insert(format!("item:daodejing:{n}"), citing_laozi(n));
+        answers.insert(format!("item:daodejing:1{n}"), citing_laozi(n));
+    }
+    answers
+}
+
+fn bilingual_fake() -> FakeModel {
+    let mut model = fake(&[]);
+    model.answers = bilingual_answers();
+    for (key, text, _) in JA_TEXTS {
+        model.lowered.insert(key.into(), text.into());
+    }
+    model
+}
+
+fn bilingual(ja: Option<&'static str>) -> Dao {
+    dao_panel(
+        |corpus, entities| add_languages(corpus, entities, ja),
+        &["ja-JP", "en-US"],
+    )
+}
+
+const LAOZI_JA: Option<&str> = Some("老子");
+
+fn lowering_texts(model: &FakeModel) -> Vec<&str> {
+    model
+        .seen
+        .iter()
+        .map(|(_, t)| t.as_str())
+        .filter(|t| t.starts_with(LOWER_INSTRUCTIONS))
+        .collect()
+}
+
+#[test]
+fn each_item_lowers_in_its_own_language() {
+    let mut dao = bilingual(LAOZI_JA);
+    assert_eq!(dao.run.record().panel, ["en-US", "ja-JP"], "sorted at open");
+    let mut model = bilingual_fake();
+    let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    let prompts = lowering_texts(&model);
+    assert_eq!(prompts.len(), 6, "three items in each language");
+    let (mut ja, mut en) = (0, 0);
+    for text in prompts {
+        if text.contains("\n\nlanguage: ja-JP\n\n") {
+            ja += 1;
+            assert!(text.contains(r#"{"entity:laozi":["老子"]}"#), "{text}");
+            assert!(!text.contains("Laozi"), "{text}");
+        } else {
+            en += 1;
+            assert!(text.contains("\n\nlanguage: en-US\n\n"), "{text}");
+            assert!(text.contains(r#"{"entity:laozi":["Laozi"]}"#), "{text}");
+            assert!(!text.contains("老子"), "{text}");
+        }
+    }
+    assert_eq!((ja, en), (3, 3));
+    // No lowering prompt, in either language, holds any item's text, key or group.
+    let corpus = CorpusStore::open(&dao.corpus).unwrap();
+    for text in lowering_texts(&model) {
+        for item in corpus.all().unwrap() {
+            assert!(!text.contains(&item.text), "{}", item.id);
+            assert!(!text.contains(item.id.as_str()), "{}", item.id);
+            assert!(!text.contains(item.group.as_str()), "{}", item.id);
+        }
+    }
+    // A ja-JP item is scored against its own text: the lowering that is the
+    // text reads as a perfect one.
+    let ja = r.language("ja-JP").unwrap();
+    assert_eq!((ja.train_scored, ja.validation_scored), (1, 2));
+    assert_eq!(ja.validation_mean.chrf, Some(100.0));
+    assert_eq!(ja.train_mean.meaning, Some(1.0));
+}
+
+#[test]
+fn a_cited_entity_without_a_form_in_the_items_language_refuses_at_lower() {
+    let mut dao = bilingual(None);
+    let mut model = bilingual_fake();
+    let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    let ja = r.language("ja-JP").unwrap();
+    assert_eq!(ja.validation_refused.lower, 2);
+    assert_eq!((ja.train_scored, ja.validation_scored), (0, 0));
+    let refused: Vec<_> = r
+        .train()
+        .iter()
+        .filter(|row| matches!(row.outcome, Outcome::Refused(Stage::Lower)))
+        .collect();
+    assert_eq!(refused.len(), 1, "the ja-JP Train item");
+    assert_eq!(refused[0].item, "item:daodejing:11");
+    let en = r.language("en-US").unwrap();
+    assert_eq!((en.train_scored, en.validation_scored), (1, 2));
+    assert_eq!(en.validation_refused, weksa::run::RefusalCounts::default());
+    assert_eq!(lowering_texts(&model).len(), 3, "no prompt for a form that is missing");
+}
+
+#[test]
+fn the_panel_filters_every_prompt() {
+    let mut dao = bilingual(LAOZI_JA);
+    let mut model = bilingual_fake();
+    // Two rounds, a cycle (the editor's prompt), a recall: every kind of prompt.
+    let mut last = None;
+    for _ in 0..2 {
+        last = Some(recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap()));
+    }
+    let tags = |r: &RoundRecord| -> Vec<String> {
+        r.languages().iter().map(|l| l.language.clone()).collect()
+    };
+    assert_eq!(tags(&last.unwrap()), ["en-US", "ja-JP"]);
+    model.candidate = Some((4, bilingual_answers()));
+    model.edit = Some(Ok(ONE_CONCEPT.to_string()));
+    run_cycle(&mut dao, &mut model);
+    let mut recite = reciter(&dao, second_half);
+    let reading = match dao.run.recall(&mut recite).unwrap() {
+        weksa::run::RecallOutcome::Read(r) => r,
+        _ => panic!("answered"),
+    };
+    let langs: Vec<&str> = reading.languages.iter().map(|l| l.language.as_str()).collect();
+    assert_eq!(langs, ["en-US", "ja-JP"]);
+    let shown = model.seen.iter().map(|(_, t)| t).chain(&recite.seen);
+    let mut count = 0;
+    for text in shown {
+        count += 1;
+        assert!(!text.contains("PORTUGUESE"), "a pt-BR item reached a prompt");
+        for n in 1..=3 {
+            assert!(!text.contains(&format!("item:daodejing:2{n}")));
+        }
+    }
+    assert!(count > 20, "{count}");
+    assert!(!mint_texts(&model).is_empty());
+    assert_eq!(dao.run.train().unwrap().len(), 2, "one Train item per panel language");
+}
+
+#[test]
+fn open_refuses_a_bad_panel() {
+    let train_only = |corpus: &Path, entities: &Path| {
+        let entities = weksa::EntityStore::open(entities).unwrap();
+        let mut store = CorpusStore::open(corpus).unwrap();
+        let mut item = store.get("item:daodejing:1").unwrap().unwrap();
+        item.id = "item:daodejing:31".into();
+        item.text = "Un texte francais.".into();
+        item.language = "fr-FR".into();
+        item.names = vec![];
+        item.prior_turns = vec![];
+        store.add(item, &entities).unwrap();
+    };
+    let dao = dao_over(train_only);
+    let (corpus, inventory, entities) = (&dao.corpus, &dao.inventory, &dao.entities);
+    drop(dao.run);
+    let tag = |s: &str| s.to_string();
+    for panel in [
+        vec![],
+        vec![tag("en-US"), tag("en-US")],
+        vec![tag("en-US"), tag("not a tag!")],
+        // No live item at all, and a Train item without a Validation one.
+        vec![tag("en-US"), tag("de-DE")],
+        vec![tag("en-US"), tag("fr-FR")],
+    ] {
+        let root = dao._dir.path().join(format!("panel-{}", panel.len()));
+        let created = RunStores::create(
+            &root,
+            "p",
+            RunPaths { corpus, inventory, entities },
+            "fake-model",
+            "bag",
+            weksa::run::LowererReach::ToolLessRelay,
+            ModelFamily::Unrecorded,
+            &panel,
+        );
+        let err = created.err();
+        assert_eq!(err, Some(RunError::Panel), "{panel:?}");
+        let shown = err.unwrap().to_string();
+        for t in &panel {
+            assert!(!shown.contains(t.as_str()), "{shown}");
+        }
+        assert!(!root.join("run.cc").exists(), "{panel:?}");
+        assert!(!root.join("inventory.cc").exists(), "{panel:?}");
+    }
+}
+
+#[test]
+fn round_means_are_per_language() {
+    let mut dao = bilingual(LAOZI_JA);
+    let mut model = bilingual_fake();
+    // One ja-JP Validation item is not an encodable draft: it counts 0.
+    model.answers.insert("item:daodejing:13".into(), "not a draft".into());
+    let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    let ja = r.language("ja-JP").unwrap();
+    // Validation: item 12 reads perfectly (chrF 100, meaning 1), item 13 is 0.
+    assert_eq!(ja.validation_mean.count, 2);
+    assert_eq!(ja.validation_mean.chrf, Some(50.0));
+    assert_eq!(ja.validation_mean.meaning, Some(0.5));
+    assert_eq!((ja.validation_scored, ja.validation_refused.parse), (1, 1));
+    assert_eq!(ja.train_mean.chrf, Some(100.0));
+
+    // en-US reads exactly as it does when it is the whole panel: the ja-JP
+    // items touch none of its numbers.
+    let mut alone = dao_over(|_, _| {});
+    let mut plain = fake(&good_answers());
+    let r2 = recorded(round(&mut alone.run, &mut plain, &Scorer::new(Bag)).unwrap());
+    assert_eq!(r.language("en-US"), r2.language("en-US"));
+    assert_eq!(r.languages().len(), 2);
+    assert_eq!(r2.languages().len(), 1);
+}
+
+#[test]
+fn floor_and_feedback_are_per_language() {
+    let mut dao = bilingual(LAOZI_JA);
+    // Round 1: everything lowers perfectly in ja-JP. Round 2: one ja-JP
+    // Validation item is refused. en-US reads the same twice.
+    let mut first = bilingual_fake();
+    recorded(round(&mut dao.run, &mut first, &Scorer::new(Bag)).unwrap());
+    let mut second = bilingual_fake();
+    second.answers.insert("item:daodejing:13".into(), "not a draft".into());
+    recorded(round(&mut dao.run, &mut second, &Scorer::new(Bag)).unwrap());
+
+    let mut model = bilingual_fake();
+    model.candidate = Some((4, bilingual_answers()));
+    model.edit = Some(Ok(ONE_CONCEPT.to_string()));
+    let d = run_cycle(&mut dao, &mut model);
+    let rows = d.panel();
+    assert_eq!(
+        rows.iter().map(|r| r.language.as_str()).collect::<Vec<_>>(),
+        ["en-US", "ja-JP"]
+    );
+    let (en, ja) = (&rows[0], &rows[1]);
+    assert_eq!(en.floor.composite, 0.0, "en-US read the same twice");
+    assert_eq!(en.threshold, LADDER_STEP);
+    assert_eq!(ja.floor.chrf, 50.0);
+    assert_eq!(ja.floor.meaning, 0.5);
+    assert_eq!(ja.floor.composite, 0.5);
+    assert_eq!(ja.threshold, 0.5);
+    assert_eq!(ja.base.composite, 1.0);
+
+    // The editor's one held-out number is each language's head composite on
+    // the ladder, in panel order.
+    let rounded = |x: f64| (x / LADDER_STEP).round() * LADDER_STEP;
+    let line = format!(
+        "last edit: none; validation composite at head: en-US {:.3}, ja-JP {:.3}",
+        rounded(en.base.composite),
+        rounded(ja.base.composite)
+    );
+    let mint = mint_texts(&model);
+    assert!(mint[0].contains(&format!("\n\n{line}\n\n")), "{}", mint[0]);
+}
+
+#[test]
+fn recall_probes_unspaced_lines() {
+    let dao = bilingual(LAOZI_JA);
+    let mut recite = reciter(&dao, second_half);
+    let reading = match dao.run.recall(&mut recite).unwrap() {
+        weksa::run::RecallOutcome::Read(r) => r,
+        _ => panic!("answered"),
+    };
+    let ja = reading.languages.iter().find(|l| l.language == "ja-JP").unwrap();
+    // Three lines written without spaces were skipped before.
+    assert_eq!((ja.n, ja.answered), (3, 3));
+    assert!((ja.chrf - 100.0).abs() < 1e-9);
+    let corpus = CorpusStore::open(&dao.corpus).unwrap();
+    for (key, ja_text, _) in JA_TEXTS {
+        let prompt = recite
+            .seen
+            .iter()
+            .find(|t| shown_opening(t).chars().next() == ja_text.chars().next())
+            .unwrap();
+        let item = corpus.get(key).unwrap().unwrap();
+        let (head, tail) = (shown_opening(prompt), held_back(&item.text, prompt));
+        assert!(!head.is_empty() && !tail.is_empty());
+        assert_eq!(format!("{head}{tail}"), item.text, "no spaces to lose");
+        let n = item.text.len();
+        assert!((n / 4..=3 * n / 4).contains(&head.len()), "{key}: near the byte middle");
+        assert!(!prompt.contains(tail));
+    }
+    // The unrelated-text floor was measured for English only: its clause
+    // prints once, on the en-US segment.
+    let line = reading.line();
+    assert_eq!(line.matches("unrelated English").count(), 1, "{line}");
+    let (first, second) = line.split_once(" | ").unwrap();
+    assert!(first.starts_with("recall en-US") && first.contains("unrelated English"), "{line}");
+    assert!(second.starts_with("recall ja-JP") && !second.contains("unrelated"), "{line}");
+    // en-US still splits between words.
+    let en = reading.languages.iter().find(|l| l.language == "en-US").unwrap();
+    assert_eq!((en.n, en.answered), (3, 3));
+    for key in ["item:daodejing:1", "item:daodejing:2", "item:daodejing:3"] {
+        let item = corpus.get(key).unwrap().unwrap();
+        let prompt = recite
+            .seen
+            .iter()
+            .find(|t| t.contains("opening: ") && item.text.starts_with(shown_opening(t)))
+            .unwrap();
+        let head = shown_opening(prompt);
+        let next = item.text[head.len()..].chars().next().unwrap();
+        assert!(!next.is_alphanumeric(), "{key}: cut inside a word");
+    }
+}
+
+#[test]
+fn offer_by_key_is_the_panels_too() {
+    let dao = bilingual(LAOZI_JA);
+    assert!(dao.run.offer("item:daodejing:12").unwrap().is_ok(), "ja-JP is in the panel");
+    assert!(dao.run.offer("item:daodejing:2").unwrap().is_ok());
+    for pt in ["item:daodejing:21", "item:daodejing:22", "item:daodejing:23"] {
+        assert!(dao.run.offer(pt).is_err(), "{pt}: pt-BR is outside the panel");
+    }
+}
+
+#[test]
+fn a_cycle_decides_each_language_on_its_own_floor() {
+    let mut dao = bilingual(LAOZI_JA);
+    // en-US reads the same twice (floor 0); ja-JP loses a Validation item in
+    // round 2 (a wide floor).
+    let mut first = bilingual_fake();
+    recorded(round(&mut dao.run, &mut first, &Scorer::new(Bag)).unwrap());
+    let mut second = bilingual_fake();
+    second.answers.insert("item:daodejing:13".into(), "not a draft".into());
+    recorded(round(&mut dao.run, &mut second, &Scorer::new(Bag)).unwrap());
+    // The candidate degrades en-US a little and leaves ja-JP as it was.
+    let mut model = bilingual_fake();
+    model.candidate = Some((4, {
+        let mut candidate = bilingual_answers();
+        candidate.extend(keyed(&degraded_answers()));
+        candidate
+    }));
+    model.edit = Some(Ok(ONE_CONCEPT.to_string()));
+    let d = run_cycle(&mut dao, &mut model);
+    let (en, ja) = (&d.panel()[0], &d.panel()[1]);
+    assert_eq!((en.language.as_str(), ja.language.as_str()), ("en-US", "ja-JP"));
+    assert_eq!(en.floor.chrf, 0.0);
+    assert_eq!(ja.floor.chrf, 50.0);
+    // en-US fell by more than its own floor but by less than ja-JP's: the
+    // verdict is the rejection that en-US's floor makes, not NoGain.
+    let fall = en.base.chrf - en.candidate.unwrap().chrf;
+    assert!(fall > 1.0 && fall < ja.floor.chrf, "{fall}");
+    assert!(matches!(d.verdict(), Verdict::Rejected(Why::Regressed(_))), "{:?}", d.verdict());
+}
+
+#[test]
+fn ablation_reads_each_language_apart() {
+    let mut dao = bilingual(LAOZI_JA);
+    let mut model = bilingual_fake();
+    recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    let (mut rec, mut replay) = (bilingual_fake(), bilingual_fake());
+    let readings = match ablate(&dao, &mut rec, &mut replay).unwrap() {
+        weksa::run::AblationOutcome::Read(r) => r,
+        _ => panic!("answered"),
+    };
+    let shape: Vec<(&str, weksa::Split, u32)> = readings
+        .iter()
+        .map(|(l, split, r)| (l.as_str(), *split, r.n))
+        .collect();
+    use weksa::Split::{Train, Validation};
+    assert_eq!(
+        shape,
+        [("en-US", Train, 1), ("en-US", Validation, 2), ("ja-JP", Train, 1), ("ja-JP", Validation, 2)]
     );
 }

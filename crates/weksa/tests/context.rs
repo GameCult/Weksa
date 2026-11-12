@@ -110,16 +110,6 @@ fn train_items_are_in_key_order() {
         ["item:a:1", "item:m:1", "item:z:1"]
     );
     assert_eq!((t.len(), t.is_empty()), (3, false));
-    let dir = tempfile::tempdir().unwrap();
-    let empty = run_over(dir.path());
-    let none = empty.train().unwrap();
-    assert_eq!((none.len(), none.is_empty()), (0, true));
-    let (inv, fb) = (empty.inventory().inventory().unwrap(), EditFeedback::none());
-    assert_eq!(
-        Prompt::mint(&none, &inv, 0, &fb).text(),
-        format!("{MINT}\n\nlast edit: none; validation composite at head: none\n\ninventory rev:0")
-    );
-    assert!(Prompt::mint(&none, &inv, 0, &fb).item_keys().is_empty());
 }
 
 #[test]
@@ -606,13 +596,28 @@ mod lowering {
         }
     }
 
+    /// The language line carries the tag the caller passes; no instruction
+    /// names a language.
+    #[test]
+    fn lower_prompt_names_its_language() {
+        let (view, inv, entities, item) = dao(2);
+        for tag in ["en-US", "ja-JP", "pt-BR"] {
+            let prompt = Prompt::lower(&view, &item, tag, &inv, &entities).unwrap();
+            let want = format!("{LOWER}\n\nlanguage: {tag}\n\npacket: ");
+            assert!(prompt.text().starts_with(&want), "{tag}");
+        }
+        for brief in [LOWER, weksa::context::MINT_INSTRUCTIONS] {
+            assert!(!brief.contains("English") && !brief.contains("en-US"));
+        }
+    }
+
     #[test]
     fn lower_prompt_text_is_pinned() {
         let (view, inv, entities, item) = dao(2);
-        let prompt = Prompt::lower(&view, &item, &inv, &entities).unwrap();
+        let prompt = Prompt::lower(&view, &item, "en-US", &inv, &entities).unwrap();
         let (head, listing) = prompt.text().split_once("inventory rev:3\n").unwrap();
         let expected = format!(
-            "{LOWER}\n\npacket: {}\n\nentities: {{}}\n\n",
+            "{LOWER}\n\nlanguage: en-US\n\npacket: {}\n\nentities: {{}}\n\n",
             concat!(
                 r#"{"context":{"setting":null,"medium":null,"participants":[],"audience":[]},"#,
                 r#""discourse":{"speech_act":"speech_act:1","addressee":null,"addressee_consent":null,"features":[]},"#,
@@ -628,7 +633,7 @@ mod lowering {
         assert!(listing.contains("\nfeature:18: "));
         // The brief says what the spec says it must.
         for needed in [
-            "en-US",
+            "the language on the language line",
             "all of its meaning and nothing it does not carry",
             "a grade is permille, 0 to 1000",
             "felt affect and restraint",
@@ -671,7 +676,7 @@ mod lowering {
             let mut packet = packets().remove(2);
             packet.stance = stance.clone();
             let view = admitted(packet, &store, "daodejing/corpus.cc", &entities);
-            let prompt = Prompt::lower(&view, &item, &inv, &entities).unwrap();
+            let prompt = Prompt::lower(&view, &item, "en-US", &inv, &entities).unwrap();
             (stance, prompt)
         };
         let three = [prompt_of(own), prompt_of(angry), prompt_of(Stance::default())];
@@ -708,7 +713,7 @@ mod lowering {
             ("sa-Latn", &["Nibuwa"]),
             ("en-US", &["Nibu", "Nibu's"]),
         ])]);
-        let prompt = Prompt::lower(&view, &item, &cast.inventory().unwrap(), &held).unwrap();
+        let prompt = Prompt::lower(&view, &item, "en-US", &cast.inventory().unwrap(), &held).unwrap();
         assert!(
             prompt
                 .text()
@@ -738,7 +743,7 @@ mod lowering {
             ),
             (Held(vec![]), LowerError::UnknownEntity { entity: id }),
         ] {
-            assert_eq!(Prompt::lower(&view, &item, &inv, &held).err(), Some(want));
+            assert_eq!(Prompt::lower(&view, &item, "en-US", &inv, &held).err(), Some(want));
         }
     }
 }

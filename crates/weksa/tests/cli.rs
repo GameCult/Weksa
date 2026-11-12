@@ -47,7 +47,7 @@ fn out(o: &Output) -> String {
     String::from_utf8_lossy(&o.stdout).into_owned() + &String::from_utf8_lossy(&o.stderr)
 }
 
-const ADD: [&str; 14] = [
+const ADD: [&str; 16] = [
     "corpus",
     "add",
     "--slug",
@@ -62,6 +62,8 @@ const ADD: [&str; 14] = [
     "2026-10-29",
     "--source",
     "cast-authored",
+    "--language",
+    "en-US",
 ];
 
 #[test]
@@ -149,6 +151,8 @@ fn model_written_and_public_domain_sources_name_their_provenance() {
     let base = [
         "corpus",
         "add",
+        "--language",
+        "en-US",
         "--slug",
         "x",
         "--speaker",
@@ -375,6 +379,8 @@ fn entity_put_and_name_spans() {
             &[
                 "corpus",
                 "add",
+                "--language",
+                "en-US",
                 "--slug",
                 "kay",
                 "--text",
@@ -547,6 +553,8 @@ fn add_with(dir: &std::path::Path, source: &str, extra: &[&str]) -> Output {
     let mut args = vec![
         "corpus",
         "add",
+        "--language",
+        "en-US",
         "--slug",
         "nibu",
         "--text",
@@ -903,6 +911,8 @@ fn proof_packet_lowers_and_the_lowering_scores_against_items() {
         &[
             "corpus",
             "add",
+            "--language",
+            "en-US",
             "--slug",
             "nibu",
             "--text",
@@ -1062,7 +1072,7 @@ fn cli_errors_never_echo_identifiers() {
     let p = d.path();
     cast_entities(p, &["nibu"]);
     let add = |extra: &[&str]| -> Vec<String> {
-        ["corpus", "add", "--admitted-on", "2026-10-29"]
+        ["corpus", "add", "--language", "en-US", "--admitted-on", "2026-10-29"]
             .into_iter()
             .chain(extra.iter().copied())
             .map(String::from)
@@ -1344,6 +1354,8 @@ fn loop_open_and_unanswered_round() {
                 "smoke",
                 "--answerer",
                 "fake-model",
+                "--panel",
+                "en-US",
                 "--lowerer-reach",
                 "tool-less-relay",
                 "--answerer-family",
@@ -1397,7 +1409,7 @@ fn loop_open_and_unanswered_round() {
     assert!(second.status.success(), "{}", out(&second));
     assert_eq!(
         out(&second),
-        "round 1 rev 3 train n=1 scored=0 chrf=0.00 meaning=0.0000 refused=1 validation n=2 scored=0 chrf=0.00 meaning=0.0000 refused parse=2 admit=0 lower=0 parse-reasons=syntaxx3 lowering=tool-less-relay\n"
+        "round 1 rev 3 en-US train n=1 scored=0 chrf=0.00 meaning=0.0000 refused=1 validation n=2 scored=0 chrf=0.00 meaning=0.0000 refused parse=2 admit=0 lower=0 parse-reasons=syntaxx3 lowering=tool-less-relay\n"
     );
 
     // The global store flags are not read by loop round: a drifted store is refused.
@@ -1424,6 +1436,8 @@ fn open_dao_run(d: &std::path::Path) {
             "smoke",
             "--answerer",
             "fake-model",
+            "--panel",
+            "en-US",
             "--lowerer-reach",
             "tool-less-relay",
         ],
@@ -1441,6 +1455,8 @@ fn pinned_family(d: &std::path::Path, root: &str, flag: &[&str]) -> weksa::corpu
         "fam",
         "--answerer",
         "fake-model",
+        "--panel",
+        "en-US",
         "--lowerer-reach",
         "tool-less-relay",
     ];
@@ -1526,7 +1542,7 @@ fn loop_cycle_asks_then_decides() {
     assert!(done.status.success(), "{}", out(&done));
     assert_eq!(
         out(&done),
-        "cycle 1 rev 3->none base=0.0000 candidate=none floor=0.0000 threshold=0.0050 rejected edit-parse lowering=tool-less-relay\n"
+        "cycle 1 rev 3->none en-US base=0.0000 candidate=none floor=0.0000 threshold=0.0050 rejected edit-parse lowering=tool-less-relay\n"
     );
 
     // The next cycle asks afresh in its own directory.
@@ -1565,6 +1581,8 @@ fn loop_errors_echo_no_input() {
             "CANARYLABEL",
             "--answerer",
             "m",
+            "--panel",
+            "en-US",
             "--lowerer-reach",
             "tool-less-relay",
         ],
@@ -1576,6 +1594,8 @@ fn loop_errors_echo_no_input() {
             "ok",
             "--answerer",
             "CANARY\n",
+            "--panel",
+            "en-US",
             "--lowerer-reach",
             "tool-less-relay",
         ],
@@ -1597,6 +1617,8 @@ fn loop_errors_echo_no_input() {
             "ok",
             "--answerer",
             "m",
+            "--panel",
+            "en-US",
             "--lowerer-reach",
             "tool-less-relay",
         ])
@@ -1610,7 +1632,7 @@ fn loop_errors_echo_no_input() {
 fn loop_open_requires_the_lowerer_reach_and_pins_it() {
     let d = tempfile::tempdir().unwrap();
     dao_stores(d.path());
-    let base = ["loop", "open", "canaryroot", "--label", "smoke", "--answerer", "m"];
+    let base = ["loop", "open", "canaryroot", "--label", "smoke", "--answerer", "m", "--panel", "en-US"];
     // No default: the record says how lowerings are answered, or there is no run.
     let o = weksa(d.path(), &base);
     assert!(!o.status.success());
@@ -1698,7 +1720,7 @@ fn loop_ablate_waits_then_prints_one_line_per_split() {
     let text = out(&second);
     assert_eq!(
         text,
-        "train ablation n=1 unusable=0 replay chrf=100.00 meaning=1.000 | drop n=1 chrf=100.00 meaning=1.000 moved=0 ref_gain_chrf=0.00 ref_gain_meaning=0.000 | permute n=0 chrf=none meaning=none moved=0 ref_gain_chrf=none ref_gain_meaning=none\nvalidation ablation n=2 unusable=0 replay chrf=100.00 meaning=1.000 | drop n=2 chrf=100.00 meaning=1.000 moved=0 ref_gain_chrf=0.00 ref_gain_meaning=0.000 | permute n=2 chrf=100.00 meaning=1.000 moved=0 ref_gain_chrf=0.00 ref_gain_meaning=0.000\n"
+        "en-US train ablation n=1 unusable=0 replay chrf=100.00 meaning=1.000 | drop n=1 chrf=100.00 meaning=1.000 moved=0 ref_gain_chrf=0.00 ref_gain_meaning=0.000 | permute n=0 chrf=none meaning=none moved=0 ref_gain_chrf=none ref_gain_meaning=none\nen-US validation ablation n=2 unusable=0 replay chrf=100.00 meaning=1.000 | drop n=2 chrf=100.00 meaning=1.000 moved=0 ref_gain_chrf=0.00 ref_gain_meaning=0.000 | permute n=2 chrf=100.00 meaning=1.000 moved=0 ref_gain_chrf=0.00 ref_gain_meaning=0.000\n"
     );
     for leaked in ["item:", "packet:", "highest excellence", "canaryroot"] {
         assert!(!text.contains(leaked), "{text}");
@@ -1719,4 +1741,25 @@ fn loop_ablate_without_the_rounds_answers_says_so() {
     let text = out(&o);
     assert!(text.contains("holds no answer") && text.contains("head inventory"), "{text}");
     assert!(!text.contains("would not read"), "{text}");
+}
+
+#[test]
+fn panel_and_language_are_required() {
+    let d = tempfile::tempdir().unwrap();
+    dao_stores(d.path());
+    // No panel: a run says what it reads, or there is no run.
+    let o = weksa(
+        d.path(),
+        &[
+            "loop", "open", "canaryroot", "--label", "smoke", "--answerer", "m",
+            "--lowerer-reach", "tool-less-relay",
+        ],
+    );
+    assert!(!o.status.success());
+    assert!(out(&o).contains("--panel"), "{}", out(&o));
+    assert!(!d.path().join("canaryroot/run.cc").exists());
+    // No language: no language is the unmarked one.
+    let o = weksa(d.path(), &ADD[..ADD.len() - 2]);
+    assert!(!o.status.success());
+    assert!(out(&o).contains("--language"), "{}", out(&o));
 }

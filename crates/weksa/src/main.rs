@@ -99,6 +99,10 @@ enum LoopCommand {
         /// that family wrote. Defaults to unrecorded.
         #[arg(long, default_value = "unrecorded")]
         answerer_family: ModelFamilyArg,
+        /// The languages the run offers, reads and decides on: BCP 47 tags,
+        /// comma-separated. Every one needs a live Train and Validation item.
+        #[arg(long, value_delimiter = ',', required = true)]
+        panel: Vec<String>,
     },
     /// Run one round of the run at ROOT. The stores are read only from the
     /// run's record: the global --corpus, --inventory and --entities are not
@@ -329,7 +333,8 @@ struct AddArgs {
     /// NFC-normalized here; `--name` byte offsets index the normalized text.
     #[arg(long)]
     text: String,
-    #[arg(long, default_value = "en-US")]
+    /// The item's language, a BCP 47 tag; no language is the default.
+    #[arg(long)]
     language: String,
     /// An entity id.
     #[arg(long)]
@@ -765,6 +770,7 @@ fn main() -> Result<()> {
             embed_model,
             lowerer_reach,
             answerer_family,
+            panel,
         }) => {
             let run = RunStores::create(
                 &root,
@@ -778,6 +784,7 @@ fn main() -> Result<()> {
                 &embed_model,
                 lowerer_reach,
                 answerer_family.into(),
+                &panel,
             )?;
             println!("opened run:{}", run.record().label);
         }
@@ -821,12 +828,12 @@ fn main() -> Result<()> {
                     std::process::exit(3);
                 }
                 AblationOutcome::Read(readings) => {
-                    for (split, reading) in readings {
+                    for (language, split, reading) in readings {
                         let name = match split {
                             Split::Train => "train",
                             _ => "validation",
                         };
-                        println!("{name} {}", reading.line());
+                        println!("{language} {name} {}", reading.line());
                     }
                 }
             }

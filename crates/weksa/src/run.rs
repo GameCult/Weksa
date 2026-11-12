@@ -36,6 +36,7 @@ use cultcache_rs::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::context::{EditFeedback, EncoderOffer, Prompt, TrainItems};
 use crate::corpus::{CorpusItem, CorpusItemId, ModelFamily, Source};
@@ -52,8 +53,8 @@ use crate::validate::LoweringInput;
 
 /// The digest of the prompt builder's source: `context.rs`, then `split.rs`,
 /// whose scheme and digest function decide which lines the prompt holds as
-/// Train and name every prompt, then `lower.rs`, whose `TARGET_LANGUAGE` and
-/// `EntityForms` port the lowering prompt reads, then `packet.rs`, whose serde
+/// Train and name every prompt, then `lower.rs`, whose `EntityForms` port and
+/// `entity()` the lowering prompt reads, then `packet.rs`, whose serde
 /// shapes the lowering prompt prints as the packet. Each file enters the digest
 /// behind its length, so the parts cannot be re-cut into other parts with the
 /// same digest. Any edit to any of them, comments included, ends a run; code
@@ -66,10 +67,12 @@ pub const PROMPT_SOURCE_DIGEST: u64 = fnv1a64_of(&[
 ]);
 
 /// The least composite gain an edit must show over item noise to be kept, and
-/// the grid the editor's one held-out number is rounded to. A run releases at
-/// most `1 / LADDER_STEP` = 200 distinct head composites (the Ladder, Blum and
-/// Hardt 2015), because the head changes only on an accept and an accept needs
-/// a gain above one step.
+/// the grid the editor's one held-out number is rounded to. Every accept raises
+/// the panel's composite sum by more than one step and a composite lies in
+/// -0.5 to 1, so a run over `L` languages accepts, and changes the released
+/// heads, at most `1.5 * L / LADDER_STEP` times (`300` for one language; the
+/// Ladder, Blum and Hardt 2015; ruling
+/// `weksa-lowering:ruling:panel-accept-sum-rule`, see [`decide_panel`]).
 pub const LADDER_STEP: f64 = 0.005;
 
 /// What a run pinned at open. Key `run:<label>`.
@@ -117,6 +120,11 @@ pub struct RunRecord {
     #[cultcache(key = 13, default)]
     #[schemars(default)]
     pub answerer_family: ModelFamily,
+    /// The languages the run offers, reads and decides on: BCP 47-form tags,
+    /// sorted, unique, at least one, set once at open. An item of any other
+    /// language is never offered, minted from, probed or scored.
+    #[cultcache(key = 14)]
+    pub panel: Vec<String>,
 }
 
 /// How a run's lowering prompts reach the model that answers them (rulings
@@ -200,6 +208,22 @@ pub struct RefusalCounts {
     pub lower: u32,
 }
 
+/// One panel language's readings in a round: the means over that language's
+/// items only (a refused item counts 0) and how many items lowered and scored.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct LanguageRound {
+    pub language: String,
+    pub train_mean: SplitMean,
+    /// Train items that lowered and scored; `train_mean` is over all of them.
+    pub train_scored: u32,
+    pub validation_mean: SplitMean,
+    /// Validation items that lowered and scored; `validation_mean` is over all
+    /// of them and counts a refused item as 0, so refusing a weak item cannot
+    /// raise it.
+    pub validation_scored: u32,
+    pub validation_refused: RefusalCounts,
+}
+
 /// One scored round. It holds no text and no Test reading: per-item rows for
 /// Train only, Validation only as means and refusal counts by stage. Only
 /// `run::round` builds one.
@@ -212,8 +236,7 @@ pub struct RefusalCounts {
 /// is the same literal in the unit test `a_round_record_literal_compiles_in_the_lib`.
 ///
 /// ```compile_fail,E0451
-/// use weksa::run::{RefusalCounts, RoundRecord};
-/// use weksa::score::SplitMean;
+/// use weksa::run::RoundRecord;
 /// fn f() -> RoundRecord {
 ///     RoundRecord {
 ///         n: 1,
@@ -226,16 +249,12 @@ pub struct RefusalCounts {
 ///         chrf_version: String::new(),
 ///         calls: vec![],
 ///         train: vec![],
-///         train_mean: SplitMean::default(),
-///         train_scored: 0,
-///         validation_mean: SplitMean::default(),
-///         validation_scored: 0,
-///         validation_refused: RefusalCounts::default(),
 ///         inventory_digest: String::new(),
 ///         cycle: None,
 ///         admit_rules: vec![],
 ///         parse_reasons: vec![],
 ///         own_family: 0,
+///         languages: vec![],
 ///     }
 /// }
 /// ```
@@ -265,21 +284,8 @@ pub struct RoundRecord {
     calls: Vec<Call>,
     #[cultcache(key = 10)]
     train: Vec<TrainRow>,
-    #[cultcache(key = 11)]
-    train_mean: SplitMean,
-    #[cultcache(key = 12)]
-    validation_mean: SplitMean,
-    #[cultcache(key = 13)]
-    validation_refused: RefusalCounts,
-    /// Train items that lowered and scored; `train_mean` is over all of them
-    /// and counts a refused item as 0.
-    #[cultcache(key = 14)]
-    train_scored: u32,
-    /// Validation items that lowered and scored; `validation_mean` is over all
-    /// of them and counts a refused item as 0, so refusing a weak item cannot
-    /// raise it.
-    #[cultcache(key = 15)]
-    validation_scored: u32,
+    // Keys 11 to 15 (the pooled means and counts) are retired and never reused:
+    // a run.cc from before does not open.
     /// 16 hex of the inventory file the round was scored under.
     #[cultcache(key = 16)]
     inventory_digest: String,
@@ -304,6 +310,10 @@ pub struct RoundRecord {
     #[cultcache(key = 20, default)]
     #[schemars(default)]
     own_family: u32,
+    /// One reading per panel language, in panel order. No pooled mean exists.
+    // Key 20 is `own_family`; the per-language readings take 21.
+    #[cultcache(key = 21)]
+    languages: Vec<LanguageRound>,
 }
 
 impl RoundRecord {
@@ -337,20 +347,12 @@ impl RoundRecord {
     pub fn train(&self) -> &[TrainRow] {
         &self.train
     }
-    pub fn train_mean(&self) -> &SplitMean {
-        &self.train_mean
+    /// The panel languages' readings, in panel order.
+    pub fn languages(&self) -> &[LanguageRound] {
+        &self.languages
     }
-    pub fn validation_mean(&self) -> &SplitMean {
-        &self.validation_mean
-    }
-    pub fn validation_refused(&self) -> RefusalCounts {
-        self.validation_refused
-    }
-    pub fn train_scored(&self) -> u32 {
-        self.train_scored
-    }
-    pub fn validation_scored(&self) -> u32 {
-        self.validation_scored
+    pub fn language(&self, tag: &str) -> Option<&LanguageRound> {
+        self.languages.iter().find(|l| l.language == tag)
     }
     pub fn inventory_digest(&self) -> &str {
         &self.inventory_digest
@@ -368,37 +370,38 @@ impl RoundRecord {
         self.own_family
     }
 
-    /// The round line, unlabelled: [`RunStores::round_line`] adds how the run was lowered. `n` is every item of the split,
-    /// `scored` those that lowered; a mean counts a refused item as 0.
+    /// The round line, unlabelled: [`RunStores::round_line`] adds how the run
+    /// was lowered. One segment per panel language; `n` is every item of the
+    /// split, `scored` those that lowered; a mean counts a refused item as 0.
     fn line(&self) -> String {
         let mean = |value: Option<f64>, places: usize| {
             value.map_or("none".to_string(), |v| format!("{v:.places$}"))
         };
-        let refused = self
-            .train
-            .iter()
-            .filter(|row| matches!(row.outcome, Outcome::Refused(_)))
-            .count();
-        let (t, v, x) = (
-            &self.train_mean,
-            &self.validation_mean,
-            self.validation_refused,
-        );
+        let segment = |l: &LanguageRound| {
+            let (t, v, x) = (&l.train_mean, &l.validation_mean, l.validation_refused);
+            let refused = t.count.saturating_sub(l.train_scored as usize);
+            format!(
+                "{} train n={} scored={} chrf={} meaning={} refused={refused} validation n={} scored={} chrf={} meaning={} refused parse={} admit={} lower={}",
+                l.language,
+                t.count,
+                l.train_scored,
+                mean(t.chrf, 2),
+                mean(t.meaning, 4),
+                v.count,
+                l.validation_scored,
+                mean(v.chrf, 2),
+                mean(v.meaning, 4),
+                x.parse,
+                x.admit,
+                x.lower,
+            )
+        };
+        let segments: Vec<String> = self.languages.iter().map(segment).collect();
         let line = format!(
-            "round {} rev {} train n={} scored={} chrf={} meaning={} refused={refused} validation n={} scored={} chrf={} meaning={} refused parse={} admit={} lower={}",
+            "round {} rev {} {}",
             self.n,
             self.inventory_rev,
-            t.count,
-            self.train_scored,
-            mean(t.chrf, 2),
-            mean(t.meaning, 4),
-            v.count,
-            self.validation_scored,
-            mean(v.chrf, 2),
-            mean(v.meaning, 4),
-            x.parse,
-            x.admit,
-            x.lower,
+            segments.join(" ")
         );
         let codes = |counts: &[RuleCount]| {
             counts
@@ -458,6 +461,9 @@ pub enum RunError {
     /// The round holds no answer to a lowering prompt the ablation rebuilt: the
     /// prompt's digest drifted or the head inventory moved since the round.
     Unrecorded,
+    /// The panel is empty, repeats or misspells a language, or names one with no
+    /// live Train or Validation item in the pinned corpus.
+    Panel,
 }
 
 impl fmt::Display for RunError {
@@ -479,6 +485,9 @@ impl fmt::Display for RunError {
             RunError::Embed => f.write_str("the embedder failed"),
             RunError::NoFloor => f.write_str("the run has no noise floor: record two rounds first"),
             RunError::NoValidation => f.write_str("a reading has no validation item"),
+            RunError::Panel => f.write_str(
+                "the panel is empty, repeats or misspells a language, or names one with no live Train or Validation item",
+            ),
         }
     }
 }
@@ -586,8 +595,11 @@ fn copy_new(from: &Path, to: &Path) -> Result<(), RunError> {
 }
 
 impl RunStores {
-    /// Pins the three stores at `root`, which must hold no run. A store file
-    /// that does not exist is `Io(NotFound)`.
+    /// Pins the three stores at `root`, which must hold no run, and the panel:
+    /// the languages the run offers, reads and decides on. A store file that
+    /// does not exist is `Io(NotFound)`; a bad panel is `Panel` and writes
+    /// nothing.
+    #[allow(clippy::too_many_arguments)]
     pub fn create(
         root: &Path,
         label: &str,
@@ -596,6 +608,7 @@ impl RunStores {
         embedder: &str,
         reach: LowererReach,
         answerer_family: ModelFamily,
+        panel: &[String],
     ) -> Result<Self, RunError> {
         Self::create_between(
             root,
@@ -605,6 +618,7 @@ impl RunStores {
             embedder,
             reach,
             answerer_family,
+            panel,
             || {},
         )
     }
@@ -612,7 +626,7 @@ impl RunStores {
     /// `create` with `between` run after the digests are taken and before the
     /// stores are opened: the seam that lets a test change a store in that window.
     #[doc(hidden)]
-    #[allow(clippy::too_many_arguments)] // `create`'s six plus the test seam
+    #[allow(clippy::too_many_arguments)] // `create`'s seven plus the test seam
     pub fn create_between(
         root: &Path,
         label: &str,
@@ -621,6 +635,7 @@ impl RunStores {
         embedder: &str,
         reach: LowererReach,
         answerer_family: ModelFamily,
+        panel: &[String],
         between: impl FnOnce(),
     ) -> Result<Self, RunError> {
         if !is_slug(label) {
@@ -631,6 +646,13 @@ impl RunStores {
         }
         if !is_attestation(embedder) {
             return Err(RunError::Malformed("embedder"));
+        }
+        let mut panel = panel.to_vec();
+        panel.sort();
+        // A tag no item carries (misspelt, wrong case, not a tag) is refused by
+        // `check_panel` once the corpus is open.
+        if panel.is_empty() || panel.windows(2).any(|w| w[0] == w[1]) {
+            return Err(RunError::Panel);
         }
         let cache = run_cache(root)?;
         if one_run(&cache)?.is_some() {
@@ -650,6 +672,7 @@ impl RunStores {
             inventory_digest: String::new(),
             lowerer_reach: reach,
             answerer_family,
+            panel,
         };
         // The run works on its own copy; the caller's store is never opened again.
         let head = root.join(INVENTORY_FILE);
@@ -665,6 +688,7 @@ impl RunStores {
             };
             between();
             let mut run = Self::with(root, cache, record)?;
+            run.check_panel()?;
             // The stores were read between the digests: unless they still match
             // the pins, what was opened is not what was pinned. Nothing is
             // recorded for a run that did not pin.
@@ -724,6 +748,26 @@ impl RunStores {
         &self.record
     }
 
+    /// Every panel language holds a live Train and a live Validation item.
+    fn check_panel(&self) -> Result<(), RunError> {
+        let items = self.corpus.all().map_err(|_| RunError::Store)?;
+        let holds = |tag: &String, split: Split| {
+            items
+                .iter()
+                .any(|i| &i.language == tag && SplitScheme::V1.live(i) == Some(split))
+        };
+        if self
+            .record
+            .panel
+            .iter()
+            .all(|tag| holds(tag, Split::Train) && holds(tag, Split::Validation))
+        {
+            Ok(())
+        } else {
+            Err(RunError::Panel)
+        }
+    }
+
     /// `line` (a round or cycle summary) with how this run's lowerings were
     /// answered; a briefed-subagent run says its numbers are smoke-round only.
     pub fn labelled(&self, line: &str) -> String {
@@ -755,9 +799,9 @@ impl RunStores {
         &self.entities
     }
 
-    /// The live Train items of the pinned corpus.
+    /// The live Train items of the pinned corpus in a panel language.
     pub fn train(&self) -> anyhow::Result<TrainItems> {
-        TrainItems::from_corpus(&self.corpus)
+        TrainItems::from_corpus(&self.corpus, &self.record.panel)
     }
 
     /// The offer for `key`; the inner error is the gate's refusal. An absent
@@ -769,17 +813,20 @@ impl RunStores {
         let item = self
             .corpus
             .get(key)?
+            .filter(|item| self.record.panel.contains(&item.language))
             .ok_or_else(|| anyhow::anyhow!("no such item"))?;
         Ok(EncoderOffer::for_round(&item))
     }
 
-    /// The live Train and Validation offers, in key order. Items the gate
-    /// refuses are skipped and read no further.
+    /// The live Train and Validation offers in a panel language, in key order.
+    /// Items the gate refuses, and items of any other language, are skipped
+    /// and read no further.
     pub fn offers(&self) -> anyhow::Result<Vec<EncoderOffer<'static>>> {
         Ok(self
             .corpus
             .all()?
             .iter()
+            .filter(|item| self.record.panel.contains(&item.language))
             .filter_map(|item| EncoderOffer::for_round(item).ok())
             .collect())
     }
@@ -862,11 +909,19 @@ pub enum RoundOutcome {
 
 /// A recall reading (`lowering-recall-diagnostic`): how closely a fresh model
 /// completes each live Train and Validation item from its opening alone, chrF against the
-/// item's own second half. Recorded nowhere: the answers stay in `<root>/recall`.
-/// It is never a gate; a high reading says a round's scores on these items are
-/// recitation.
+/// item's own second half, one reading per panel language. Recorded nowhere:
+/// the answers stay in `<root>/recall`. It is never a gate; a high reading says
+/// a round's scores on these items are recitation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RecallReading {
+    /// In panel order.
+    pub languages: Vec<LanguageRecall>,
+}
+
+/// One panel language's recall reading.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LanguageRecall {
+    pub language: String,
     /// Items probed, Train and Validation.
     pub n: u32,
     /// Items whose completion was a usable answer; a refused one counts 0.
@@ -876,10 +931,24 @@ pub struct RecallReading {
 
 impl RecallReading {
     pub fn line(&self) -> String {
-        format!(
-            "recall n={} answered={} chrf={:.2} (completion from the opening; unrelated English already scores chrf 14 to 20, so a reading near that floor is no recitation and one well above it is)",
-            self.n, self.answered, self.chrf
-        )
+        self.languages
+            .iter()
+            .map(|l| {
+                let segment = format!(
+                    "recall {} n={} answered={} chrf={:.2}",
+                    l.language, l.n, l.answered, l.chrf
+                );
+                // The one language whose unrelated-text floor was measured.
+                if l.language == "en-US" {
+                    format!(
+                        "{segment} (completion from the opening; unrelated English already scores chrf 14 to 20, so a reading near that floor is no recitation and one well above it is)"
+                    )
+                } else {
+                    segment
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" | ")
     }
 }
 
@@ -889,20 +958,27 @@ pub enum RecallOutcome {
     Read(RecallReading),
 }
 
-/// The opening and the rest of `text`, split between words at about the
-/// middle; `None` when it has fewer than four words.
+/// The opening and the rest of `text`, split at the Unicode word boundary
+/// (UAX #29) nearest the byte middle; `None` when it has fewer than four words.
+/// One rule for every script: a line written without spaces is probed like any
+/// other.
 fn recall_split(text: &str) -> Option<(String, String)> {
-    let words: Vec<&str> = text.split_whitespace().collect();
-    if words.len() < 4 {
+    if text.unicode_words().count() < 4 {
         return None;
     }
-    let (head, tail) = words.split_at(words.len() / 2);
-    Some((head.join(" "), tail.join(" ")))
+    let middle = text.len() / 2;
+    let at = text
+        .split_word_bound_indices()
+        .map(|(i, _)| i)
+        .filter(|&i| i > 0)
+        .min_by_key(|&i| i.abs_diff(middle))?;
+    let (head, tail) = text.split_at(at);
+    Some((head.trim().to_string(), tail.trim().to_string()))
 }
 
 impl RunStores {
-    /// Probes every live Train and Validation item of the pinned corpus once,
-    /// through `model`. A public-domain item names its work, author and
+    /// Probes every live Train and Validation item of the pinned corpus in a
+    /// panel language once, through `model`. A public-domain item names its work, author and
     /// translator; any other says `work: not published`.
     pub fn recall(&self, model: &mut dyn ModelPort) -> Result<RecallOutcome, RunError> {
         let store = |_| RunError::Store;
@@ -917,41 +993,60 @@ impl RunStores {
                 } => format!("work: {work}\nauthor: {author}\ntranslator: {translator}"),
                 _ => "work: not published".to_string(),
             };
-            if EncoderOffer::for_round(&item).is_err() {
+            if !self.record.panel.contains(&item.language)
+                || EncoderOffer::for_round(&item).is_err()
+            {
                 continue;
             }
             if let Some((opening, rest)) = recall_split(&item.text) {
                 let prompt = Prompt::recall(&item.id, &provenance, &opening);
-                probes.push((prompt, rest));
+                probes.push((item.language.clone(), prompt, rest));
             }
         }
         let mut unanswered = Vec::new();
         let mut scores = Vec::new();
-        for (prompt, rest) in &probes {
+        for (language, prompt, rest) in &probes {
             match model.answer(prompt) {
                 Ok(answer) => {
                     let text = LoweringDraft::parse(&answer)
                         .ok()
                         .filter(LoweringDraft::usable)
                         .map(|d| d.text);
-                    scores.push(text.map(|t| chrf(&t, rest)));
+                    scores.push((language, text.map(|t| chrf(&t, rest))));
                 }
                 Err(PortError::Unanswered) => unanswered.push(prompt.digest()),
-                Err(PortError::Io(ErrorKind::InvalidData)) => scores.push(None),
+                Err(PortError::Io(ErrorKind::InvalidData)) => scores.push((language, None)),
                 Err(PortError::Io(kind)) => return Err(RunError::Io(kind)),
             }
         }
         if !unanswered.is_empty() {
             return Ok(RecallOutcome::Unanswered { prompts: unanswered });
         }
-        let n = scores.len() as u32;
-        let answered = scores.iter().flatten().count() as u32;
-        let chrf = if n == 0 {
-            0.0
-        } else {
-            scores.iter().map(|s| s.unwrap_or(0.0)).sum::<f64>() / f64::from(n)
-        };
-        Ok(RecallOutcome::Read(RecallReading { n, answered, chrf }))
+        let languages = self
+            .record
+            .panel
+            .iter()
+            .map(|tag| {
+                let of: Vec<Option<f64>> = scores
+                    .iter()
+                    .filter(|(language, _)| *language == tag)
+                    .map(|(_, score)| *score)
+                    .collect();
+                let n = of.len() as u32;
+                let chrf = if n == 0 {
+                    0.0
+                } else {
+                    of.iter().map(|s| s.unwrap_or(0.0)).sum::<f64>() / f64::from(n)
+                };
+                LanguageRecall {
+                    language: tag.clone(),
+                    n,
+                    answered: of.iter().flatten().count() as u32,
+                    chrf,
+                }
+            })
+            .collect();
+        Ok(RecallOutcome::Read(RecallReading { languages }))
     }
 
     /// `<root>/recall`, where a recall's prompts and answers live.
@@ -1028,8 +1123,8 @@ impl AblationReading {
 #[derive(Debug)]
 pub enum AblationOutcome {
     Unanswered { prompts: Vec<String> },
-    /// Train then Validation.
-    Read(Vec<(Split, AblationReading)>),
+    /// Per panel language in panel order, Train then Validation.
+    Read(Vec<(String, Split, AblationReading)>),
 }
 
 /// What the port made of one lowering prompt.
@@ -1058,6 +1153,9 @@ fn mean(xs: impl Iterator<Item = f64>) -> Option<f64> {
 
 type Scored = (ItemScore, ItemScore);
 
+/// A panel language's live items of one split, each with its round packet.
+type HeldSplit = (String, Split, Vec<(CorpusItem, Packet)>);
+
 /// One item's reference text, recorded lowering, replay, and drop and permute
 /// lowerings.
 type Lowered = (String, String, String, [Option<String>; 2]);
@@ -1070,7 +1168,7 @@ impl RunStores {
     }
 
     /// A diagnostic like [`recall`](Self::recall), never a gate: for each live
-    /// Train and Validation packet of plain round `n`, asks the lowerer again
+    /// Train and Validation packet of plain round `n`, per panel language, asks the lowerer again
     /// (`model`, the replay), with the packet's stance emptied (drop) and with
     /// the next item's stance in its split (permute), and reads how far the
     /// lowering moves against the round's own answer (`recorded`). Test and
@@ -1111,16 +1209,20 @@ impl RunStores {
             .map_err(store)?
             .all()
             .map_err(store)?;
-        let mut splits: [(Split, Vec<(CorpusItem, Packet)>); 2] =
-            [(Split::Train, Vec::new()), (Split::Validation, Vec::new())];
+        let mut splits: Vec<HeldSplit> = Vec::new();
+        for tag in &self.record.panel {
+            for split in [Split::Train, Split::Validation] {
+                splits.push((tag.clone(), split, Vec::new()));
+            }
+        }
         for packet in round_packets {
             let item = self
                 .corpus
                 .get(packet.provenance.corpus_item.as_str())
                 .map_err(store)?
                 .ok_or(RunError::Store)?;
-            for (split, held) in &mut splits {
-                if SplitScheme::V1.live(&item) == Some(*split) {
+            for (language, split, held) in &mut splits {
+                if *language == item.language && SplitScheme::V1.live(&item) == Some(*split) {
                     held.push((item.clone(), packet.clone()));
                 }
             }
@@ -1130,8 +1232,8 @@ impl RunStores {
         let mut readings = Vec::new();
         // Texts per split: (item text, recorded, replay, [drop, permute]).
         let mut texts: Vec<Vec<Lowered>> = Vec::new();
-        let mut unusable = [0u32; 2];
-        for (at, (_, held)) in splits.iter_mut().enumerate() {
+        let mut unusable = vec![0u32; splits.len()];
+        for (at, (_, _, held)) in splits.iter_mut().enumerate() {
             held.sort_by(|a, b| a.0.id.as_str().cmp(b.0.id.as_str()));
             let mut rows = Vec::new();
             for (i, (item, packet)) in held.iter().enumerate() {
@@ -1140,7 +1242,7 @@ impl RunStores {
                     let view = stores[slot]
                         .admit(packet, &self.inventory, &self.corpus, &self.entities)
                         .map_err(|_| RunError::Store)?;
-                    Prompt::lower(&view, &packet_item, &inventory, &self.entities)
+                    Prompt::lower(&view, &packet_item, &item.language, &inventory, &self.entities)
                         .map_err(|_| RunError::Store)
                 };
                 let base = prompt_of(0, packet.clone())?;
@@ -1215,7 +1317,7 @@ impl RunStores {
         let mut pair = || -> Result<Scored, RunError> {
             Ok((scores.next().ok_or(RunError::Store)?, scores.next().ok_or(RunError::Store)?))
         };
-        for (at, ((split, _), rows)) in splits.iter().zip(&texts).enumerate() {
+        for (at, ((language, split, _), rows)) in splits.iter().zip(&texts).enumerate() {
             let mut replay: Vec<Scored> = Vec::new();
             let mut variants: [Vec<(Scored, Scored)>; 2] = [Vec::new(), Vec::new()];
             for (_, _, _, got) in rows {
@@ -1238,6 +1340,7 @@ impl RunStores {
                 ),
             };
             readings.push((
+                language.clone(),
                 *split,
                 AblationReading {
                     n: rows.len() as u32,
@@ -1418,7 +1521,10 @@ fn score_round<M: ModelPort, E: Embedder>(
     // port. Nothing is kept unless every one is answered.
     let mut unanswered = Vec::new();
     for (at, id, packet_key, view) in &admitted {
-        let Ok(prompt) = Prompt::lower(view, id, &inventory, &run.entities) else {
+        // Each item is lowered in its own language: the only reference the
+        // scorer has is the item's own text.
+        let language = &items[*at].language;
+        let Ok(prompt) = Prompt::lower(view, id, language, &inventory, &run.entities) else {
             fates[*at] = Fate::Refused(Stage::Lower, Some(packet_key.clone()));
             continue;
         };
@@ -1497,11 +1603,25 @@ fn score_round<M: ModelPort, E: Embedder>(
         .zip(&score_at)
         .map(|(item, score)| (item, score.clone().unwrap_or_else(|| nothing.clone())))
         .collect();
-    let means = aggregate(&scored);
 
     let mut train_rows = Vec::new();
-    let mut refused = RefusalCounts::default();
-    let (mut train_scored, mut validation_scored) = (0, 0);
+    let mut languages: Vec<LanguageRound> = Vec::new();
+    for tag in &run.record.panel {
+        let of: Vec<(&CorpusItem, ItemScore)> = scored
+            .iter()
+            .filter(|(item, _)| &item.language == tag)
+            .cloned()
+            .collect();
+        let means = aggregate(&of);
+        languages.push(LanguageRound {
+            language: tag.clone(),
+            train_mean: means.train,
+            train_scored: 0,
+            validation_mean: means.validation,
+            validation_scored: 0,
+            validation_refused: RefusalCounts::default(),
+        });
+    }
     for ((item, fate), score) in items.iter().zip(&fates).zip(&score_at) {
         let (outcome, packet) = match (fate, score) {
             (Fate::Lowered(_, key), Some(score)) => (
@@ -1514,20 +1634,24 @@ fn score_round<M: ModelPort, E: Embedder>(
             (Fate::Refused(stage, key), _) => (Outcome::Refused(*stage), key.clone()),
             (Fate::Lowered(..), None) => return Err(RunError::Store),
         };
+        let round = languages
+            .iter_mut()
+            .find(|l| l.language == item.language)
+            .ok_or(RunError::Store)?;
         match (SplitScheme::V1.live(item), fate) {
             (Some(Split::Train), fate) => {
-                train_scored += u32::from(matches!(fate, Fate::Lowered(..)));
+                round.train_scored += u32::from(matches!(fate, Fate::Lowered(..)));
                 train_rows.push(TrainRow {
                     item: item.id.clone(),
                     packet,
                     outcome,
                 });
             }
-            (Some(Split::Validation), Fate::Lowered(..)) => validation_scored += 1,
+            (Some(Split::Validation), Fate::Lowered(..)) => round.validation_scored += 1,
             (Some(Split::Validation), Fate::Refused(stage, _)) => match stage {
-                Stage::Parse => refused.parse += 1,
-                Stage::Admit => refused.admit += 1,
-                Stage::Lower => refused.lower += 1,
+                Stage::Parse => round.validation_refused.parse += 1,
+                Stage::Admit => round.validation_refused.admit += 1,
+                Stage::Lower => round.validation_refused.lower += 1,
             },
             _ => {}
         }
@@ -1554,11 +1678,6 @@ fn score_round<M: ModelPort, E: Embedder>(
         chrf_version: run.record.chrf_version.clone(),
         calls,
         train: train_rows,
-        train_mean: means.train,
-        validation_mean: means.validation,
-        validation_refused: refused,
-        train_scored,
-        validation_scored,
         inventory_digest: inventory_digest.to_string(),
         cycle,
         admit_rules: admit_rules
@@ -1570,6 +1689,7 @@ fn score_round<M: ModelPort, E: Embedder>(
             .map(|(rule, count)| RuleCount { rule, count })
             .collect(),
         own_family,
+        languages,
     };
     Ok(RoundOutcome::Recorded(record))
 }
@@ -1604,6 +1724,8 @@ impl Reading {
 pub enum Metric {
     Chrf,
     Meaning,
+    /// The composite fell, or a reading was not a finite number.
+    Composite,
 }
 
 /// Why an edit was rejected.
@@ -1638,20 +1760,97 @@ fn nano(x: f64) -> i64 {
     (x * 1e9).round() as i64
 }
 
-/// The accept rule. A metric that falls by more than its tolerance (the floor,
-/// at least one step) rejects; otherwise the composite must gain strictly more
-/// than [`threshold`]. Means count a refused Validation item as 0, so refusing a
-/// weak item cannot raise a reading. Differences are compared in billionths.
-pub fn decide(base: &Reading, candidate: &Reading, floor: &Reading) -> Verdict {
-    if nano(candidate.chrf - base.chrf) < -nano(floor.chrf.max(100.0 * LADDER_STEP)) {
-        Verdict::Rejected(Why::Regressed(Metric::Chrf))
+/// What regressed a language, or `None`: the one owner of the regression test,
+/// for [`decide`] and [`decide_panel`] alike. In order: a non-finite reading
+/// regresses the composite (fail closed: `nano` reads NaN as 0, which would
+/// otherwise read as unchanged); a metric that falls by more than its
+/// tolerance (the floor, at least one step) regresses that metric; the
+/// composite falling by more than max(its floor, one [`LADDER_STEP`])
+/// regresses the composite. Means count a refused Validation item as 0, so
+/// refusing a weak item cannot raise a reading. Differences are compared in
+/// billionths ([`nano`]), so a fall of exactly the tolerance is a tie.
+fn regression(base: &Reading, candidate: &Reading, floor: &Reading) -> Option<Metric> {
+    let finite = |r: &Reading| r.chrf.is_finite() && r.meaning.is_finite() && r.composite.is_finite();
+    if !(finite(base) && finite(candidate) && finite(floor)) {
+        Some(Metric::Composite)
+    } else if nano(candidate.chrf - base.chrf) < -nano(floor.chrf.max(100.0 * LADDER_STEP)) {
+        Some(Metric::Chrf)
     } else if nano(candidate.meaning - base.meaning) < -nano(floor.meaning.max(LADDER_STEP)) {
-        Verdict::Rejected(Why::Regressed(Metric::Meaning))
+        Some(Metric::Meaning)
+    } else if nano(candidate.composite - base.composite) < -nano(floor.composite.max(LADDER_STEP)) {
+        Some(Metric::Composite)
+    } else {
+        None
+    }
+}
+
+/// The accept rule for one language: [`regression`] rejects; otherwise the
+/// composite must gain strictly more than [`threshold`]. This is the gain test
+/// of a one-language panel and [`decide_panel`] calls it there, so a
+/// one-language panel is `decide` exactly.
+pub fn decide(base: &Reading, candidate: &Reading, floor: &Reading) -> Verdict {
+    if let Some(metric) = regression(base, candidate, floor) {
+        Verdict::Rejected(Why::Regressed(metric))
     } else if nano(candidate.composite - base.composite) > nano(threshold(floor)) {
         Verdict::Accepted
     } else {
         Verdict::Rejected(Why::NoGain)
     }
+}
+
+/// The accept rule across the panel, over one `(base, candidate, floor)` row
+/// per panel language in panel order. One owner of each test: [`regression`]
+/// decides whether a language regressed (any regression rejects; the first in
+/// panel order names the metric), and the gain test is [`decide`]'s for one
+/// language and, for two or more, the panel's: the sum over languages of the
+/// composite deltas (billionths) must exceed one [`LADDER_STEP`]. A language
+/// may lose up to its own noise floor if the panel nets more than a step; the
+/// rule gives up strict Pareto non-regression, which on noisy per-language
+/// readings ratchets every base to a favourable draw and strangles the loop
+/// (the convergence test would then fire on noise). Wang, Lipton and Tsvetkov
+/// (EMNLP 2020) measure negative interference between languages sharing
+/// parameters, which the per-language regression test still bounds. The rule is
+/// ruling `weksa-lowering:ruling:panel-accept-sum-rule`.
+///
+/// Termination (the Ladder bound, Blum and Hardt 2015): every accept raises
+/// the sum of the panel's composites by more than [`LADDER_STEP`]. A composite
+/// is a mean of chrF as a fraction (0 to 1) and a cosine (-1 to 1), so lies in
+/// -0.5 to 1; the sum of `L` composites spans `1.5 * L`, and a run accepts at
+/// most `1.5 * L / LADDER_STEP` edits.
+pub fn decide_panel(rows: &[(Reading, Reading, Reading)]) -> Verdict {
+    if let [(base, candidate, floor)] = rows {
+        return decide(base, candidate, floor);
+    }
+    if let Some(metric) = rows
+        .iter()
+        .find_map(|(base, candidate, floor)| regression(base, candidate, floor))
+    {
+        return Verdict::Rejected(Why::Regressed(metric));
+    }
+    let net: i64 = rows
+        .iter()
+        .map(|(base, candidate, _)| nano(candidate.composite - base.composite))
+        .sum();
+    if net > nano(LADDER_STEP) {
+        Verdict::Accepted
+    } else {
+        Verdict::Rejected(Why::NoGain)
+    }
+}
+
+/// One panel language's row of a cycle: the head's Validation reading, the
+/// candidate's (none when the edit never reached a round), the language's
+/// measured floor and the threshold derived from it. The threshold decides only
+/// in a one-language panel ([`decide`]); with two or more languages it is
+/// recorded beside the floor and the accept is the sum rule of
+/// [`decide_panel`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PanelReading {
+    pub language: String,
+    pub base: Reading,
+    pub candidate: Option<Reading>,
+    pub floor: Reading,
+    pub threshold: f64,
 }
 
 /// One closed edit-accept cycle: digests and numbers, no text. Key
@@ -1665,9 +1864,8 @@ pub fn decide(base: &Reading, candidate: &Reading, floor: &Reading) -> Verdict {
 /// the same literal in the unit test `a_decision_literal_compiles_in_the_lib`.
 ///
 /// ```compile_fail,E0451
-/// use weksa::run::{Call, Decision, Reading, Verdict};
+/// use weksa::run::{Call, Decision, Verdict};
 /// fn f() -> Decision {
-///     let r = Reading { chrf: 0.0, meaning: 0.0, composite: 0.0 };
 ///     Decision {
 ///         k: 1,
 ///         base_round: 1,
@@ -1678,10 +1876,7 @@ pub fn decide(base: &Reading, candidate: &Reading, floor: &Reading) -> Verdict {
 ///         candidate_rev: None,
 ///         candidate_inventory_digest: None,
 ///         candidate_round: None,
-///         base: r,
-///         candidate: None,
-///         floor: r,
-///         threshold: 0.0,
+///         panel: vec![],
 ///         verdict: Verdict::Accepted,
 ///     }
 /// }
@@ -1710,16 +1905,12 @@ pub struct Decision {
     candidate_inventory_digest: Option<String>,
     #[cultcache(key = 8)]
     candidate_round: Option<u32>,
-    #[cultcache(key = 9)]
-    base: Reading,
-    #[cultcache(key = 10)]
-    candidate: Option<Reading>,
-    #[cultcache(key = 11)]
-    floor: Reading,
-    #[cultcache(key = 12)]
-    threshold: f64,
+    // Keys 9 to 12 (the pooled readings) are retired and never reused.
     #[cultcache(key = 13)]
     verdict: Verdict,
+    /// One row per panel language, in panel order.
+    #[cultcache(key = 14)]
+    panel: Vec<PanelReading>,
 }
 
 impl Decision {
@@ -1750,17 +1941,8 @@ impl Decision {
     pub fn candidate_round(&self) -> Option<u32> {
         self.candidate_round
     }
-    pub fn base(&self) -> &Reading {
-        &self.base
-    }
-    pub fn candidate(&self) -> Option<&Reading> {
-        self.candidate.as_ref()
-    }
-    pub fn floor(&self) -> &Reading {
-        &self.floor
-    }
-    pub fn threshold(&self) -> f64 {
-        self.threshold
+    pub fn panel(&self) -> &[PanelReading] {
+        &self.panel
     }
     pub fn verdict(&self) -> Verdict {
         self.verdict
@@ -1771,9 +1953,6 @@ impl Decision {
         let candidate_rev = self
             .candidate_rev
             .map_or("none".to_string(), |n| n.to_string());
-        let candidate = self
-            .candidate
-            .map_or("none".to_string(), |c| format!("{:.4}", c.composite));
         let verdict = match self.verdict {
             Verdict::Accepted => "accepted".to_string(),
             Verdict::Rejected(why) => format!(
@@ -1784,12 +1963,28 @@ impl Decision {
                     Why::NoGain => "no-gain",
                     Why::Regressed(Metric::Chrf) => "regressed-chrf",
                     Why::Regressed(Metric::Meaning) => "regressed-meaning",
+                    Why::Regressed(Metric::Composite) => "regressed-composite",
                 }
             ),
         };
+        let rows: Vec<String> = self
+            .panel
+            .iter()
+            .map(|p| {
+                let candidate = p
+                    .candidate
+                    .map_or("none".to_string(), |c| format!("{:.4}", c.composite));
+                format!(
+                    "{} base={:.4} candidate={candidate} floor={:.4} threshold={:.4}",
+                    p.language, p.base.composite, p.floor.composite, p.threshold
+                )
+            })
+            .collect();
         format!(
-            "cycle {} rev {}->{candidate_rev} base={:.4} candidate={candidate} floor={:.4} threshold={:.4} {verdict}",
-            self.k, self.base_rev, self.base.composite, self.floor.composite, self.threshold
+            "cycle {} rev {}->{candidate_rev} {} {verdict}",
+            self.k,
+            self.base_rev,
+            rows.join(" ")
         )
     }
 }
@@ -1805,30 +2000,60 @@ pub enum CycleOutcome {
     Decided(Decision),
 }
 
-/// The spread of the Validation reading between rounds 1 and 2: two independent
-/// encodings under the run's first inventory and one spec, measured once per run.
-fn floor_of(rounds: &[RoundRecord], record: &RunRecord) -> Result<Reading, RunError> {
-    let replicate = |n: u32| {
+/// The spread of each panel language's Validation reading between rounds 1 and
+/// 2: two independent encodings under the run's first inventory and one spec,
+/// measured once per run, in panel order.
+fn floor_of(
+    rounds: &[RoundRecord],
+    record: &RunRecord,
+) -> Result<Vec<(String, Reading)>, RunError> {
+    let replicate = |n: u32, tag: &str| {
         let round = rounds
             .iter()
             .find(|r| {
                 r.n == n && r.cycle.is_none() && r.inventory_digest == record.inventory_digest
             })
             .ok_or(RunError::NoFloor)?;
-        Reading::of(&round.validation_mean).ok_or(RunError::NoValidation)
+        let language = round.language(tag).ok_or(RunError::NoValidation)?;
+        Reading::of(&language.validation_mean).ok_or(RunError::NoValidation)
     };
-    let (a, b) = (replicate(1)?, replicate(2)?);
-    Ok(Reading {
-        chrf: (a.chrf - b.chrf).abs(),
-        meaning: (a.meaning - b.meaning).abs(),
-        composite: (a.composite - b.composite).abs(),
-    })
+    record
+        .panel
+        .iter()
+        .map(|tag| {
+            let (a, b) = (replicate(1, tag)?, replicate(2, tag)?);
+            Ok((
+                tag.clone(),
+                Reading {
+                    chrf: (a.chrf - b.chrf).abs(),
+                    meaning: (a.meaning - b.meaning).abs(),
+                    composite: (a.composite - b.composite).abs(),
+                },
+            ))
+        })
+        .collect()
+}
+
+/// Each panel language's Validation reading in `round`, in panel order.
+fn readings_of(
+    round: &RoundRecord,
+    record: &RunRecord,
+) -> Result<Vec<(String, Reading)>, RunError> {
+    record
+        .panel
+        .iter()
+        .map(|tag| {
+            let language = round.language(tag).ok_or(RunError::NoValidation)?;
+            let reading = Reading::of(&language.validation_mean).ok_or(RunError::NoValidation)?;
+            Ok((tag.clone(), reading))
+        })
+        .collect()
 }
 
 /// One edit-accept cycle. The editor is asked for one inventory edit from a
 /// prompt built over Train items, the head inventory and an [`EditFeedback`];
 /// the edit is admitted as a candidate revision in `<root>/cycle-<k>/inventory.cc`;
-/// a candidate round scores it; [`decide`] accepts or rejects on Validation
+/// a candidate round scores it; [`decide_panel`] accepts or rejects on Validation
 /// against the head's establishing round. Accepting is one write: the candidate
 /// round and the decision go into `run.cc` in one batch, and the decision names
 /// the new head. While any prompt is unanswered, or the candidate round fails,
@@ -1841,13 +2066,13 @@ pub fn cycle<M: ModelPort, E: Embedder>(
     let store = |_| RunError::Store;
     check_drift(run, model, scorer)?;
     let rounds = run.rounds().map_err(store)?;
-    let floor = floor_of(&rounds, &run.record)?;
+    let floors = floor_of(&rounds, &run.record)?;
     let (head_path, head_digest, base_round) = run.head()?;
     let base = rounds
         .iter()
         .find(|r| r.n == base_round)
         .ok_or(RunError::Store)?;
-    let base = Reading::of(&base.validation_mean).ok_or(RunError::NoValidation)?;
+    let bases = readings_of(base, &run.record)?;
     let decisions = run.decisions().map_err(store)?;
     let k = decisions.len() as u32 + 1;
     let dir = run.next_cycle_dir().map_err(store)?;
@@ -1856,7 +2081,10 @@ pub fn cycle<M: ModelPort, E: Embedder>(
 
     let feedback = EditFeedback::new(
         decisions.last().map(|d| d.verdict == Verdict::Accepted),
-        Some(base.composite),
+        bases
+            .iter()
+            .map(|(tag, reading)| (tag.clone(), reading.composite))
+            .collect(),
     );
     let train = run.train().map_err(store)?;
     let prompt = Prompt::mint(&train, &inventory, base_rev, &feedback);
@@ -1884,11 +2112,18 @@ pub fn cycle<M: ModelPort, E: Embedder>(
         candidate_rev: None,
         candidate_inventory_digest: None,
         candidate_round: None,
-        base,
-        candidate: None,
-        floor,
-        threshold: threshold(&floor),
         verdict,
+        panel: bases
+            .iter()
+            .zip(&floors)
+            .map(|((language, base), (_, floor))| PanelReading {
+                language: language.clone(),
+                base: *base,
+                candidate: None,
+                floor: *floor,
+                threshold: threshold(floor),
+            })
+            .collect(),
     };
     let decision_key = format!("run:{}:cycle:{k}", run.record.label);
     // A rejection leaves no candidate inventory behind, whichever attempt built it.
@@ -1933,15 +2168,23 @@ pub fn cycle<M: ModelPort, E: Embedder>(
         RoundOutcome::Unanswered { prompts } => return Ok(CycleOutcome::Unanswered { prompts }),
         RoundOutcome::Recorded(record) => record,
     };
-    let candidate = Reading::of(&record.validation_mean).ok_or(RunError::NoValidation)?;
-    let verdict = decide(&base, &candidate, &floor);
-    let decided = Decision {
+    let candidates = readings_of(&record, &run.record)?;
+    let rows: Vec<(Reading, Reading, Reading)> = bases
+        .iter()
+        .zip(&candidates)
+        .zip(&floors)
+        .map(|(((_, base), (_, candidate)), (_, floor))| (*base, *candidate, *floor))
+        .collect();
+    let verdict = decide_panel(&rows);
+    let mut decided = Decision {
         candidate_rev: Some(candidate_rev),
         candidate_inventory_digest: Some(candidate_digest),
         candidate_round: Some(record.n),
-        candidate: Some(candidate),
         ..blank(verdict)
     };
+    for (row, (_, candidate)) in decided.panel.iter_mut().zip(&candidates) {
+        row.candidate = Some(*candidate);
+    }
     let staged = vec![
         run.cache
             .prepare_entry_named(
@@ -1995,16 +2238,12 @@ mod tests {
             chrf_version: String::new(),
             calls: vec![],
             train: vec![],
-            train_mean: SplitMean::default(),
-            train_scored: 0,
-            validation_mean: SplitMean::default(),
-            validation_scored: 0,
-            validation_refused: RefusalCounts::default(),
             inventory_digest: String::new(),
             cycle: None,
             admit_rules: vec![],
             parse_reasons: vec![],
             own_family: 0,
+            languages: vec![],
         };
         assert_eq!(r.n(), 1);
     }
@@ -2012,11 +2251,6 @@ mod tests {
     /// The twin of the `Decision` literal in its compile_fail doctest.
     #[test]
     fn a_decision_literal_compiles_in_the_lib() {
-        let r = Reading {
-            chrf: 0.0,
-            meaning: 0.0,
-            composite: 0.0,
-        };
         let d = Decision {
             k: 1,
             base_round: 1,
@@ -2030,11 +2264,8 @@ mod tests {
             candidate_rev: None,
             candidate_inventory_digest: None,
             candidate_round: None,
-            base: r,
-            candidate: None,
-            floor: r,
-            threshold: 0.0,
             verdict: Verdict::Accepted,
+            panel: vec![],
         };
         assert_eq!(d.k(), 1);
     }
@@ -2140,12 +2371,261 @@ mod tests {
         assert_eq!(decide(&base, &gain(0.504), &zero), rejected(Why::NoGain));
         assert_eq!(decide(&base, &gain(0.506), &zero), Verdict::Accepted);
         assert_eq!(decide(&base, &gain(0.5), &zero), rejected(Why::NoGain));
-        assert_eq!(decide(&base, &gain(0.4), &zero), rejected(Why::NoGain));
+        // The composite may fall by its tolerance, max(floor.composite, one
+        // step): a fall of exactly that is a tie, a billionth past it regresses.
+        // (49.75 and 0.4975 keep the metrics inside theirs.)
+        let composite = rejected(Why::Regressed(Metric::Composite));
+        let fall = |c| reading(50.0, 0.5, c);
+        assert_eq!(decide(&base, &fall(0.4), &zero), composite);
+        assert_eq!(decide(&base, &fall(0.5 - LADDER_STEP), &zero), rejected(Why::NoGain), "a tie");
+        assert_eq!(decide(&base, &fall(0.5 - LADDER_STEP - 6e-10), &zero), composite, "rounds to nearest");
+        assert_eq!(decide(&base, &fall(0.5 - LADDER_STEP - 4e-10), &zero), rejected(Why::NoGain), "under half a billionth");
+        assert_eq!(decide(&base, &fall(0.5 - LADDER_STEP - 4e-9), &zero), composite, "a billionth grid, not a coarser one");
+        // A composite floor widens the tolerance, and only the composite's: a
+        // wide meaning floor does not.
+        let wide = reading(0.0, 0.0, 0.1);
+        assert_eq!(decide(&base, &fall(0.45), &wide), rejected(Why::NoGain));
+        assert_eq!(decide(&base, &fall(0.39), &wide), composite);
+        let wide_meaning = reading(0.0, 0.4, 0.0);
+        assert_eq!(decide(&base, &fall(0.45), &wide_meaning), composite);
+        // Each metric inside its own tolerance, the composite past its own.
+        assert_eq!(decide(&base, &reading(49.6, 0.496, 0.4), &zero), composite);
+        // Fail closed: NaN and infinity read as a regression, never as unchanged.
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(decide(&base, &reading(bad, 0.5, 0.6), &zero), composite);
+            assert_eq!(decide(&base, &reading(50.0, bad, 0.6), &zero), composite);
+            assert_eq!(decide(&base, &reading(50.0, 0.5, bad), &zero), composite);
+            assert_eq!(decide(&reading(50.0, 0.5, bad), &gain(0.6), &zero), composite);
+            assert_eq!(decide(&base, &gain(0.6), &reading(0.0, 0.0, bad)), composite);
+        }
         // A floor above the step sets the threshold: a gain equal to it is no gain.
         let floor = reading(0.0, 0.0, 0.25);
         assert_eq!(decide(&base, &gain(0.75), &floor), rejected(Why::NoGain));
         assert_eq!(decide(&base, &gain(0.7501), &floor), Verdict::Accepted);
         assert_eq!(decide(&base, &gain(0.506), &floor), rejected(Why::NoGain));
+    }
+
+    #[test]
+    fn decide_panel_table() {
+        let zero = reading(0.0, 0.0, 0.0);
+        let base = reading(50.0, 0.5, 0.5);
+        let rejected = Verdict::Rejected;
+        let gained = reading(50.0, 0.5, 0.6);
+        let regressed = reading(40.0, 0.5, 0.45);
+        let flat = base;
+        // One language gains, one is flat: accepted.
+        assert_eq!(
+            decide_panel(&[(base, gained, zero), (base, flat, zero)]),
+            Verdict::Accepted
+        );
+        // One gains, one regresses chrF past its floor: rejected, whichever is first.
+        for rows in [
+            [(base, gained, zero), (base, regressed, zero)],
+            [(base, regressed, zero), (base, gained, zero)],
+        ] {
+            assert_eq!(decide_panel(&rows), rejected(Why::Regressed(Metric::Chrf)));
+        }
+        // The first regression in panel order names the metric.
+        let meaning_down = reading(50.0, 0.4, 0.45);
+        assert_eq!(
+            decide_panel(&[(base, meaning_down, zero), (base, regressed, zero)]),
+            rejected(Why::Regressed(Metric::Meaning))
+        );
+        // Neither gaining: no gain.
+        assert_eq!(
+            decide_panel(&[(base, flat, zero), (base, flat, zero)]),
+            rejected(Why::NoGain)
+        );
+        // A big gain cannot buy a regression past a language's tolerance.
+        let sag = reading(50.0, 0.5, 0.4);
+        assert_eq!(
+            decide_panel(&[(base, reading(60.0, 0.9, 0.9), zero), (base, sag, zero)]),
+            rejected(Why::Regressed(Metric::Composite))
+        );
+        // It can buy a fall inside the language's own floor: the panel nets
+        // more than a step (strict Pareto is given up).
+        let small_fall = reading(50.0, 0.5, 0.497);
+        assert_eq!(
+            decide_panel(&[(base, gained, zero), (base, small_fall, zero)]),
+            Verdict::Accepted
+        );
+        // But not when the net is a step or less, on the billionth grid.
+        let net = |gain: f64| {
+            decide_panel(&[(base, reading(50.0, 0.5, 0.5 + gain), zero), (base, flat, zero)])
+        };
+        assert_eq!(net(LADDER_STEP), rejected(Why::NoGain), "a step is a tie");
+        assert_eq!(net(LADDER_STEP + 4e-10), rejected(Why::NoGain));
+        assert_eq!(net(LADDER_STEP + 6e-10), Verdict::Accepted);
+        assert_eq!(net(LADDER_STEP + 2e-9), Verdict::Accepted);
+        // Liveness: no language need pass its own threshold. Two languages each
+        // gaining 0.6 of a step at zero floor accept; so does one gaining two
+        // steps under a 0.02 floor (its own threshold) with the others flat; so
+        // does a gain with another language falling inside its own floor.
+        let each = 0.6 * LADDER_STEP;
+        assert_eq!(
+            decide_panel(&[
+                (base, reading(50.0, 0.5, 0.5 + each), zero),
+                (base, reading(50.0, 0.5, 0.5 + each), zero)
+            ]),
+            Verdict::Accepted
+        );
+        let big_floor = reading(0.0, 0.0, 0.02);
+        assert_eq!(
+            decide_panel(&[(base, reading(50.0, 0.5, 0.5 + 2.0 * LADDER_STEP), big_floor), (base, flat, big_floor)]),
+            Verdict::Accepted
+        );
+        let own_floor = reading(0.0, 0.0, 0.004);
+        assert_eq!(
+            decide_panel(&[
+                (base, reading(50.0, 0.5, 0.51), reading(0.0, 0.0, 0.03)),
+                (base, reading(50.0, 0.5, 0.497), own_floor)
+            ]),
+            Verdict::Accepted,
+            "a fall inside the language's floor, net 0.007"
+        );
+        // The same fall with the net exactly a step rejects.
+        assert_eq!(
+            decide_panel(&[
+                (base, reading(50.0, 0.5, 0.508), reading(0.0, 0.0, 0.03)),
+                (base, reading(50.0, 0.5, 0.497), own_floor)
+            ]),
+            rejected(Why::NoGain)
+        );
+        // The sum is over the deltas, with each language's fall counted.
+        assert_eq!(
+            decide_panel(&[(base, reading(50.0, 0.5, 0.504), zero), (base, small_fall, zero)]),
+            rejected(Why::NoGain)
+        );
+        // A one-language panel is decide() exactly, gain test included.
+        for candidate in [gained, regressed, flat, meaning_down, sag, small_fall, reading(50.0, 0.5, 0.504), reading(50.0, 0.5, 0.506), reading(50.0, 0.5, f64::NAN)] {
+            for floor in [zero, reading(1.0, 0.01, 0.02)] {
+                assert_eq!(
+                    decide_panel(&[(base, candidate, floor)]),
+                    decide(&base, &candidate, &floor)
+                );
+            }
+        }
+    }
+
+    /// One panel row per language: (base, candidate, floor), metrics held
+    /// inside every tolerance so only the composite moves.
+    fn rows(bases: &[f64], moves: &[f64], floor: f64) -> Vec<(Reading, Reading, Reading)> {
+        bases
+            .iter()
+            .zip(moves)
+            .map(|(b, d)| {
+                (
+                    reading(50.0, 0.5, *b),
+                    reading(50.0, 0.5, b + d),
+                    reading(0.0, 0.0, floor),
+                )
+            })
+            .collect()
+    }
+
+    /// The most edits a run accepts: each raises the sum of composites by more
+    /// than a step, and `L` composites span `1.5 * L` (-0.5 to 1).
+    fn bound(languages: usize) -> usize {
+        (1.5 * languages as f64 / LADDER_STEP) as usize
+    }
+
+    /// Soul's cycling cases: edits that raise one language and lower the others
+    /// inside their tolerances used to be accepted forever. The nets are zero
+    /// (and so are the accepts), always under the bound.
+    #[test]
+    fn a_rotation_of_gains_and_small_falls_is_bounded() {
+        // Three languages: each edit raises one by 0.0075, lowers two by 0.00375.
+        let mut head = [0.5, 0.5, 0.5];
+        let mut accepted = 0;
+        for k in 0..300 {
+            let mut step = [-0.00375; 3];
+            step[k % 3] = 0.0075;
+            if decide_panel(&rows(&head, &step, 0.0)) == Verdict::Accepted {
+                accepted += 1;
+                for (h, d) in head.iter_mut().zip(step) {
+                    *h += d;
+                }
+            }
+        }
+        assert!(accepted <= bound(3));
+        assert_eq!(accepted, 0, "the net is zero");
+        // Two languages: a gain of the step plus 2e-9 against a fall of the step.
+        let t = LADDER_STEP;
+        let head = [0.5, 0.5];
+        let mut accepted = 0;
+        for k in 0..2000 {
+            let mut step = [-t, -t];
+            step[k % 2] = t + 2e-9;
+            if decide_panel(&rows(&head, &step, 0.0)) == Verdict::Accepted {
+                accepted += 1;
+            }
+        }
+        assert!(accepted <= bound(2));
+        assert_eq!(accepted, 0, "the net is 2e-9, under the step");
+    }
+
+    /// Over a random walk of proposed edits a run accepts at most
+    /// `1.5 * L / LADDER_STEP`, and every accept raises the panel's composite
+    /// sum by more than a step.
+    #[test]
+    fn accepts_per_run_stay_inside_the_ladder_bound() {
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for languages in [1usize, 2, 3, 5] {
+            // Heads anywhere in the composite's range, -0.5 to 1.
+            let mut head: Vec<f64> = (0..languages).map(|_| -0.5 + 1.5 * next()).collect();
+            let floor = 0.006 * next();
+            let mut accepted = 0usize;
+            for _ in 0..50_000 {
+                let step: Vec<f64> = head
+                    .iter()
+                    .map(|h| (h + (next() - 0.3) * 0.02).clamp(-0.5, 1.0) - h)
+                    .collect();
+                if decide_panel(&rows(&head, &step, floor)) == Verdict::Accepted {
+                    accepted += 1;
+                    let net: f64 = step.iter().sum();
+                    assert!(net > LADDER_STEP - 1e-9, "an accept netted {net}");
+                    for (h, d) in head.iter_mut().zip(&step) {
+                        *h += d;
+                    }
+                }
+            }
+            assert!(accepted <= bound(languages), "{languages}: {accepted} > {}", bound(languages));
+            assert!(accepted > 0, "the walk accepts something ({languages} languages)");
+        }
+    }
+
+    #[test]
+    fn a_composite_regression_prints_its_name() {
+        let r = reading(50.0, 0.5, 0.5);
+        let d = Decision {
+            k: 1,
+            base_round: 1,
+            base_rev: 3,
+            base_inventory_digest: String::new(),
+            edit: Call { prompt: String::new(), items: vec![] },
+            edit_answer_digest: None,
+            candidate_rev: Some(4),
+            candidate_inventory_digest: None,
+            candidate_round: None,
+            verdict: Verdict::Rejected(Why::Regressed(Metric::Composite)),
+            panel: vec![PanelReading {
+                language: "en-US".into(),
+                base: r,
+                candidate: Some(reading(50.0, 0.5, 0.4)),
+                floor: reading(0.0, 0.0, 0.0),
+                threshold: LADDER_STEP,
+            }],
+        };
+        assert_eq!(
+            d.line(),
+            "cycle 1 rev 3->4 en-US base=0.5000 candidate=0.4000 floor=0.0000 threshold=0.0050 rejected regressed-composite"
+        );
     }
 
     #[test]
@@ -2209,20 +2689,23 @@ mod tests {
             chrf_version: String::new(),
             calls: vec![],
             train: vec![],
-            train_mean: SplitMean::default(),
-            train_scored: 0,
-            validation_mean: SplitMean {
-                count: 2,
-                chrf: Some(chrf),
-                meaning: Some(meaning),
-            },
-            validation_scored: 2,
-            validation_refused: RefusalCounts::default(),
             inventory_digest: digest.to_string(),
             cycle: None,
             admit_rules: vec![],
             parse_reasons: vec![],
             own_family: 0,
+            languages: vec![LanguageRound {
+                language: "en-US".into(),
+                train_mean: SplitMean::default(),
+                train_scored: 0,
+                validation_mean: SplitMean {
+                    count: 2,
+                    chrf: Some(chrf),
+                    meaning: Some(meaning),
+                },
+                validation_scored: 2,
+                validation_refused: RefusalCounts::default(),
+            }],
         }
     }
 
@@ -2241,6 +2724,7 @@ mod tests {
             inventory_digest: digest.to_string(),
             lowerer_reach: LowererReach::ToolLessRelay,
             answerer_family: ModelFamily::Unrecorded,
+            panel: vec!["en-US".into()],
         }
     }
 
@@ -2251,7 +2735,9 @@ mod tests {
     fn the_floor_is_the_spread_of_each_field_of_the_two_replicates() {
         let record = record_of("d1");
         let rounds = [replicate(1, "d1", 60.0, 0.5), replicate(2, "d1", 50.0, 0.7)];
-        let floor = floor_of(&rounds, &record).unwrap();
+        let floors = floor_of(&rounds, &record).unwrap();
+        assert_eq!(floors.len(), 1);
+        let floor = floors[0].1;
         // composites 0.55 and 0.6.
         assert_eq!(floor.chrf, 10.0);
         assert!((floor.meaning - 0.2).abs() < 1e-12);
@@ -2274,7 +2760,7 @@ mod tests {
             replicate(2, "d1", 50.0, 0.7),
             replicate(1, "d1", 60.0, 0.5),
         ];
-        assert_eq!(floor_of(&rounds, &record).unwrap(), floor);
+        assert_eq!(floor_of(&rounds, &record).unwrap(), floors);
         assert_eq!(
             floor_of(&rounds[..3], &record).err(),
             Some(RunError::NoFloor)
@@ -2442,6 +2928,7 @@ mod tests {
                 "bag",
                 crate::run::LowererReach::ToolLessRelay,
                 ModelFamily::Unrecorded,
+                &["en-US".to_string()],
             )
             .unwrap();
             let mut model = fake();

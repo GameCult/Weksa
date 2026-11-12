@@ -238,12 +238,14 @@ fn the_recall_probe_covers_every_live_original_item_and_names_no_work() {
         "bag",
         weksa::run::LowererReach::BriefedSubagent,
         ModelFamily::Unrecorded,
+        &["en-US".to_string()],
     )
     .unwrap();
     let mut model = Unrelated(vec![]);
-    let RecallOutcome::Read(r) = run.recall(&mut model).unwrap() else {
+    let RecallOutcome::Read(reading) = run.recall(&mut model).unwrap() else {
         panic!("answered");
     };
+    let r = reading.languages[0].clone();
     assert_eq!((r.n, r.answered), (28, 28));
     assert!(r.chrf < 25.0, "{}", r.chrf);
     assert_eq!(model.0.len(), 28);
@@ -251,9 +253,12 @@ fn the_recall_probe_covers_every_live_original_item_and_names_no_work() {
     let all = CorpusStore::open(&c).unwrap().all().unwrap();
     for item in &all {
         let live = SplitScheme::V1.live(item);
-        // A recall prompt shows the first half of the words.
-        let words: Vec<&str> = item.text.split_whitespace().collect();
-        let opening = words[..words.len() / 2].join(" ");
+        // A recall prompt shows the first half of the item, cut at a word boundary.
+        let mut cut = item.text.len() / 4;
+        while !item.text.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let opening = item.text[..cut].trim_end().to_string();
         let shown = model.0.iter().any(|t| t.contains(&opening));
         assert_eq!(
             shown,
@@ -309,6 +314,7 @@ fn original_round(family: ModelFamily) -> (weksa::run::RunStores, weksa::run::Ro
         "bag",
         LowererReach::ToolLessRelay,
         family,
+        &["en-US".to_string()],
     )
     .unwrap();
     let scorer = weksa::score::Scorer::new(Bag);
@@ -416,9 +422,10 @@ fn recall_probes_only_live_train_and_validation_items() {
     drop(store);
     let run = run_over(dir.path());
     let mut m = Record(vec![]);
-    let RecallOutcome::Read(r) = run.recall(&mut m).unwrap() else {
+    let RecallOutcome::Read(reading) = run.recall(&mut m).unwrap() else {
         panic!("answered");
     };
+    let r = reading.languages[0].clone();
     assert_eq!(r.n, 2);
     let shown = |mark: &str| m.0.iter().any(|t| t.contains(mark));
     assert!(shown("trainmark") && shown("validmark"));
@@ -464,6 +471,7 @@ fn no_test_item_is_offered_to_a_round_or_recall_or_recorded() {
         "bag",
         LowererReach::ToolLessRelay,
         ModelFamily::Unrecorded,
+        &["en-US".to_string()],
     )
     .unwrap();
     let items = CorpusStore::open(&p("corpus.cc")).unwrap().all().unwrap();
@@ -499,9 +507,10 @@ fn no_test_item_is_offered_to_a_round_or_recall_or_recorded() {
         assert!(r.train().iter().all(|row| row.item != item.id));
     }
     let mut recall = Record(vec![]);
-    let weksa::run::RecallOutcome::Read(rr) = run.recall(&mut recall).unwrap() else {
+    let weksa::run::RecallOutcome::Read(reading) = run.recall(&mut recall).unwrap() else {
         panic!("answered");
     };
+    let rr = reading.languages[0].clone();
     assert_eq!((rr.n, rr.answered), (28, 28));
     for item in &held {
         assert!(!leaks(&recall.0, item), "recall prompt held {}", item.id);
