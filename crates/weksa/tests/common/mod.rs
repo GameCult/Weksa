@@ -116,12 +116,30 @@ pub fn entities_in(dir: &std::path::Path) -> EntityStore {
 
 /// A run over the stores `world()` and `corpus()` keep in `dir`: `c.cc`,
 /// `i.cc` and `entities.cc`. Read at the call, so create it after the items.
+/// The run's en-US panel needs a live Train and a live Validation item: a
+/// corpus short of one gets `item:panel:<n>` added, and no other item.
 pub fn run_over(dir: &std::path::Path) -> weksa::run::RunStores {
     for name in ["c.cc", "i.cc", "entities.cc"] {
         if !dir.join(name).exists() {
             std::fs::write(dir.join(name), [0x90]).unwrap();
         }
     }
+    let entities = entities_in(dir);
+    let mut corpus = CorpusStore::open(&dir.join("c.cc")).unwrap();
+    for (n, split) in [(1, weksa::Split::Train), (2, weksa::Split::Validation)] {
+        let held = corpus
+            .all()
+            .unwrap()
+            .iter()
+            .any(|i| SplitScheme::V1.live(i) == Some(split));
+        if !held {
+            let group = group_in_bucket(if n == 1 { 10 } else { 50 });
+            let key = format!("item:panel:{n}");
+            let text = format!("Panel fixture line {n}.");
+            corpus.add(item_in(&key, &text, &group, cast()), &entities).unwrap();
+        }
+    }
+    drop(corpus);
     weksa::run::RunStores::create(
         &dir.join("run"),
         "t",
@@ -134,6 +152,7 @@ pub fn run_over(dir: &std::path::Path) -> weksa::run::RunStores {
         "bag",
         weksa::run::LowererReach::ToolLessRelay,
         weksa::corpus::ModelFamily::Unrecorded,
+        &["en-US".to_string()],
     )
     .unwrap()
 }
@@ -219,6 +238,10 @@ pub fn world() -> World {
         end: 4,
     }];
     corpus.add(first, &entities).unwrap();
+    // A run's panel needs a live Validation item as well as a Train one.
+    let validation = group_in_bucket(50);
+    let second = item_in("item:panel:1", "Nibu says watch the ladder.", &validation, cast());
+    corpus.add(second, &entities).unwrap();
     let mut inventory = InventoryStore::open(&dir.path().join("i.cc")).unwrap();
     let (rev1, entries) = seed();
     inventory.admit_revision(rev1, entries).unwrap();

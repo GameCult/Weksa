@@ -638,6 +638,17 @@ mod tests {
     }
 
     #[test]
+    fn a_mint_prompt_over_no_train_items_is_the_brief_the_feedback_and_the_listing() {
+        let none = TrainItems { items: vec![] };
+        let prompt = Prompt::mint(&none, &Inventory::default(), 0, &EditFeedback::none());
+        assert_eq!(
+            prompt.text(),
+            format!("{MINT_INSTRUCTIONS}\n\nlast edit: none; validation composite at head: none\n\ninventory rev:0")
+        );
+        assert!(prompt.item_keys().is_empty());
+    }
+
+    #[test]
     fn checkpoint_offer_gate() {
         // A fresh checkpoint per call: this test is the gate, not the once rule.
         let check =
