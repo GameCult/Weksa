@@ -1673,6 +1673,7 @@ mod ontology {
     }
 
     #[test]
+    #[allow(clippy::vec_init_then_push)]
     fn ontology_admit_refuses_each_rule() {
         let d = dir();
         let w = world();
@@ -1681,6 +1682,40 @@ mod ontology {
         let mut cases: Vec<(&str, Vec<OntologyEntry>)> = Vec::new();
         cases.push(("non-tag language", vec![entry("not a tag", 1)]));
         cases.push(("n not latest+1", vec![entry("ja-JP", 2)]));
+        cases.push(("case-variant language", vec![entry("ja-jp", 1)]));
+        cases.push((
+            "decomposed choice",
+            vec![OntologyEntry { choice: "e\u{301}".into(), ..entry("ja-JP", 1) }],
+        ));
+        cases.push((
+            "decomposed example",
+            vec![OntologyEntry { examples: vec!["e\u{301}".into()], ..entry("ja-JP", 1) }],
+        ));
+        for sep in ["\u{2028}", "\u{2029}", "\u{202e}", "\u{200b}"] {
+            cases.push((
+                "line separator or format character in a choice",
+                vec![OntologyEntry { choice: format!("a{sep}b"), ..entry("ja-JP", 1) }],
+            ));
+            cases.push((
+                "line separator or format character in an example",
+                vec![OntologyEntry { examples: vec![format!("a{sep}b")], ..entry("ja-JP", 1) }],
+            ));
+        }
+        cases.push((
+            "unconditioned entry at an unknown revision",
+            vec![OntologyEntry { when: vec![], inventory_rev: 99, ..entry("ja-JP", 1) }],
+        ));
+        cases.push((
+            "Predication slot on a feature that sits there",
+            vec![OntologyEntry {
+                when: vec![when(
+                    Slot::Predication,
+                    "modality",
+                    Test::Is(FeatValue::Option(lab("actual"))),
+                )],
+                ..entry("ja-JP", 1)
+            }],
+        ));
         cases.push((
             "65th entry",
             (1..=65).map(|n| entry("ja-JP", n)).collect(),
@@ -1767,6 +1802,23 @@ mod ontology {
     }
 
     #[test]
+    fn ontology_admit_accepts_the_bounds_and_joiners() {
+        let d = dir();
+        let w = world();
+        let mut s = store(&d);
+        // Exactly 64 entries in one language; exactly the byte bounds; a ZWNJ.
+        let mut batch: Vec<OntologyEntry> = (1..=64).map(|n| entry("ja-JP", n)).collect();
+        batch[0].choice = "x".repeat(200);
+        batch[0].examples = vec!["y".repeat(120); 3];
+        batch[1].choice = "a\u{200c}b".into();
+        batch[2].when = (0..4)
+            .map(|_| when(Slot::Stance, "restraint", Test::AtMost(Grade::new(1000).unwrap())))
+            .collect();
+        assert_eq!(s.admit(batch, &w.inventory).unwrap(), AddOutcome::Added);
+        assert_eq!(s.all().unwrap().len(), 64);
+    }
+
+    #[test]
     fn ontology_admit_is_all_or_nothing() {
         let d = dir();
         let w = world();
@@ -1781,6 +1833,10 @@ mod ontology {
         // An identical replay, from a reopened store, changes nothing.
         let mut again = store(&d);
         assert_eq!(again.admit(batch, &w.inventory).unwrap(), AddOutcome::Unchanged);
+        // A batch of one stored entry and one new one is not a replay.
+        let mixed = vec![entry("ja-JP", 1), entry("ja-JP", 5)];
+        assert!(again.admit(mixed, &w.inventory).is_err());
+        assert_eq!(again.all().unwrap().len(), 4);
         // Each language numbers from its own latest.
         assert_eq!(
             again

@@ -847,6 +847,11 @@ mod lowering {
         assert_eq!(keys(&both, "en-US"), ["onto:en-US:1"]);
         let low = view_of(Some(200), Some(false), &cast, &entities);
         assert_eq!(keys(&low, "ja-JP"), ["onto:ja-JP:2", "onto:ja-JP:4"]);
+        // A grade equal to the bound meets AtLeast and AtMost alike.
+        let edge = view_of(Some(600), None, &cast, &entities);
+        assert_eq!(keys(&edge, "ja-JP"), ["onto:ja-JP:1", "onto:ja-JP:4"]);
+        let edge = view_of(Some(300), None, &cast, &entities);
+        assert_eq!(keys(&edge, "ja-JP"), ["onto:ja-JP:2", "onto:ja-JP:4"]);
         // An absent feature meets no condition, however lax.
         let bare = view_of(None, None, &cast, &entities);
         assert_eq!(keys(&bare, "ja-JP"), ["onto:ja-JP:4"]);

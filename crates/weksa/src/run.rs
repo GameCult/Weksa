@@ -43,6 +43,7 @@ use crate::corpus::{CorpusItem, CorpusItemId, ModelFamily, Source};
 use crate::encode::{EditDraft, LoweringDraft, PacketDraft, encoder_id};
 use crate::form::{is_attestation, is_slug};
 use crate::model::{ModelPort, PortError};
+use crate::ontology::OntologyEntry;
 use crate::packet::{Packet, Stance};
 use crate::score::{CHRF_VERSION, chrf, Embedder, ItemScore, ScoreInput, Scorer, SplitMean, aggregate};
 use crate::split::{Split, SplitScheme, fnv1a64, fnv1a64_of, hex16};
@@ -782,10 +783,21 @@ impl RunStores {
     fn check_ontology(&self) -> Result<(), RunError> {
         let inventory = self.inventory.inventory().map_err(|_| RunError::Store)?;
         let entries = self.ontology.all().map_err(|_| RunError::Store)?;
+        let head = inventory.latest().map(|r| r.n);
         entries
             .iter()
             .filter(|e| self.record.panel.contains(&e.language))
-            .try_for_each(|e| check_ontology_entry(e, &inventory).map_err(|_| RunError::Ontology))
+            .try_for_each(|e| {
+                // At its own revision, and again at the head: an entry on a
+                // feature the head retired could never select.
+                let at_head = OntologyEntry {
+                    inventory_rev: head.ok_or(RunError::Ontology)?,
+                    ..e.clone()
+                };
+                check_ontology_entry(e, &inventory)
+                    .and_then(|()| check_ontology_entry(&at_head, &inventory))
+                    .map_err(|_| RunError::Ontology)
+            })
     }
 
     /// Every panel language holds a live Train and a live Validation item.

@@ -86,6 +86,11 @@ impl Condition {
 }
 
 /// One choice of one language. Key `onto:<language>:<n>`.
+///
+/// The store judges the form of an entry's text (bounds, normalization, no
+/// control or format character) and never its meaning: what may enter an entry
+/// is owned by the minting flow (Train-only assembly) and the scorer's leak
+/// diagnostic (ruling `leak-owned-by-flow-and-scorer-3`), not by a door here.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, DatabaseEntry)]
 #[cultcache(type = "weksa.ontology_entry")]
 pub struct OntologyEntry {

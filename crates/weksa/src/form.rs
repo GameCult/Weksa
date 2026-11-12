@@ -107,6 +107,25 @@ pub(crate) fn is_language_tag(s: &str) -> bool {
             .all(|t| (1..=8).contains(&t.len()) && t.bytes().all(|b| b.is_ascii_alphanumeric()))
 }
 
+/// A language tag in its canonical case: lowercase language, two-letter region
+/// in capitals, four-letter script in title case, any other subtag lowercase.
+/// An ontology is selected by exact tag, so a case variant would be a dead
+/// language.
+pub(crate) fn is_canonical_language_tag(s: &str) -> bool {
+    is_language_tag(s)
+        && s.split('-').enumerate().all(|(i, t)| {
+            let upper = |c: char| c.is_ascii_uppercase();
+            match (i, t.len()) {
+                (0, _) => !t.chars().any(upper),
+                (_, 2) if t.bytes().all(|b| b.is_ascii_alphabetic()) => t.chars().all(upper),
+                (_, 4) if t.bytes().all(|b| b.is_ascii_alphabetic()) => {
+                    t.chars().next().is_some_and(upper) && !t.chars().skip(1).any(upper)
+                }
+                _ => !t.chars().any(upper),
+            }
+        })
+}
+
 /// A slug: `[a-z0-9]` and inner `-`, 1 to 48 bytes, no edge `-`.
 pub(crate) fn is_slug(s: &str) -> bool {
     let b = s.as_bytes();

@@ -4596,8 +4596,9 @@ fn ablation_reads_each_language_apart() {
     );
 }
 
-/// An en-US Dao ontology: entry 1 for a stance with affection, entry 2 for one
-/// with almost no restraint (which no Dao packet has).
+/// A Dao ontology for en-US and ja-JP: entry 1 of each for a stance with
+/// affection, and a ja-JP entry 2 for almost no restraint (which no Dao packet
+/// has).
 fn dao_ontology(path: &Path, inventory: &Path) {
     use weksa::packet::Grade;
     use weksa::{Condition, Layer, OntologyEntry, OntologyStore, Slot, Test};
@@ -4610,8 +4611,8 @@ fn dao_ontology(path: &Path, inventory: &Path) {
             .unwrap()
             .id
     };
-    let entry = |n, gloss: &str, test, choice: &str| OntologyEntry {
-        language: "en-US".into(),
+    let entry = |language: &str, n, gloss: &str, test, choice: &str| OntologyEntry {
+        language: language.into(),
         n,
         inventory_rev: 1,
         layer: Layer::Discourse,
@@ -4624,14 +4625,22 @@ fn dao_ontology(path: &Path, inventory: &Path) {
         examples: vec![],
         annotator: weksa::Annotator::Operator,
     };
+    let affection = || Test::AtLeast(Grade::new(200).unwrap());
     OntologyStore::open(path)
         .unwrap()
         .admit(
             vec![
-                entry(1, "affection", Test::AtLeast(Grade::new(200).unwrap()), "warm"),
-                entry(2, "restraint", Test::AtMost(Grade::new(100).unwrap()), "blunt"),
+                entry("en-US", 1, "affection", affection(), "ENWARM"),
+                entry("ja-JP", 1, "affection", affection(), "JAWARM"),
+                entry(
+                    "ja-JP",
+                    2,
+                    "restraint",
+                    Test::AtMost(Grade::new(100).unwrap()),
+                    "JABLUNT",
+                ),
             ],
-            &inv_store(inventory),
+            &inv,
         )
         .unwrap();
 }
@@ -4653,7 +4662,7 @@ fn a_run_pins_its_ontology_and_refuses_drift() {
     let mut store = weksa::OntologyStore::open(&dao.ontology).unwrap();
     store
         .admit(
-            vec![weksa::OntologyEntry { n: 3, ..entry }],
+            vec![weksa::OntologyEntry { n: 2, ..entry }],
             &inv_store(&dao.inventory),
         )
         .unwrap();
@@ -4671,7 +4680,7 @@ fn create_refuses_an_entry_its_inventory_cannot_read() {
     // another file where that feature is retired or absent, so the entry is
     // admitted against a richer inventory and refused against the run's.
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/daodejing");
-    let make = |language: &str, dir: &Path| {
+    let make = |language: &str, dir: &Path, retire: bool| {
         for (from, to) in [("corpus.cc", "c.cc"), ("inventory.cc", "i.cc"), ("entity.cc", "e.cc")] {
             std::fs::copy(src.join(from), dir.join(to)).unwrap();
         }
@@ -4726,6 +4735,21 @@ fn create_refuses_an_entry_its_inventory_cannot_read() {
                 &store,
             )
             .unwrap();
+        if retire {
+            // The run's head inventory retires the feature after the entry's revision.
+            store
+                .admit_revision(
+                    weksa::InventoryRevision {
+                        n: n + 1,
+                        parent: Some(n),
+                        changes: vec![weksa::Change::Retire(id)],
+                        frozen: false,
+                    },
+                    vec![],
+                )
+                .unwrap();
+            std::fs::copy(&rich, dir.join("i.cc")).unwrap();
+        }
         ontology
     };
     let create = |dir: &Path, ontology: &Path| {
@@ -4746,35 +4770,49 @@ fn create_refuses_an_entry_its_inventory_cannot_read() {
         )
     };
     let panel_dir = tempfile::tempdir().unwrap();
-    let o = make("en-US", panel_dir.path());
+    let o = make("en-US", panel_dir.path(), false);
     assert_eq!(create(panel_dir.path(), &o).err(), Some(RunError::Ontology));
     assert!(!panel_dir.path().join("run/run.cc").exists());
     assert!(!panel_dir.path().join("run/inventory.cc").exists());
     // The same entry under a language outside the panel does not refuse.
     let other_dir = tempfile::tempdir().unwrap();
-    let o = make("ja-JP", other_dir.path());
+    let o = make("ja-JP", other_dir.path(), false);
     assert!(create(other_dir.path(), &o).is_ok());
+    // An entry on a feature the head inventory has retired can never select.
+    let retired_dir = tempfile::tempdir().unwrap();
+    let o = make("en-US", retired_dir.path(), true);
+    assert_eq!(create(retired_dir.path(), &o).err(), Some(RunError::Ontology));
+    assert!(!retired_dir.path().join("run/run.cc").exists());
 }
 
 #[test]
 fn round_lowering_prompts_carry_selected_entries() {
-    let mut dao = dao_build(|_, _| {}, &["en-US"], dao_ontology);
-    let mut model = fake(&good_answers());
+    let mut dao = dao_build(
+        |corpus, entities| add_languages(corpus, entities, LAOZI_JA),
+        &["ja-JP", "en-US"],
+        dao_ontology,
+    );
+    let mut model = bilingual_fake();
     let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
-    let mut lowerings = 0;
+    let mut seen = std::collections::BTreeSet::new();
     for ((_, text), call) in model.seen.iter().zip(r.calls()) {
         if !text.starts_with(LOWER_INSTRUCTIONS) {
             continue;
         }
-        lowerings += 1;
         let item = call.items[0].as_str();
-        // Only the third Dao packet carries affection.
-        if item == "item:daodejing:3" {
-            assert!(text.contains("\nonto:en-US:1 [discourse] warm\n"), "{text}");
+        let (language, warm, other) = if text.contains("\n\nlanguage: ja-JP\n\n") {
+            ("ja-JP", "JAWARM", "ENWARM")
+        } else {
+            ("en-US", "ENWARM", "JAWARM")
+        };
+        // Only the third packet of each language carries affection.
+        if item.ends_with(":3") || item.ends_with(":13") {
+            assert!(text.contains(&format!("\nonto:{language}:1 [discourse] {warm}\n")), "{text}");
         } else {
             assert!(text.contains("\n\nontology: none\n\n"), "{item}: {text}");
         }
-        assert!(!text.contains("onto:en-US:2") && !text.contains("blunt"));
+        assert!(!text.contains(other) && !text.contains("JABLUNT"), "{item}: {text}");
+        seen.insert(item.to_string());
     }
-    assert_eq!(lowerings, 3);
+    assert_eq!(seen.len(), 6, "three items in each language");
 }

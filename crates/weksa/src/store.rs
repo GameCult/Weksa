@@ -14,7 +14,8 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::corpus::{CorpusItem, CorpusItemId, Source, item_key, key_slug};
 use crate::entity::{Entity, EntityOrigin, Pronunciation};
 use crate::form::{
-    is_attestation, is_calendar_date, is_joining_only, is_language_tag, is_refused_format, is_slug,
+    is_attestation, is_calendar_date, is_canonical_language_tag, is_joining_only, is_language_tag,
+    is_refused_format, is_slug,
 };
 use crate::inventory::{
     Change, InvId, Inventory, InventoryEntry, InventoryRevision, Slot, revision_key,
@@ -1256,8 +1257,11 @@ impl OntologyStore {
         let mut counted: std::collections::BTreeMap<&str, u32> = std::collections::BTreeMap::new();
         for e in &batch {
             let key = e.key();
-            if !is_language_tag(&e.language) {
-                return Err(malformed(&key, "an ontology language is a language tag"));
+            if !is_canonical_language_tag(&e.language) {
+                return Err(malformed(
+                    &key,
+                    "an ontology language is a language tag in canonical case",
+                ));
             }
             let latest = match counted.get(e.language.as_str()) {
                 Some(n) => *n,
@@ -1297,12 +1301,14 @@ pub(crate) fn check_ontology_entry(
     let key = e.key();
     check_annotator(&key, &e.annotator)?;
     let text_ok = |t: &str, max: usize| {
-        (1..=max).contains(&t.len()) && !t.chars().any(char::is_control) && is_nfc(t)
+        (1..=max).contains(&t.len())
+            && !t.chars().any(|c| c.is_control() || is_refused_format(c))
+            && is_nfc(t)
     };
     if !text_ok(&e.choice, MAX_CHOICE_BYTES) {
         return Err(malformed(
             &key,
-            "a choice is 1 to 200 normalized bytes with no control character",
+            "a choice is 1 to 200 normalized bytes with no control or format character",
         ));
     }
     if e.examples.len() > MAX_EXAMPLES
@@ -1310,7 +1316,7 @@ pub(crate) fn check_ontology_entry(
     {
         return Err(malformed(
             &key,
-            "an entry has at most 3 examples of 1 to 120 normalized bytes with no control character",
+            "an entry has at most 3 examples of 1 to 120 normalized bytes with no control or format character",
         ));
     }
     if e.when.len() > MAX_CONDITIONS {
