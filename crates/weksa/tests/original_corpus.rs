@@ -1031,36 +1031,46 @@ fn sweep_seed_pairs<const N: usize>(
     }
 }
 
-/// ja-JP seed entries :4 to :8 over the stance and discourse grades that bear on
-/// them (hedge, certainty, sadness, affection, restraint): the pairs that gave
-/// opposed instructions (hedge against certainty, particles, final force) never
-/// hold together; and each of :5, :7, :8 still fires where it should (hedged at
-/// certainty 700-799, affection with certainty or restraint unrated).
+/// ja-JP seed entries :3 to :8 over the stance and discourse grades that bear on
+/// them (anger, hedge, certainty, sadness, affection, restraint): the pairs that
+/// gave opposed instructions (clipped anger against hedge or soft particles,
+/// hedge against certainty, particles, final force) never hold together; and
+/// each of :3, :5, :7, :8 still fires where it should (anger with hedge and
+/// affection unrated or below 600, hedged at certainty 700-799, affection with
+/// certainty or restraint unrated).
 #[test]
 fn ja_seed_pairs_never_co_select() {
     let (n, s) = (None, Some);
     sweep_seed_pairs(
         "ja-JP",
-        ["hedge", "certainty", "sadness", "affection", "restraint"],
-        &[(5, 6), (4, 7), (6, 7), (6, 8)],
+        ["anger", "hedge", "certainty", "sadness", "affection", "restraint"],
+        &[(5, 6), (4, 7), (6, 7), (6, 8), (3, 5), (3, 7)],
         &[
-            (5, [s(600), n, n, n, n]),
-            (5, [s(700), s(799), n, n, n]),
-            (5, [s(700), n, n, n, n]),
-            (7, [n, s(799), n, s(700), s(599)]),
-            (7, [n, n, n, s(700), n]),
-            (7, [s(1000), s(0), s(1000), s(600), s(0)]),
-            (8, [n, s(799), s(700), n, s(700)]),
-            (8, [n, n, s(600), n, s(600)]),
-            (6, [n, s(800), n, n, n]),
+            (3, [s(700), n, n, n, n, s(300)]),
+            (3, [s(700), s(599), n, n, s(599), s(300)]),
+            (3, [s(1000), s(0), s(799), n, s(0), s(0)]),
+            (5, [n, s(600), n, n, n, n]),
+            (5, [n, s(700), s(799), n, n, n]),
+            (5, [n, s(700), n, n, n, n]),
+            (7, [n, n, s(799), n, s(700), s(599)]),
+            (7, [n, n, n, n, s(700), n]),
+            (7, [n, s(1000), s(0), s(1000), s(600), s(0)]),
+            (8, [n, n, s(799), s(700), n, s(700)]),
+            (8, [n, n, n, s(600), n, s(600)]),
+            (6, [n, n, s(800), n, n, n]),
         ],
         &[
-            (8, [n, n, s(599), n, s(700)]),
-            (8, [n, n, n, n, s(700)]),
-            (5, [s(599), n, n, n, n]),
-            (7, [n, n, n, s(599), n]),
-            (7, [n, n, n, s(700), s(600)]),
-            (8, [n, n, s(600), n, s(599)]),
+            (3, [s(700), s(600), n, n, n, s(300)]),
+            (3, [s(700), n, n, n, s(600), s(300)]),
+            (3, [s(699), n, n, n, n, s(300)]),
+            (3, [s(700), n, n, n, n, s(301)]),
+            (3, [s(700), n, n, n, n, n]),
+            (8, [n, n, n, s(599), n, s(700)]),
+            (8, [n, n, n, n, n, s(700)]),
+            (5, [n, s(599), n, n, n, n]),
+            (7, [n, n, n, n, s(599), n]),
+            (7, [n, n, n, n, s(700), s(600)]),
+            (8, [n, n, n, s(600), n, s(599)]),
         ],
     );
 }
