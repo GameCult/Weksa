@@ -10,7 +10,9 @@
 //! [`Inventory`] and an [`EditFeedback`] and nothing else, so no held-out text,
 //! key or per-item score can reach it. A lowering prompt names the language it
 //! is said in on a language line; every language is named by its tag, none by a
-//! default.
+//! default. A lowering prompt also prints the target language's ontology
+//! entries that `ontology::select` chose for the view; the caller never names
+//! entries.
 //!
 //! Item text may hold line breaks; the renderer indents every continuation line
 //! (`indented`), so item text cannot forge a `[key]` line or a paragraph.
@@ -28,6 +30,7 @@ use serde::Serialize;
 use crate::corpus::{CorpusItem, CorpusItemId};
 use crate::inventory::{Inventory, InventoryEntry, OptionLabel, ValueKind};
 use crate::lower::{EntityForms, LowerError, entity};
+use crate::ontology::{Ontology, select};
 use crate::packet::{
     Context, Discourse, EntityId, Extension, Predication, Referent, Relation, Stance,
 };
@@ -68,7 +71,7 @@ A feature is {feature, value}; value is {\"Grade\": 0 to 1000}, {\"Option\": lab
 /// Fixed per run by `PROMPT_SOURCE_DIGEST`.
 pub const LOWER_INSTRUCTIONS: &str = "\
 Say the packet below in the language on the language line, as one utterance of its speaker: all of its meaning and nothing it does not carry.
-Every id is the inventory's listed below and every feature value is as listed; a grade is permille, 0 to 1000. The stance is the speaker's felt affect and restraint: it shapes how the utterance is said, not what it says.
+Every id is the inventory's listed below and every feature value is as listed; a grade is permille, 0 to 1000. The stance is the speaker's felt affect and restraint: it shapes how the utterance is said, not what it says. The ontology lines are choices this language makes for this speaker and stance: realize each where the packet allows; they add no meaning.
 A referent with an entity is named by one of that entity's forms on the entities line.
 Answer with one JSON object and nothing else: {\"text\": \"...\"}. No code fence, no commentary.";
 
@@ -86,7 +89,7 @@ Answer with one JSON object and nothing else: {\"text\": \"...\"}, the continuat
 /// ```no_run
 /// # let dir = tempfile::tempdir().unwrap();
 /// # let p = |n: &str| dir.path().join(n);
-/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
+/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc"), ontology: &p("o.cc") };
 /// # let panel = ["en-US".to_string()];
 /// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded, &panel).unwrap();
 /// let t = run.train().unwrap();
@@ -100,8 +103,8 @@ Answer with one JSON object and nothing else: {\"text\": \"...\"}, the continuat
 /// ```compile_fail
 /// # let dir = tempfile::tempdir().unwrap();
 /// # let p = |n: &str| dir.path().join(n);
-/// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
-/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
+/// # for n in ["c.cc", "i.cc", "e.cc", "o.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
+/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc"), ontology: &p("o.cc") };
 /// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded, &["en-US".to_string()]).unwrap();
 /// let t = run.train().unwrap();
 /// let _u = t.clone();
@@ -111,8 +114,8 @@ Answer with one JSON object and nothing else: {\"text\": \"...\"}, the continuat
 /// fn s<T: serde::Serialize>(_: &T) {}
 /// # let dir = tempfile::tempdir().unwrap();
 /// # let p = |n: &str| dir.path().join(n);
-/// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
-/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
+/// # for n in ["c.cc", "i.cc", "e.cc", "o.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
+/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc"), ontology: &p("o.cc") };
 /// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded, &["en-US".to_string()]).unwrap();
 /// let t = run.train().unwrap();
 /// s(&t);
@@ -334,7 +337,7 @@ impl EditFeedback {
 /// ```no_run
 /// # let dir = tempfile::tempdir().unwrap();
 /// # let p = |n: &str| dir.path().join(n);
-/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
+/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc"), ontology: &p("o.cc") };
 /// # let panel = ["en-US".to_string()];
 /// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded, &panel).unwrap();
 /// let t = run.train().unwrap();
@@ -352,8 +355,8 @@ impl EditFeedback {
 /// ```compile_fail,E0061
 /// # let dir = tempfile::tempdir().unwrap();
 /// # let p = |n: &str| dir.path().join(n);
-/// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
-/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
+/// # for n in ["c.cc", "i.cc", "e.cc", "o.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
+/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc"), ontology: &p("o.cc") };
 /// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded, &["en-US".to_string()]).unwrap();
 /// let t = run.train().unwrap();
 /// let inv = run.inventory().inventory().unwrap();
@@ -365,8 +368,8 @@ impl EditFeedback {
 /// fn s<T: serde::Serialize>(_: &T) {}
 /// # let dir = tempfile::tempdir().unwrap();
 /// # let p = |n: &str| dir.path().join(n);
-/// # for n in ["c.cc", "i.cc", "e.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
-/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc") };
+/// # for n in ["c.cc", "i.cc", "e.cc", "o.cc"] { std::fs::write(p(n), [0x90]).unwrap(); }
+/// # let paths = weksa::run::RunPaths { corpus: &p("c.cc"), inventory: &p("i.cc"), entities: &p("e.cc"), ontology: &p("o.cc") };
 /// # let run = weksa::run::RunStores::create(&p("run"), "t", paths, "m", "e", weksa::run::LowererReach::ToolLessRelay, weksa::corpus::ModelFamily::Unrecorded, &["en-US".to_string()]).unwrap();
 /// let t = run.train().unwrap();
 /// let inv = run.inventory().inventory().unwrap();
@@ -523,9 +526,13 @@ impl Prompt {
 
     /// [`LOWER_INSTRUCTIONS`], the `language: <tag>` line, the meaning of
     /// `input` (no kind, constraints, scene, speaker or group), the forms in
-    /// `language` of every entity its referents cite, and the entries of `inventory` live at the view's revision. `item`
-    /// goes only to [`Prompt::item_keys`], never into the text. The view's
-    /// speaker and group fields are never read; a speaker's entity id appears
+    /// `language` of every entity its referents cite, the `ontology:` section
+    /// and the entries of `inventory` live at the view's revision. The section
+    /// holds the entries `ontology::select` chooses from the view's stance and
+    /// discourse features and `language`, never the caller; the view's speaker
+    /// and group are still never read. `item`
+    /// goes only to [`Prompt::item_keys`], never into the text. A speaker's
+    /// entity id appears
     /// only when the encoder cites that entity on a referent, which is naming a
     /// cited entity like any other. A cited entity the port lacks, or one with
     /// no form in `language`, is an error and no prompt. The caller chooses the
@@ -536,6 +543,7 @@ impl Prompt {
         language: &str,
         inventory: &Inventory,
         entities: &dyn EntityForms,
+        ontology: &Ontology,
     ) -> Result<Prompt, LowerError> {
         let mut forms: BTreeMap<&str, Vec<String>> = BTreeMap::new();
         for id in input.referents().iter().filter_map(|r| r.entity.as_ref()) {
@@ -556,8 +564,19 @@ impl Prompt {
             stance: input.stance(),
         };
         let rev = input.inventory_rev();
+        let chosen = select(ontology, language, input);
+        let mut lines = String::new();
+        for e in &chosen {
+            lines.push_str(&format!("\n{} [{}] {}", e.key(), e.layer.name(), e.choice));
+            for x in &e.examples {
+                lines.push_str(&format!(" | e.g. {x}"));
+            }
+        }
+        if chosen.is_empty() {
+            lines.push_str(" none");
+        }
         let text = format!(
-            "{LOWER_INSTRUCTIONS}\n\nlanguage: {language}\n\npacket: {}\n\nentities: {}\n\ninventory rev:{rev}{}",
+            "{LOWER_INSTRUCTIONS}\n\nlanguage: {language}\n\npacket: {}\n\nentities: {}\n\nontology:{lines}\n\ninventory rev:{rev}{}",
             serde_json::to_string(&meaning).expect("a meaning is plain data"),
             serde_json::to_string(&forms).expect("forms are plain data"),
             inventory_lines(inventory, rev)

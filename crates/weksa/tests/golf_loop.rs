@@ -24,8 +24,13 @@ fn rewrite_run(root: &Path, change: impl FnOnce(&mut RunRecord)) {
     cache.put(format!("run:{}", record.label), &record).unwrap();
 }
 
-fn paths(dir: &Path) -> (PathBuf, PathBuf, PathBuf) {
-    (dir.join("c.cc"), dir.join("i.cc"), dir.join("entities.cc"))
+fn paths(dir: &Path) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+    (
+        dir.join("c.cc"),
+        dir.join("i.cc"),
+        dir.join("entities.cc"),
+        common::ontology_in(dir),
+    )
 }
 
 fn hex(path: &Path) -> String {
@@ -37,7 +42,7 @@ fn a_run_pins_its_stores_and_refuses_drift() {
     let mut w = world();
     let dir = w.dir.path().to_path_buf();
     let root = dir.join("run");
-    let (c, i, e) = paths(&dir);
+    let (c, i, e, o) = paths(&dir);
     let at = |label: &str, model: &str| {
         RunStores::create(
             &root,
@@ -46,6 +51,7 @@ fn a_run_pins_its_stores_and_refuses_drift() {
                 corpus: &c,
                 inventory: &i,
                 entities: &e,
+                ontology: &o,
             },
             model,
             "bag",
@@ -141,7 +147,7 @@ fn a_run_works_on_its_own_copy_of_the_inventory() {
     let w = world();
     let dir = w.dir.path().to_path_buf();
     let root = dir.join("run");
-    let (c, i, e) = paths(&dir);
+    let (c, i, e, o) = paths(&dir);
     let source_bytes = std::fs::read(&i).unwrap();
     let mut run = RunStores::create(
         &root,
@@ -150,6 +156,7 @@ fn a_run_works_on_its_own_copy_of_the_inventory() {
             corpus: &c,
             inventory: &i,
             entities: &e,
+            ontology: &o,
         },
         "fake-model",
         "bag",
@@ -228,6 +235,7 @@ fn create_refuses_a_root_that_holds_an_inventory_and_never_truncates_it() {
                 corpus: &dao.corpus,
                 inventory,
                 entities: &dao.entities,
+                ontology: &dao.ontology,
             },
             "fake-model",
             "bag",
@@ -276,6 +284,7 @@ fn a_create_that_fails_leaves_no_inventory_and_the_retry_succeeds() {
                 corpus: &dao.corpus,
                 inventory,
                 entities,
+                ontology: &dao.ontology,
             },
             "fake-model",
             "bag",
@@ -388,10 +397,12 @@ fn a_store_changed_between_its_digest_and_its_open_is_drift() {
         assert!(dir.join(name).exists(), "{name}");
     }
     let (c, i, e) = (dir.join("c.cc"), dir.join("i.cc"), dir.join("entities.cc"));
+    let o = dir.join("ontology.cc");
     let paths = || weksa::run::RunPaths {
         corpus: &c,
         inventory: &i,
         entities: &e,
+        ontology: &o,
     };
     assert_eq!(
         RunStores::create_between(
@@ -440,10 +451,12 @@ fn window(
     let dir = w.dir.path().to_path_buf();
     let root = dir.join("run");
     let (c, i, e) = (dir.join("c.cc"), dir.join("i.cc"), dir.join("entities.cc"));
+    let o = dir.join("ontology.cc");
     let paths = weksa::run::RunPaths {
         corpus: &c,
         inventory: &i,
         entities: &e,
+        ontology: &o,
     };
     let created = RunStores::create_between(
         &root,
@@ -501,12 +514,13 @@ fn source_digests_cover_their_files() {
     let digest = |name: &str| fnv1a64(&read(name));
     // The prompt's partition and names come from split.rs, and the lowering
     // prompt reads lower.rs's target language and entity port and prints
-    // packet.rs's serde shapes: all four are covered.
-    let (context, split, lower, packet) = (
+    // packet.rs's serde shapes and ontology.rs's selection: all five are covered.
+    let (context, split, lower, packet, ontology) = (
         read("context.rs"),
         read("split.rs"),
         read("lower.rs"),
         read("packet.rs"),
+        read("ontology.rs"),
     );
     // Each file enters behind its length, so the parts have one framing.
     let framed = [
@@ -518,12 +532,14 @@ fn source_digests_cover_their_files() {
         &lower,
         (packet.len() as u64).to_le_bytes().as_slice(),
         &packet,
+        (ontology.len() as u64).to_le_bytes().as_slice(),
+        &ontology,
     ]
     .concat();
     assert_eq!(weksa::run::PROMPT_SOURCE_DIGEST, fnv1a64(&framed));
     assert_ne!(
         weksa::run::PROMPT_SOURCE_DIGEST,
-        fnv1a64(&[context.clone(), split.clone(), lower.clone(), packet.clone()].concat()),
+        fnv1a64(&[context.clone(), split.clone(), lower.clone(), packet.clone(), ontology.clone()].concat()),
         "bare concatenation is not the digest"
     );
     // Moving the boundary between the parts moves the digest.
@@ -532,6 +548,7 @@ fn source_digests_cover_their_files() {
         weksa::split::fnv1a64_of(&[b"a", b"bc"])
     );
     assert_ne!(weksa::run::PROMPT_SOURCE_DIGEST, digest("context.rs"));
+    assert_ne!(weksa::run::PROMPT_SOURCE_DIGEST, digest("ontology.rs"));
 }
 
 /// The encode prompt of `item:nibu:1` over `world()` at revision 4.
@@ -837,6 +854,7 @@ struct Dao {
     corpus: PathBuf,
     inventory: PathBuf,
     entities: PathBuf,
+    ontology: PathBuf,
     run: RunStores,
 }
 
@@ -853,6 +871,16 @@ fn dao_over(edit: impl FnOnce(&Path, &Path)) -> Dao {
 
 /// `dao_over` with the run opened on `panel`.
 fn dao_panel(edit: impl FnOnce(&Path, &Path), panel: &[&str]) -> Dao {
+    dao_build(edit, panel, |_, _| {})
+}
+
+/// `dao_panel` with `seed_ontology` (given the ontology and inventory paths)
+/// run before the run pins the ontology.
+fn dao_build(
+    edit: impl FnOnce(&Path, &Path),
+    panel: &[&str],
+    seed_ontology: impl FnOnce(&Path, &Path),
+) -> Dao {
     let panel: Vec<String> = panel.iter().map(|t| t.to_string()).collect();
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/daodejing");
     let dir = tempfile::tempdir().unwrap();
@@ -866,6 +894,8 @@ fn dao_panel(edit: impl FnOnce(&Path, &Path), panel: &[&str]) -> Dao {
         copy("entity.cc", "e.cc"),
     );
     edit(&corpus, &entities);
+    let ontology = common::ontology_in(dir.path());
+    seed_ontology(&ontology, &inventory);
     let root = dir.path().join("run");
     let run = RunStores::create(
         &root,
@@ -874,6 +904,7 @@ fn dao_panel(edit: impl FnOnce(&Path, &Path), panel: &[&str]) -> Dao {
             corpus: &corpus,
             inventory: &inventory,
             entities: &entities,
+            ontology: &ontology,
         },
         "fake-model",
         "bag",
@@ -888,6 +919,7 @@ fn dao_panel(edit: impl FnOnce(&Path, &Path), panel: &[&str]) -> Dao {
         corpus,
         inventory,
         entities,
+        ontology,
         run,
     }
 }
@@ -1055,7 +1087,7 @@ fn lowering_prompts(dao: &Dao, inventory: &InventoryStore) -> Vec<(String, Promp
             let view = store
                 .admit(packet, inventory, &corpus, dao.run.entities())
                 .unwrap();
-            let prompt = Prompt::lower(&view, &key, "en-US", &inv, dao.run.entities()).unwrap();
+            let prompt = Prompt::lower(&view, &key, "en-US", &inv, dao.run.entities(), &weksa::Ontology::empty()).unwrap();
             (key.to_string(), prompt)
         })
         .collect()
@@ -1527,6 +1559,7 @@ fn errors_echo_no_input() {
         corpus: &missing,
         inventory: &missing,
         entities: &missing,
+        ontology: &missing,
     };
     let e = RunStores::create(
         &root,
@@ -1595,6 +1628,7 @@ fn errors_echo_no_input() {
             corpus: &dao.corpus,
             inventory: &dao.inventory,
             entities: &dao.entities,
+            ontology: &dao.ontology,
         },
         "fake-model",
         "bag",
@@ -2516,6 +2550,7 @@ fn a_changed_head_is_drift() {
             corpus: &dao.corpus,
             inventory: &dao.inventory,
             entities: &dao.entities,
+            ontology: &dao.ontology,
         },
         "fake-model",
         "bag",
@@ -2626,6 +2661,7 @@ fn source_tripwires() {
         assert!(!signature.contains(banned), "Prompt::lower takes {banned}");
     }
     assert!(signature.contains("&LoweringInput") && signature.contains("&CorpusItemId"));
+    assert!(signature.contains("&Ontology"), "the whole ontology goes in; select chooses");
     assert_eq!(count("admit_revision("), 1, "one door call");
     assert_eq!(
         count("std::fs::copy"),
@@ -2854,6 +2890,7 @@ fn a_summary_line_says_how_lowerings_were_answered() {
         corpus: &dao.corpus,
         inventory: &dao.inventory,
         entities: &dao.entities,
+        ontology: &dao.ontology,
     };
     RunStores::create(
         &root,
@@ -3577,6 +3614,7 @@ fn mixed_family_round(family: ModelFamily) -> u32 {
             corpus: &dir.join("c.cc"),
             inventory: &dir.join("i.cc"),
             entities: &dir.join("entities.cc"),
+            ontology: &dir.join("ontology.cc"),
         },
         "not-a-draft",
         "bag",
@@ -4355,6 +4393,7 @@ fn open_refuses_a_bad_panel() {
         vec![],
         vec![tag("en-US"), tag("en-US")],
         vec![tag("en-US"), tag("not a tag!")],
+        vec![tag("en-us")],
         // No live item at all, and a Train item without a Validation one.
         vec![tag("en-US"), tag("de-DE")],
         vec![tag("en-US"), tag("fr-FR")],
@@ -4363,7 +4402,7 @@ fn open_refuses_a_bad_panel() {
         let created = RunStores::create(
             &root,
             "p",
-            RunPaths { corpus, inventory, entities },
+            RunPaths { corpus, inventory, entities, ontology: &dao.ontology },
             "fake-model",
             "bag",
             weksa::run::LowererReach::ToolLessRelay,
@@ -4556,4 +4595,225 @@ fn ablation_reads_each_language_apart() {
         shape,
         [("en-US", Train, 1), ("en-US", Validation, 2), ("ja-JP", Train, 1), ("ja-JP", Validation, 2)]
     );
+}
+
+/// A Dao ontology for en-US and ja-JP: entry 1 of each for a stance with
+/// affection, and a ja-JP entry 2 for almost no restraint (which no Dao packet
+/// has).
+fn dao_ontology(path: &Path, inventory: &Path) {
+    use weksa::packet::Grade;
+    use weksa::{Condition, Layer, OntologyEntry, OntologyStore, Slot, Test};
+    let inv = InventoryStore::open(inventory).unwrap();
+    let feature = |gloss: &str| {
+        inv.inventory()
+            .unwrap()
+            .entries()
+            .find(|e| e.gloss == gloss)
+            .unwrap()
+            .id
+    };
+    let entry = |language: &str, n, gloss: &str, test, choice: &str| OntologyEntry {
+        language: language.into(),
+        n,
+        inventory_rev: 1,
+        layer: Layer::Discourse,
+        when: vec![Condition {
+            slot: Slot::Stance,
+            feature: feature(gloss),
+            test,
+        }],
+        choice: choice.into(),
+        examples: vec![],
+        annotator: weksa::Annotator::Operator,
+    };
+    let affection = || Test::AtLeast(Grade::new(200).unwrap());
+    OntologyStore::open(path)
+        .unwrap()
+        .admit(
+            vec![
+                entry("en-US", 1, "affection", affection(), "ENWARM"),
+                entry("ja-JP", 1, "affection", affection(), "JAWARM"),
+                entry(
+                    "ja-JP",
+                    2,
+                    "restraint",
+                    Test::AtMost(Grade::new(100).unwrap()),
+                    "JABLUNT",
+                ),
+            ],
+            &inv,
+        )
+        .unwrap();
+}
+
+fn inv_store(path: &Path) -> InventoryStore {
+    InventoryStore::open(path).unwrap()
+}
+
+#[test]
+fn a_run_pins_its_ontology_and_refuses_drift() {
+    let dao = dao_build(|_, _| {}, &["en-US"], dao_ontology);
+    let r = dao.run.record();
+    assert_eq!(r.ontology, std::fs::canonicalize(&dao.ontology).unwrap().to_str().unwrap());
+    assert_eq!(r.ontology_digest, hex(&dao.ontology));
+    let root = dao.root.clone();
+    assert_eq!(RunStores::open(&root).unwrap().record(), dao.run.record());
+    // Another entry after the pin is another ontology.
+    let entry = weksa::OntologyStore::open(&dao.ontology).unwrap().all().unwrap().remove(0);
+    let mut store = weksa::OntologyStore::open(&dao.ontology).unwrap();
+    store
+        .admit(
+            vec![weksa::OntologyEntry { n: 2, ..entry }],
+            &inv_store(&dao.inventory),
+        )
+        .unwrap();
+    assert_eq!(
+        RunStores::open(&root).err(),
+        Some(RunError::Drift(DriftOf::Ontology))
+    );
+}
+
+#[test]
+fn create_refuses_an_entry_its_inventory_cannot_read() {
+    use weksa::packet::Grade;
+    use weksa::{Condition, Layer, OntologyEntry, OntologyStore, Slot, Test};
+    // The entry reads feature 18 at revision 1; the run's head inventory is
+    // another file where that feature is retired or absent, so the entry is
+    // admitted against a richer inventory and refused against the run's.
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/daodejing");
+    let make = |language: &str, dir: &Path, retire: bool| {
+        for (from, to) in [("corpus.cc", "c.cc"), ("inventory.cc", "i.cc"), ("entity.cc", "e.cc")] {
+            std::fs::copy(src.join(from), dir.join(to)).unwrap();
+        }
+        let ontology = dir.join("o.cc");
+        // A richer inventory the entry is admitted against: the Dao one plus a feature.
+        let rich = dir.join("rich.cc");
+        std::fs::copy(src.join("inventory.cc"), &rich).unwrap();
+        let mut store = InventoryStore::open(&rich).unwrap();
+        let inv = store.inventory().unwrap();
+        let head = inv.latest().unwrap().n;
+        let n = head + 1;
+        let next = std::num::NonZeroU32::new(
+            inv.entries().filter(|e| e.id.family() == weksa::Family::Feature).map(|e| e.id.n().get()).max().unwrap() + 1,
+        )
+        .unwrap();
+        let id = weksa::Family::Feature.id(next);
+        store
+            .admit_revision(
+                weksa::InventoryRevision {
+                    n,
+                    parent: Some(head),
+                    changes: vec![weksa::Change::Add(id)],
+                    frozen: false,
+                },
+                vec![weksa::InventoryEntry {
+                    id,
+                    gloss: "pride".into(),
+                    value_kind: Some(weksa::ValueKind::Grade),
+                    applies_to: vec![Slot::Stance],
+                    introduced_rev: n,
+                    retired_rev: None,
+                }],
+            )
+            .unwrap();
+        OntologyStore::open(&ontology)
+            .unwrap()
+            .admit(
+                vec![OntologyEntry {
+                    language: language.into(),
+                    n: 1,
+                    inventory_rev: n,
+                    layer: Layer::Lexicon,
+                    when: vec![Condition {
+                        slot: Slot::Stance,
+                        feature: id,
+                        test: Test::AtLeast(Grade::new(1).unwrap()),
+                    }],
+                    choice: "boast".into(),
+                    examples: vec![],
+                    annotator: weksa::Annotator::Operator,
+                }],
+                &store,
+            )
+            .unwrap();
+        if retire {
+            // The run's head inventory retires the feature after the entry's revision.
+            store
+                .admit_revision(
+                    weksa::InventoryRevision {
+                        n: n + 1,
+                        parent: Some(n),
+                        changes: vec![weksa::Change::Retire(id)],
+                        frozen: false,
+                    },
+                    vec![],
+                )
+                .unwrap();
+            std::fs::copy(&rich, dir.join("i.cc")).unwrap();
+        }
+        ontology
+    };
+    let create = |dir: &Path, ontology: &Path| {
+        RunStores::create(
+            &dir.join("run"),
+            "x",
+            RunPaths {
+                corpus: &dir.join("c.cc"),
+                inventory: &dir.join("i.cc"),
+                entities: &dir.join("e.cc"),
+                ontology,
+            },
+            "fake-model",
+            "bag",
+            weksa::run::LowererReach::ToolLessRelay,
+            ModelFamily::Unrecorded,
+            &["en-US".to_string()],
+        )
+    };
+    let panel_dir = tempfile::tempdir().unwrap();
+    let o = make("en-US", panel_dir.path(), false);
+    assert_eq!(create(panel_dir.path(), &o).err(), Some(RunError::Ontology));
+    assert!(!panel_dir.path().join("run/run.cc").exists());
+    assert!(!panel_dir.path().join("run/inventory.cc").exists());
+    // The same entry under a language outside the panel does not refuse.
+    let other_dir = tempfile::tempdir().unwrap();
+    let o = make("ja-JP", other_dir.path(), false);
+    assert!(create(other_dir.path(), &o).is_ok());
+    // An entry on a feature the head inventory has retired can never select.
+    let retired_dir = tempfile::tempdir().unwrap();
+    let o = make("en-US", retired_dir.path(), true);
+    assert_eq!(create(retired_dir.path(), &o).err(), Some(RunError::Ontology));
+    assert!(!retired_dir.path().join("run/run.cc").exists());
+}
+
+#[test]
+fn round_lowering_prompts_carry_selected_entries() {
+    let mut dao = dao_build(
+        |corpus, entities| add_languages(corpus, entities, LAOZI_JA),
+        &["ja-JP", "en-US"],
+        dao_ontology,
+    );
+    let mut model = bilingual_fake();
+    let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    let mut seen = std::collections::BTreeSet::new();
+    for ((_, text), call) in model.seen.iter().zip(r.calls()) {
+        if !text.starts_with(LOWER_INSTRUCTIONS) {
+            continue;
+        }
+        let item = call.items[0].as_str();
+        let (language, warm, other) = if text.contains("\n\nlanguage: ja-JP\n\n") {
+            ("ja-JP", "JAWARM", "ENWARM")
+        } else {
+            ("en-US", "ENWARM", "JAWARM")
+        };
+        // Only the third packet of each language carries affection.
+        if item.ends_with(":3") || item.ends_with(":13") {
+            assert!(text.contains(&format!("\nonto:{language}:1 [discourse] {warm}\n")), "{text}");
+        } else {
+            assert!(text.contains("\n\nontology: none\n\n"), "{item}: {text}");
+        }
+        assert!(!text.contains(other) && !text.contains("JABLUNT"), "{item}: {text}");
+        seen.insert(item.to_string());
+    }
+    assert_eq!(seen.len(), 6, "three items in each language");
 }

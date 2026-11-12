@@ -19,7 +19,11 @@ use crate::form::{
 use crate::inventory::{
     Change, InvId, Inventory, InventoryEntry, InventoryRevision, Slot, revision_key,
 };
-use crate::packet::{EntityId, Packet};
+use crate::ontology::{
+    MAX_CONDITIONS, MAX_CHOICE_BYTES, MAX_ENTRIES_PER_LANGUAGE, MAX_EXAMPLE_BYTES, MAX_EXAMPLES,
+    Ontology, OntologyEntry, Test,
+};
+use crate::packet::{EntityId, FeatValue, Packet};
 use crate::speaker::{Annotator, MAX_PARTICIPANTS, Party, Scene, Speaker, scene_key, speaker_key};
 use crate::validate::{LoweringInput, Refusal, feature_refusals, validate};
 
@@ -1204,6 +1208,136 @@ fn check_next(key: &str, latest: u32, got: u32) -> Result<(), StoreError> {
             got,
         }
         .into());
+    }
+    Ok(())
+}
+
+/// The language ontology: immutable entries admitted in all-or-nothing
+/// batches. The only writer of `weksa.ontology_entry`.
+pub struct OntologyStore {
+    cache: CultCache,
+}
+
+impl OntologyStore {
+    pub fn open(path: &Path) -> anyhow::Result<Self> {
+        Ok(Self {
+            cache: open_cache(path, |c| c.register_entry_type::<OntologyEntry>())?,
+        })
+    }
+
+    /// Every entry, by language then number.
+    pub fn all(&self) -> anyhow::Result<Vec<OntologyEntry>> {
+        Ok(self.ontology()?.entries().to_vec())
+    }
+
+    pub fn ontology(&self) -> anyhow::Result<Ontology> {
+        Ok(Ontology::of(self.cache.get_all::<OntologyEntry>()?))
+    }
+
+    /// Admits a batch whole or not at all; an identical replay of stored
+    /// entries is `Unchanged`. Per language the batch's numbers run the
+    /// language's latest plus one, consecutively, to at most
+    /// `MAX_ENTRIES_PER_LANGUAGE` entries in all. Every entry passes
+    /// [`check_ontology_entry`] against the inventory before any is put. No
+    /// message echoes an entry's text.
+    pub fn admit(
+        &mut self,
+        batch: Vec<OntologyEntry>,
+        inventory: &InventoryStore,
+    ) -> Result<AddOutcome, StoreError> {
+        let all = self.cache.get_all::<OntologyEntry>()?;
+        if batch
+            .iter()
+            .all(|e| all.iter().any(|old| old == e))
+        {
+            return Ok(AddOutcome::Unchanged);
+        }
+        let inv = inventory.inventory()?;
+        let mut counted: std::collections::BTreeMap<&str, u32> = std::collections::BTreeMap::new();
+        for e in &batch {
+            let key = e.key();
+            if !is_language_tag(&e.language) {
+                return Err(malformed(&key, "an ontology language is a language tag"));
+            }
+            let latest = match counted.get(e.language.as_str()) {
+                Some(n) => *n,
+                None => all
+                    .iter()
+                    .filter(|o| o.language == e.language)
+                    .map(|o| o.n)
+                    .max()
+                    .unwrap_or(0),
+            };
+            check_next(&key, latest, e.n)?;
+            if e.n as usize > MAX_ENTRIES_PER_LANGUAGE {
+                return Err(malformed(&key, "a language holds at most 64 entries"));
+            }
+            counted.insert(e.language.as_str(), e.n);
+            check_ontology_entry(e, &inv)?;
+        }
+        let mut staged = Vec::new();
+        for e in &batch {
+            staged.push(self.cache.prepare_entry_named(e.key(), e)?.0);
+        }
+        self.cache.put_prepared_batch(staged)?;
+        Ok(AddOutcome::Added)
+    }
+}
+
+/// The rules of one ontology entry against an inventory: the annotator, the
+/// bounded and normalized text of the choice and examples, the condition count
+/// and each condition's feature (slot `Stance` or `Discourse`, a grade feature
+/// for `AtLeast` and `AtMost`, an option or flag value for `Is`) read at the
+/// entry's inventory revision. The store applies it on admission and a run
+/// applies it again against its own head inventory.
+pub(crate) fn check_ontology_entry(
+    e: &OntologyEntry,
+    inventory: &Inventory,
+) -> Result<(), StoreError> {
+    let key = e.key();
+    check_annotator(&key, &e.annotator)?;
+    let text_ok = |t: &str, max: usize| {
+        (1..=max).contains(&t.len())
+            && !t.chars().any(|c| c.is_control() || is_refused_format(c))
+            && is_nfc(t)
+    };
+    if !text_ok(&e.choice, MAX_CHOICE_BYTES) {
+        return Err(malformed(
+            &key,
+            "a choice is 1 to 200 normalized bytes with no control or format character",
+        ));
+    }
+    if e.examples.len() > MAX_EXAMPLES
+        || !e.examples.iter().all(|x| text_ok(x, MAX_EXAMPLE_BYTES))
+    {
+        return Err(malformed(
+            &key,
+            "an entry has at most 3 examples of 1 to 120 normalized bytes with no control or format character",
+        ));
+    }
+    if e.when.len() > MAX_CONDITIONS {
+        return Err(malformed(&key, "an entry has at most 4 conditions"));
+    }
+    let mut out = Vec::new();
+    for c in &e.when {
+        if !matches!(c.slot, Slot::Stance | Slot::Discourse) {
+            return Err(malformed(&key, "a condition reads slot Stance or Discourse"));
+        }
+        if matches!(c.test, Test::Is(FeatValue::Grade(_))) {
+            return Err(malformed(&key, "Is names an option or a flag"));
+        }
+        out.extend(feature_refusals(
+            inventory,
+            e.inventory_rev,
+            &[c.as_value()],
+            c.slot,
+        ));
+    }
+    if e.when.is_empty() && !inventory.has_revision(e.inventory_rev) {
+        out.extend(feature_refusals(inventory, e.inventory_rev, &[], Slot::Stance));
+    }
+    if !out.is_empty() {
+        return Err(StoreError::Invalid(out));
     }
     Ok(())
 }

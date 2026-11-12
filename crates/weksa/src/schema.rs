@@ -4,6 +4,7 @@
 use crate::corpus::CorpusItem;
 use crate::entity::Entity;
 use crate::inventory::{InventoryEntry, InventoryRevision};
+use crate::ontology::OntologyEntry;
 use crate::packet::Packet;
 use crate::run::{Decision, RoundRecord, RunRecord};
 use crate::speaker::{Scene, Speaker};
@@ -25,6 +26,7 @@ pub fn published() -> Vec<(String, String)> {
         published_for::<Entity>(),
         published_for::<Speaker>(),
         published_for::<Scene>(),
+        published_for::<OntologyEntry>(),
         published_for::<RunRecord>(),
         published_for::<RoundRecord>(),
         published_for::<Decision>(),

@@ -12,6 +12,7 @@ pub mod form;
 pub mod inventory;
 pub mod lower;
 pub mod model;
+pub mod ontology;
 pub mod packet;
 pub mod phones;
 pub mod run;
@@ -32,6 +33,7 @@ pub use inventory::{
 };
 pub use lower::{EntityForms, LowerError, PhoneLine, TARGET_LANGUAGE, lower, phones, pronounce};
 pub use model::{AnswerFiles, ModelPort};
+pub use ontology::{Condition, Layer, Ontology, OntologyEntry, Test, select};
 pub use packet::{
     EncoderId, EntityId, Grade, NodeId, Packet, PacketId, PacketKind, SCHEMA_VERSION, Stance,
 };
@@ -41,7 +43,7 @@ pub use score::{Embedder, ItemScore, OllamaEmbedder, Scorer, chrf};
 pub use speaker::{Annotator, PairRelation, Party, Scene, Speaker};
 pub use split::{Split, SplitScheme};
 pub use store::{
-    AddOutcome, CorpusStore, EntityBound, EntityStore, InventoryStore, PacketStore,
+    AddOutcome, CorpusStore, EntityBound, EntityStore, InventoryStore, OntologyStore, PacketStore,
     SpeakerStateStore, StoreError, StoreRefusal,
 };
 pub use validate::{LoweringInput, Refusal, SceneRead, validate};
