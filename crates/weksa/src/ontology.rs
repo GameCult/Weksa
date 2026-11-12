@@ -49,6 +49,10 @@ pub enum Test {
     AtLeast(Grade),
     AtMost(Grade),
     Is(FeatValue),
+    /// Holds when the feature is absent or a grade at most `g`: a bound that
+    /// costs nothing where the feature is unrated. `AtMost` still fails on an
+    /// absent feature.
+    AtMostOrUnset(Grade),
 }
 
 /// One feature of one slot of the view, tested. `Stance`, `Discourse` and
@@ -63,11 +67,11 @@ pub struct Condition {
 impl Condition {
     fn holds(&self, features: &[FeatureValue]) -> bool {
         let Some(found) = features.iter().find(|f| f.feature == self.feature) else {
-            return false;
+            return matches!(self.test, Test::AtMostOrUnset(_));
         };
         match (&self.test, &found.value) {
             (Test::AtLeast(g), FeatValue::Grade(v)) => v >= g,
-            (Test::AtMost(g), FeatValue::Grade(v)) => v <= g,
+            (Test::AtMost(g) | Test::AtMostOrUnset(g), FeatValue::Grade(v)) => v <= g,
             (Test::Is(want), v) => want == v,
             _ => false,
         }
@@ -78,7 +82,7 @@ impl Condition {
         FeatureValue {
             feature: self.feature,
             value: match &self.test {
-                Test::AtLeast(g) | Test::AtMost(g) => FeatValue::Grade(*g),
+                Test::AtLeast(g) | Test::AtMost(g) | Test::AtMostOrUnset(g) => FeatValue::Grade(*g),
                 Test::Is(v) => v.clone(),
             },
         }
@@ -153,7 +157,7 @@ impl Ontology {
 /// The entries of exactly `language` whose every condition holds against the
 /// view's stance, discourse and scene-relation features (the scene's only when
 /// `with_scene` selected a relation), in `n` order. An absent feature meets no
-/// condition. Nothing else of the view is read.
+/// condition except `AtMostOrUnset`. Nothing else of the view is read.
 pub fn select<'a>(
     o: &'a Ontology,
     language: &str,
@@ -171,4 +175,31 @@ pub fn select<'a>(
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cond(test: Test) -> Condition {
+        Condition { slot: Slot::Discourse, feature: InvId::parse("feature:7").unwrap(), test }
+    }
+    fn has(v: FeatValue) -> Vec<FeatureValue> {
+        vec![FeatureValue { feature: InvId::parse("feature:7").unwrap(), value: v }]
+    }
+    fn grade(g: u16) -> Grade {
+        Grade::new(g).unwrap()
+    }
+
+    #[test]
+    fn at_most_or_unset_holds_when_absent_or_at_most_and_nothing_else() {
+        let c = cond(Test::AtMostOrUnset(grade(799)));
+        assert!(c.holds(&[]));
+        assert!(c.holds(&has(FeatValue::Grade(grade(799)))));
+        assert!(c.holds(&has(FeatValue::Grade(grade(0)))));
+        assert!(!c.holds(&has(FeatValue::Grade(grade(800)))));
+        assert!(!c.holds(&has(FeatValue::Flag(true))));
+        // AtMost keeps its meaning: an absent feature fails it.
+        assert!(!cond(Test::AtMost(grade(799))).holds(&[]));
+    }
 }
