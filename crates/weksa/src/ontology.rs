@@ -65,7 +65,9 @@ pub struct Condition {
 }
 
 impl Condition {
-    fn holds(&self, features: &[FeatureValue]) -> bool {
+    /// Whether this condition holds over a slot's feature values: the one
+    /// evaluator `select` and the corpus tests share.
+    pub fn holds(&self, features: &[FeatureValue]) -> bool {
         let Some(found) = features.iter().find(|f| f.feature == self.feature) else {
             return matches!(self.test, Test::AtMostOrUnset(_));
         };

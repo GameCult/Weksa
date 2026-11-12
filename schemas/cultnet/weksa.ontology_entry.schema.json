@@ -257,6 +257,19 @@
           "required": [
             "Is"
           ]
+        },
+        {
+          "description": "Holds when the feature is absent or a grade at most `g`: a bound that\ncosts nothing where the feature is unrated. `AtMost` still fails on an\nabsent feature.",
+          "type": "object",
+          "properties": {
+            "AtMostOrUnset": {
+              "$ref": "#/$defs/Grade"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "AtMostOrUnset"
+          ]
         }
       ]
     }

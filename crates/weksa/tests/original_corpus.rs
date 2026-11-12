@@ -987,20 +987,26 @@ fn ja_seed_pairs_never_co_select() {
             .unwrap_or_else(|| panic!("onto:ja-JP:{n} is absent"))
     };
     type Point = [Option<u16>; 5];
+    // The production evaluator over the slot's feature values: absent features
+    // are left out of the list, as a view leaves them out.
     let holds = |e: &weksa::OntologyEntry, point: &Point| {
+        use weksa::packet::{FeatValue, FeatureValue, Grade};
         e.when.iter().all(|c: &Condition| {
             assert!(matches!(c.slot, Slot::Stance | Slot::Discourse), "{}", e.key());
-            let at = feats
+            assert!(
+                matches!(c.test, Test::AtLeast(_) | Test::AtMost(_) | Test::AtMostOrUnset(_)),
+                "{}",
+                e.key()
+            );
+            let values: Vec<FeatureValue> = feats
                 .iter()
-                .position(|f| *f == c.feature)
-                .unwrap_or_else(|| panic!("{} reads a feature this test does not sweep", e.key()));
-            match (&c.test, point[at]) {
-                (Test::AtLeast(g), Some(v)) => v >= g.get(),
-                (Test::AtMost(g) | Test::AtMostOrUnset(g), Some(v)) => v <= g.get(),
-                (Test::AtMostOrUnset(_), None) => true,
-                (Test::AtLeast(_) | Test::AtMost(_), None) => false,
-                (other, _) => panic!("{} has {other:?}", e.key()),
-            }
+                .zip(point)
+                .filter_map(|(f, v)| {
+                    v.map(|v| FeatureValue { feature: *f, value: FeatValue::Grade(Grade::new(v).unwrap()) })
+                })
+                .collect();
+            assert!(feats.contains(&c.feature), "{} reads a feature this test does not sweep", e.key());
+            c.holds(&values)
         })
     };
     let grid = [None, Some(0u16), Some(300), Some(500), Some(599), Some(600), Some(700), Some(799), Some(800), Some(1000)];
@@ -1016,7 +1022,8 @@ fn ja_seed_pairs_never_co_select() {
     }
     // Reach: each entry fires at its witnesses and not just outside its core.
     let (n, s) = (None, Some);
-    let fires: [(u32, Point); 8] = [
+    let fires: [(u32, Point); 9] = [
+        (5, [s(600), n, n, n, n]),
         (5, [s(700), s(799), n, n, n]),
         (5, [s(700), n, n, n, n]),
         (7, [n, s(799), n, s(700), s(599)]),
@@ -1029,7 +1036,9 @@ fn ja_seed_pairs_never_co_select() {
     for (e, point) in fires {
         assert!(holds(ja(e), &point), "onto:ja-JP:{e} does not fire at {point:?}");
     }
-    let silent: [(u32, Point); 4] = [
+    let silent: [(u32, Point); 6] = [
+        (8, [n, n, s(599), n, s(700)]),
+        (8, [n, n, n, n, s(700)]),
         (5, [s(599), n, n, n, n]),
         (7, [n, n, n, s(599), n]),
         (7, [n, n, n, s(700), s(600)]),
