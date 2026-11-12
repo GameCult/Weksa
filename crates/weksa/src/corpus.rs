@@ -32,7 +32,7 @@ pub enum Source {
     /// A public-domain work, with everything a reader needs to check the claim:
     /// the edition's licence and the jurisdiction the public-domain status is
     /// asserted in, who translated it (the translation is the text's copyright,
-    /// not the original's) and when the edition appeared. A work missing any
+    /// not the original's) and when the work or translation first appeared. A work missing any
     /// is refused at admission.
     PublicDomain {
         work: String,
@@ -41,6 +41,10 @@ pub enum Source {
         licence: String,
         jurisdiction: String,
         translator: String,
+        /// The year the work, or for a translation this translation, first
+        /// appeared. It is not the year of the `edition_url` file's source
+        /// print: Project Gutenberg's text may be a later or modernised
+        /// edition, and the claim rests on the date of first appearance.
         edition_year: u16,
     },
     /// Labelled model output; never in the test split. The rule that it is
