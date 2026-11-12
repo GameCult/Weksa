@@ -240,14 +240,15 @@ fn the_first_six_original_items_are_unchanged() {
     }
 }
 
-/// Revision 5 of `data/original/inventory.cc` is the original bed's own
-/// lexicon: concepts and frames drafted by claude-sonnet-5-5 (Weksa Hands,
+/// Revisions 5 and 6 of `data/original/inventory.cc` are the original bed's own
+/// lexicon (rev 5, 233 adds; rev 6, five adds for try, someday, a little, as one
+/// pleases and the one who flies a kite, same generator): concepts and frames drafted by claude-sonnet-5-5 (Weksa Hands,
 /// model-drafted original-bed lexicon from Train and Validation passages) so an
 /// encoder can name baths, kites and persimmons. It is Validation-informed on
 /// purpose: numbers on this bed measure the lowering half (register, scene,
 /// ontology), never inventory generalization or convergence; scored runs use
 /// `data/interlingua`. The Dao De Jing inventory is its revision prefix.
-const ORIGINAL_REV5_ADDS: usize = 233;
+const ORIGINAL_OWN_ADDS: [usize; 2] = [233, 5];
 
 #[test]
 fn the_dao_inventory_is_a_prefix_of_the_original_inventory() {
@@ -261,8 +262,7 @@ fn the_dao_inventory_is_a_prefix_of_the_original_inventory() {
     };
     let (dao, own) = (open("daodejing"), open("original"));
     assert_eq!(dao.latest().unwrap().n, 4);
-    let latest = own.latest().unwrap();
-    assert_eq!((latest.n, latest.parent), (5, Some(4)));
+    assert_eq!(own.latest().unwrap().n, 6);
     for n in 1..=4 {
         let revision = |inv: &weksa::Inventory| inv.revisions().find(|r| r.n == n).cloned();
         assert_eq!(revision(&dao), revision(&own), "rev {n}");
@@ -272,17 +272,21 @@ fn the_dao_inventory_is_a_prefix_of_the_original_inventory() {
         assert_eq!(own.entry(&e.id), Some(e), "{}", e.gloss);
         glosses.insert(e.gloss.clone());
     }
-    assert_eq!(latest.changes.len(), ORIGINAL_REV5_ADDS);
-    for change in &latest.changes {
-        let Change::Add(id) = change else {
-            panic!("rev 5 retires {change:?}");
-        };
-        let e = own.entry(id).unwrap();
-        assert!(matches!(id.family(), Family::Concept | Family::Frame), "{id}");
-        assert_eq!(e.introduced_rev, 5, "{id}");
-        assert!(glosses.insert(e.gloss.clone()), "{} repeats a gloss", e.gloss);
+    for (n, expected) in [5u32, 6].into_iter().zip(ORIGINAL_OWN_ADDS) {
+        let rev = own.revisions().find(|r| r.n == n).unwrap();
+        assert_eq!(rev.parent, Some(n - 1), "rev {n}");
+        assert_eq!(rev.changes.len(), expected, "rev {n}");
+        for change in &rev.changes {
+            let Change::Add(id) = change else {
+                panic!("rev {n} retires {change:?}");
+            };
+            let e = own.entry(id).unwrap();
+            assert!(matches!(id.family(), Family::Concept | Family::Frame), "{id}");
+            assert_eq!(e.introduced_rev, n, "{id}");
+            assert!(glosses.insert(e.gloss.clone()), "{} repeats a gloss", e.gloss);
+        }
     }
-    assert_eq!(own.entries().count(), dao.entries().count() + ORIGINAL_REV5_ADDS);
+    assert_eq!(own.entries().count(), dao.entries().count() + ORIGINAL_OWN_ADDS.iter().sum::<usize>());
 }
 
 /// The committed seed ontology: every entry model-drafted, exactly the two
