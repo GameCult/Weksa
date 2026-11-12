@@ -252,6 +252,10 @@ pair a role id with a filler node (the inventory seeds `agent`, `patient`,
 aspect, polarity, modality and evidentiality are features with declared option
 sets, not fields.
 
+A predication holds each role once (V11). Coordinated fillers ("A and B") are
+one `group` referent filling the role, each member related to it by `member_of`,
+from the member to the group.
+
 ### `relations`
 
 Edges not owned by one predication. `relation` is a relation id (the inventory

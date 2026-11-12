@@ -475,6 +475,39 @@ mod tests {
     }
 
     #[test]
+    fn coordinated_fillers_admit_as_one_group_referent() {
+        use crate::store::InventoryStore;
+        use crate::validate::{Refusal, validate};
+        // Item original-ja:19 as measure-ja-2 recorded it: two patients, one role twice.
+        const REFUSED: &str = r#"{"confidence":720,"context":{"setting":null,"medium":null,"participants":["n1"],"audience":["n1"]},"discourse":{"speech_act":"speech_act:3","addressee":null,"addressee_consent":null,"features":[]},"referents":[{"id":"n1","kind":"referent_kind:1","concept":"concept:28","entity":"entity:keeper","features":[]},{"id":"n2","kind":"referent_kind:1","concept":"concept:31","entity":null,"features":[]},{"id":"n3","kind":"referent_kind:5","concept":"concept:123","entity":null,"features":[]},{"id":"n4","kind":"referent_kind:5","concept":"concept:123","entity":null,"features":[]}],"predications":[{"id":"n5","concept":"concept:26","frame":"frame:4","roles":[{"role":"role:1","filler":"n1"},{"role":"role:2","filler":"n3"},{"role":"role:2","filler":"n4"}],"features":[{"feature":"feature:1","value":{"Option":"positive"}},{"feature":"feature:2","value":{"Option":"present"}},{"feature":"feature:3","value":{"Option":"habitual"}}]},{"id":"n6","concept":"concept:196","frame":"frame:4","roles":[{"role":"role:1","filler":"n1"},{"role":"role:2","filler":"n5"}],"features":[{"feature":"feature:1","value":{"Option":"positive"}},{"feature":"feature:2","value":{"Option":"future"}},{"feature":"feature:4","value":{"Option":"desired"}}]}],"relations":[{"relation":"relation:11","from":"n2","to":"n3","features":[]},{"relation":"relation:11","from":"n1","to":"n4","features":[]}],"stance":{"features":[{"feature":"feature:18","value":{"Grade":600}},{"feature":"feature:11","value":{"Grade":450}},{"feature":"feature:17","value":{"Grade":250}}]}}"#;
+        const PRESCRIBED: &str = r#"{"confidence":720,"context":{"setting":null,"medium":null,"participants":["n1"],"audience":["n1"]},"discourse":{"speech_act":"speech_act:3","addressee":null,"addressee_consent":null,"features":[]},"referents":[{"id":"n1","kind":"referent_kind:1","concept":"concept:28","entity":"entity:keeper","features":[]},{"id":"n2","kind":"referent_kind:1","concept":"concept:31","entity":null,"features":[]},{"id":"n3","kind":"referent_kind:5","concept":"concept:123","entity":null,"features":[]},{"id":"n4","kind":"referent_kind:5","concept":"concept:123","entity":null,"features":[]},{"id":"n7","kind":"referent_kind:2","concept":"concept:123","entity":null,"features":[]}],"predications":[{"id":"n5","concept":"concept:26","frame":"frame:4","roles":[{"role":"role:1","filler":"n1"},{"role":"role:2","filler":"n7"}],"features":[{"feature":"feature:1","value":{"Option":"positive"}},{"feature":"feature:2","value":{"Option":"present"}},{"feature":"feature:3","value":{"Option":"habitual"}}]},{"id":"n6","concept":"concept:196","frame":"frame:4","roles":[{"role":"role:1","filler":"n1"},{"role":"role:2","filler":"n5"}],"features":[{"feature":"feature:1","value":{"Option":"positive"}},{"feature":"feature:2","value":{"Option":"future"}},{"feature":"feature:4","value":{"Option":"desired"}}]}],"relations":[{"relation":"relation:11","from":"n2","to":"n3","features":[]},{"relation":"relation:11","from":"n1","to":"n4","features":[]},{"relation":"relation:3","from":"n3","to":"n7","features":[]},{"relation":"relation:3","from":"n4","to":"n7","features":[]}],"stance":{"features":[{"feature":"feature:18","value":{"Grade":600}},{"feature":"feature:11","value":{"Grade":450}},{"feature":"feature:17","value":{"Grade":250}}]}}"#;
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/original/inventory.cc");
+        let inventory = InventoryStore::open(&path).unwrap().inventory().unwrap();
+        let item = CorpusItemId::parse("item:original-ja:19").unwrap();
+        let encoder = encoder_id("m", "d");
+        let packet = |answer: &str| {
+            PacketDraft::parse(answer)
+                .unwrap()
+                .into_packet(&item, 6, &encoder)
+        };
+        assert_eq!(
+            validate(&packet(REFUSED), &inventory),
+            Err(vec![Refusal::V11DuplicateRole {
+                role: "role:2".parse().unwrap(),
+                predication: "n5".parse().unwrap(),
+            }])
+        );
+        assert_eq!(validate(&packet(PRESCRIBED), &inventory), Ok(()));
+        // The prompt names the shape the packet above admits, by gloss.
+        let gloss = |id: &str| inventory.entry(&id.parse().unwrap()).unwrap().gloss.clone();
+        assert_eq!(gloss("referent_kind:2"), "group");
+        assert_eq!(gloss("relation:3"), "member_of");
+        let prompt = crate::context::ENCODE_INSTRUCTIONS;
+        assert!(prompt.contains("member_of") && prompt.contains("group"));
+    }
+
+    #[test]
     fn lowering_draft_parse() {
         let draft = LoweringDraft::parse("\n {\"text\":\"a\"} \n").unwrap();
         assert_eq!(draft.text, "a");
