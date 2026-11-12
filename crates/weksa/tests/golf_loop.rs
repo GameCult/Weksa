@@ -871,6 +871,16 @@ fn dao_over(edit: impl FnOnce(&Path, &Path)) -> Dao {
 
 /// `dao_over` with the run opened on `panel`.
 fn dao_panel(edit: impl FnOnce(&Path, &Path), panel: &[&str]) -> Dao {
+    dao_build(edit, panel, |_, _| {})
+}
+
+/// `dao_panel` with `seed_ontology` (given the ontology and inventory paths)
+/// run before the run pins the ontology.
+fn dao_build(
+    edit: impl FnOnce(&Path, &Path),
+    panel: &[&str],
+    seed_ontology: impl FnOnce(&Path, &Path),
+) -> Dao {
     let panel: Vec<String> = panel.iter().map(|t| t.to_string()).collect();
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/daodejing");
     let dir = tempfile::tempdir().unwrap();
@@ -885,6 +895,7 @@ fn dao_panel(edit: impl FnOnce(&Path, &Path), panel: &[&str]) -> Dao {
     );
     edit(&corpus, &entities);
     let ontology = common::ontology_in(dir.path());
+    seed_ontology(&ontology, &inventory);
     let root = dir.path().join("run");
     let run = RunStores::create(
         &root,
@@ -2650,6 +2661,7 @@ fn source_tripwires() {
         assert!(!signature.contains(banned), "Prompt::lower takes {banned}");
     }
     assert!(signature.contains("&LoweringInput") && signature.contains("&CorpusItemId"));
+    assert!(signature.contains("&Ontology"), "the whole ontology goes in; select chooses");
     assert_eq!(count("admit_revision("), 1, "one door call");
     assert_eq!(
         count("std::fs::copy"),
@@ -4582,4 +4594,187 @@ fn ablation_reads_each_language_apart() {
         shape,
         [("en-US", Train, 1), ("en-US", Validation, 2), ("ja-JP", Train, 1), ("ja-JP", Validation, 2)]
     );
+}
+
+/// An en-US Dao ontology: entry 1 for a stance with affection, entry 2 for one
+/// with almost no restraint (which no Dao packet has).
+fn dao_ontology(path: &Path, inventory: &Path) {
+    use weksa::packet::Grade;
+    use weksa::{Condition, Layer, OntologyEntry, OntologyStore, Slot, Test};
+    let inv = InventoryStore::open(inventory).unwrap();
+    let feature = |gloss: &str| {
+        inv.inventory()
+            .unwrap()
+            .entries()
+            .find(|e| e.gloss == gloss)
+            .unwrap()
+            .id
+    };
+    let entry = |n, gloss: &str, test, choice: &str| OntologyEntry {
+        language: "en-US".into(),
+        n,
+        inventory_rev: 1,
+        layer: Layer::Discourse,
+        when: vec![Condition {
+            slot: Slot::Stance,
+            feature: feature(gloss),
+            test,
+        }],
+        choice: choice.into(),
+        examples: vec![],
+        annotator: weksa::Annotator::Operator,
+    };
+    OntologyStore::open(path)
+        .unwrap()
+        .admit(
+            vec![
+                entry(1, "affection", Test::AtLeast(Grade::new(200).unwrap()), "warm"),
+                entry(2, "restraint", Test::AtMost(Grade::new(100).unwrap()), "blunt"),
+            ],
+            &inv_store(inventory),
+        )
+        .unwrap();
+}
+
+fn inv_store(path: &Path) -> InventoryStore {
+    InventoryStore::open(path).unwrap()
+}
+
+#[test]
+fn a_run_pins_its_ontology_and_refuses_drift() {
+    let dao = dao_build(|_, _| {}, &["en-US"], dao_ontology);
+    let r = dao.run.record();
+    assert_eq!(r.ontology, std::fs::canonicalize(&dao.ontology).unwrap().to_str().unwrap());
+    assert_eq!(r.ontology_digest, hex(&dao.ontology));
+    let root = dao.root.clone();
+    assert_eq!(RunStores::open(&root).unwrap().record(), dao.run.record());
+    // Another entry after the pin is another ontology.
+    let entry = weksa::OntologyStore::open(&dao.ontology).unwrap().all().unwrap().remove(0);
+    let mut store = weksa::OntologyStore::open(&dao.ontology).unwrap();
+    store
+        .admit(
+            vec![weksa::OntologyEntry { n: 3, ..entry }],
+            &inv_store(&dao.inventory),
+        )
+        .unwrap();
+    assert_eq!(
+        RunStores::open(&root).err(),
+        Some(RunError::Drift(DriftOf::Ontology))
+    );
+}
+
+#[test]
+fn create_refuses_an_entry_its_inventory_cannot_read() {
+    use weksa::packet::Grade;
+    use weksa::{Condition, Layer, OntologyEntry, OntologyStore, Slot, Test};
+    // The entry reads feature 18 at revision 1; the run's head inventory is
+    // another file where that feature is retired or absent, so the entry is
+    // admitted against a richer inventory and refused against the run's.
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/daodejing");
+    let make = |language: &str, dir: &Path| {
+        for (from, to) in [("corpus.cc", "c.cc"), ("inventory.cc", "i.cc"), ("entity.cc", "e.cc")] {
+            std::fs::copy(src.join(from), dir.join(to)).unwrap();
+        }
+        let ontology = dir.join("o.cc");
+        // A richer inventory the entry is admitted against: the Dao one plus a feature.
+        let rich = dir.join("rich.cc");
+        std::fs::copy(src.join("inventory.cc"), &rich).unwrap();
+        let mut store = InventoryStore::open(&rich).unwrap();
+        let inv = store.inventory().unwrap();
+        let head = inv.latest().unwrap().n;
+        let n = head + 1;
+        let next = std::num::NonZeroU32::new(
+            inv.entries().filter(|e| e.id.family() == weksa::Family::Feature).map(|e| e.id.n().get()).max().unwrap() + 1,
+        )
+        .unwrap();
+        let id = weksa::Family::Feature.id(next);
+        store
+            .admit_revision(
+                weksa::InventoryRevision {
+                    n,
+                    parent: Some(head),
+                    changes: vec![weksa::Change::Add(id)],
+                    frozen: false,
+                },
+                vec![weksa::InventoryEntry {
+                    id,
+                    gloss: "pride".into(),
+                    value_kind: Some(weksa::ValueKind::Grade),
+                    applies_to: vec![Slot::Stance],
+                    introduced_rev: n,
+                    retired_rev: None,
+                }],
+            )
+            .unwrap();
+        OntologyStore::open(&ontology)
+            .unwrap()
+            .admit(
+                vec![OntologyEntry {
+                    language: language.into(),
+                    n: 1,
+                    inventory_rev: n,
+                    layer: Layer::Lexicon,
+                    when: vec![Condition {
+                        slot: Slot::Stance,
+                        feature: id,
+                        test: Test::AtLeast(Grade::new(1).unwrap()),
+                    }],
+                    choice: "boast".into(),
+                    examples: vec![],
+                    annotator: weksa::Annotator::Operator,
+                }],
+                &store,
+            )
+            .unwrap();
+        ontology
+    };
+    let create = |dir: &Path, ontology: &Path| {
+        RunStores::create(
+            &dir.join("run"),
+            "x",
+            RunPaths {
+                corpus: &dir.join("c.cc"),
+                inventory: &dir.join("i.cc"),
+                entities: &dir.join("e.cc"),
+                ontology,
+            },
+            "fake-model",
+            "bag",
+            weksa::run::LowererReach::ToolLessRelay,
+            ModelFamily::Unrecorded,
+            &["en-US".to_string()],
+        )
+    };
+    let panel_dir = tempfile::tempdir().unwrap();
+    let o = make("en-US", panel_dir.path());
+    assert_eq!(create(panel_dir.path(), &o).err(), Some(RunError::Ontology));
+    assert!(!panel_dir.path().join("run/run.cc").exists());
+    assert!(!panel_dir.path().join("run/inventory.cc").exists());
+    // The same entry under a language outside the panel does not refuse.
+    let other_dir = tempfile::tempdir().unwrap();
+    let o = make("ja-JP", other_dir.path());
+    assert!(create(other_dir.path(), &o).is_ok());
+}
+
+#[test]
+fn round_lowering_prompts_carry_selected_entries() {
+    let mut dao = dao_build(|_, _| {}, &["en-US"], dao_ontology);
+    let mut model = fake(&good_answers());
+    let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    let mut lowerings = 0;
+    for ((_, text), call) in model.seen.iter().zip(r.calls()) {
+        if !text.starts_with(LOWER_INSTRUCTIONS) {
+            continue;
+        }
+        lowerings += 1;
+        let item = call.items[0].as_str();
+        // Only the third Dao packet carries affection.
+        if item == "item:daodejing:3" {
+            assert!(text.contains("\nonto:en-US:1 [discourse] warm\n"), "{text}");
+        } else {
+            assert!(text.contains("\n\nontology: none\n\n"), "{item}: {text}");
+        }
+        assert!(!text.contains("onto:en-US:2") && !text.contains("blunt"));
+    }
+    assert_eq!(lowerings, 3);
 }

@@ -681,4 +681,28 @@ mod tests {
         }
         assert!(EditDraft::parse("3").is_err() && EditDraft::parse("\"x\"").is_err());
     }
+
+    #[test]
+    fn ontology_draft_refuses_unknown_fields_and_numbers_from_first_n() {
+        for bad in [
+            r#"{"entries": [], "extra": 1}"#,
+            r#"{"entries": [{"layer": "Lexicon", "choice": "c", "language": "ja-JP"}]}"#,
+            "```json\n{\"entries\": []}\n```",
+            "[]",
+        ] {
+            assert!(OntologyDraft::parse(bad).is_err(), "{bad}");
+        }
+        let draft = OntologyDraft::parse(
+            r#"{"entries": [{"layer": "Grammar", "choice": "a"}, {"layer": "Lexicon", "choice": "b", "examples": ["x"]}]}"#,
+        )
+        .unwrap();
+        let by = Annotator::Operator;
+        let entries = draft.into_entries("ja-JP", 3, 5, &by);
+        assert_eq!(
+            entries.iter().map(|e| (e.language.as_str(), e.n, e.inventory_rev)).collect::<Vec<_>>(),
+            [("ja-JP", 5, 3), ("ja-JP", 6, 3)]
+        );
+        assert!(entries.iter().all(|e| e.annotator == by));
+        assert_eq!(entries[1].examples, ["x"]);
+    }
 }

@@ -1767,3 +1767,47 @@ fn panel_and_language_are_required() {
     assert!(!o.status.success());
     assert!(out(&o).contains("--language"), "{}", out(&o));
 }
+
+#[test]
+fn ontology_admit_and_dump() {
+    let d = tempfile::tempdir().unwrap();
+    dao_stores(d.path());
+    let draft = |name: &str, body: &str| {
+        std::fs::write(d.path().join(name), body).unwrap();
+    };
+    draft(
+        "good.json",
+        r#"{"entries": [{"layer": "Discourse", "when": [{"slot": "Stance", "feature": "feature:18", "test": {"AtLeast": 600}}], "choice": "SOFTCHOICE", "examples": ["EXAMPLETEXT"]}, {"layer": "Lexicon", "choice": "plain"}]}"#,
+    );
+    let admit = |file: &str| {
+        weksa(
+            d.path(),
+            &[
+                "ontology", "admit", file, "--language", "ja-JP", "--inventory-rev", "1",
+                "--model-family", "anthropic", "--generator", "a drafting model",
+            ],
+        )
+    };
+    let o = admit("good.json");
+    assert!(o.status.success(), "{}", out(&o));
+    let o = weksa(d.path(), &["ontology", "dump"]);
+    let text = out(&o);
+    assert_eq!(text.matches("onto:ja-JP:").count(), 2, "{text}");
+    for want in ["onto:ja-JP:1", "onto:ja-JP:2", "Anthropic", "a drafting model", "SOFTCHOICE", "EXAMPLETEXT", "Stance"] {
+        assert!(text.contains(want), "{want}: {text}");
+    }
+    // A second draft numbers on from the language's latest.
+    let o = admit("good.json");
+    assert!(o.status.success(), "{}", out(&o));
+    assert!(out(&weksa(d.path(), &["ontology", "dump"])).contains("onto:ja-JP:4"));
+    // A refused draft writes nothing and echoes no choice text.
+    draft(
+        "bad.json",
+        r#"{"entries": [{"layer": "Discourse", "when": [{"slot": "Stance", "feature": "feature:9999", "test": {"AtLeast": 600}}], "choice": "LEAKYCHOICE"}]}"#,
+    );
+    let before = out(&weksa(d.path(), &["ontology", "dump"]));
+    let o = admit("bad.json");
+    assert!(!o.status.success());
+    assert!(!out(&o).contains("LEAKYCHOICE"), "{}", out(&o));
+    assert_eq!(out(&weksa(d.path(), &["ontology", "dump"])), before);
+}

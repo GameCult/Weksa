@@ -1628,3 +1628,169 @@ fn a_public_domain_source_without_an_edition_year_is_refused() {
         .add(item_in(key, "line", "scene-1", source(1891)), &ents(&d))
         .unwrap();
 }
+
+mod ontology {
+    use super::*;
+    use weksa::packet::{FeatValue, Grade};
+    use weksa::speaker::Annotator;
+    use weksa::{Condition, Layer, OntologyEntry, OntologyStore, Test};
+
+    fn feature(gloss: &str) -> weksa::InvId {
+        seed().1.into_iter().find(|e| e.gloss == gloss).unwrap().id
+    }
+
+    fn when(slot: Slot, gloss: &str, test: Test) -> Condition {
+        Condition {
+            slot,
+            feature: feature(gloss),
+            test,
+        }
+    }
+
+    fn entry(language: &str, n: u32) -> OntologyEntry {
+        OntologyEntry {
+            language: language.into(),
+            n,
+            inventory_rev: 1,
+            layer: Layer::Lexicon,
+            when: vec![when(
+                Slot::Stance,
+                "restraint",
+                Test::AtLeast(Grade::new(600).unwrap()),
+            )],
+            choice: "prefer the humble form".into(),
+            examples: vec!["example one".into()],
+            annotator: Annotator::Operator,
+        }
+    }
+
+    fn store(d: &TempDir) -> OntologyStore {
+        OntologyStore::open(&d.path().join("o.cc")).unwrap()
+    }
+
+    fn refused(r: Result<AddOutcome, StoreError>) -> StoreRefusal {
+        refusal(r)
+    }
+
+    #[test]
+    fn ontology_admit_refuses_each_rule() {
+        let d = dir();
+        let w = world();
+        let mut s = store(&d);
+        let long = |n| "x".repeat(n);
+        let mut cases: Vec<(&str, Vec<OntologyEntry>)> = Vec::new();
+        cases.push(("non-tag language", vec![entry("not a tag", 1)]));
+        cases.push(("n not latest+1", vec![entry("ja-JP", 2)]));
+        cases.push((
+            "65th entry",
+            (1..=65).map(|n| entry("ja-JP", n)).collect(),
+        ));
+        for (why, choice) in [("empty choice", String::new()), ("201-byte choice", long(201))] {
+            cases.push((why, vec![OntologyEntry { choice, ..entry("ja-JP", 1) }]));
+        }
+        cases.push((
+            "line break in an example",
+            vec![OntologyEntry { examples: vec!["a\nb".into()], ..entry("ja-JP", 1) }],
+        ));
+        cases.push((
+            "121-byte example",
+            vec![OntologyEntry { examples: vec![long(121)], ..entry("ja-JP", 1) }],
+        ));
+        cases.push((
+            "four examples",
+            vec![OntologyEntry { examples: vec!["a".into(); 4], ..entry("ja-JP", 1) }],
+        ));
+        let restraint = || when(Slot::Stance, "restraint", Test::AtLeast(Grade::new(1).unwrap()));
+        cases.push((
+            "five conditions",
+            vec![OntologyEntry { when: (0..5).map(|_| restraint()).collect(), ..entry("ja-JP", 1) }],
+        ));
+        for slot in [Slot::Speaker, Slot::Scene, Slot::Predication] {
+            cases.push((
+                "slot not Stance or Discourse",
+                vec![OntologyEntry {
+                    when: vec![when(slot, "restraint", Test::AtLeast(Grade::new(1).unwrap()))],
+                    ..entry("ja-JP", 1)
+                }],
+            ));
+        }
+        cases.push((
+            "AtLeast on an option feature",
+            vec![OntologyEntry {
+                when: vec![when(Slot::Discourse, "irony", Test::AtLeast(Grade::new(1).unwrap()))],
+                ..entry("ja-JP", 1)
+            }],
+        ));
+        cases.push((
+            "Is with a grade",
+            vec![OntologyEntry {
+                when: vec![when(Slot::Stance, "restraint", Test::Is(FeatValue::Grade(Grade::new(1).unwrap())))],
+                ..entry("ja-JP", 1)
+            }],
+        ));
+        cases.push((
+            "unknown feature",
+            vec![OntologyEntry {
+                when: vec![Condition {
+                    slot: Slot::Stance,
+                    feature: "feature:9999".parse().unwrap(),
+                    test: Test::AtLeast(Grade::new(1).unwrap()),
+                }],
+                ..entry("ja-JP", 1)
+            }],
+        ));
+        cases.push((
+            "unknown inventory revision",
+            vec![OntologyEntry { inventory_rev: 99, ..entry("ja-JP", 1) }],
+        ));
+        cases.push((
+            "model generator that is not an attestation",
+            vec![OntologyEntry {
+                annotator: Annotator::Model {
+                    family: ModelFamily::Anthropic,
+                    generator: "--".into(),
+                },
+                ..entry("ja-JP", 1)
+            }],
+        ));
+        for (why, batch) in cases {
+            assert!(
+                s.admit(batch, &w.inventory).is_err(),
+                "{why} must be refused"
+            );
+            assert!(s.all().unwrap().is_empty(), "{why} wrote something");
+        }
+        // The refusal of a bad choice names the key and no text.
+        let secret = OntologyEntry { choice: "SECRETCHOICE\n".into(), ..entry("ja-JP", 1) };
+        let shown = refused(s.admit(vec![secret], &w.inventory)).to_string();
+        assert!(!shown.contains("SECRETCHOICE"), "{shown}");
+    }
+
+    #[test]
+    fn ontology_admit_is_all_or_nothing() {
+        let d = dir();
+        let w = world();
+        let mut s = store(&d);
+        let bad = OntologyEntry { choice: String::new(), ..entry("ja-JP", 3) };
+        assert!(s.admit(vec![entry("ja-JP", 1), entry("ja-JP", 2), bad], &w.inventory).is_err());
+        assert!(s.all().unwrap().is_empty());
+
+        let batch = vec![entry("ja-JP", 1), entry("en-US", 1), entry("ja-JP", 2), entry("en-US", 2)];
+        assert_eq!(s.admit(batch.clone(), &w.inventory).unwrap(), AddOutcome::Added);
+        assert_eq!(s.all().unwrap().len(), 4);
+        // An identical replay, from a reopened store, changes nothing.
+        let mut again = store(&d);
+        assert_eq!(again.admit(batch, &w.inventory).unwrap(), AddOutcome::Unchanged);
+        // Each language numbers from its own latest.
+        assert_eq!(
+            again
+                .admit(vec![entry("ja-JP", 3), entry("en-US", 3)], &w.inventory)
+                .unwrap(),
+            AddOutcome::Added
+        );
+        // An entry never changes in place.
+        let changed = OntologyEntry { choice: "something else".into(), ..entry("ja-JP", 1) };
+        assert!(again.admit(vec![changed], &w.inventory).is_err());
+        assert_eq!(again.all().unwrap().len(), 6);
+    }
+}

@@ -537,9 +537,10 @@ mod lowering {
     use weksa::daodejing::packets;
     use weksa::entity::{Entity, EntityOrigin, LanguageForms};
     use weksa::packet::{EntityId, Packet, proof_packet};
+    use weksa::packet::Grade;
     use weksa::{
-        CorpusItemId, CorpusStore, EntityForms, EntityStore, Inventory, InventoryStore,
-        LowerError, LoweringInput, PacketStore,
+        Annotator, Condition, CorpusItemId, CorpusStore, EntityForms, EntityStore, Inventory,
+        InventoryStore, Layer, LowerError, LoweringInput, OntologyEntry, OntologyStore, PacketStore, Test, select,
     };
 
     fn data(sub: &str) -> PathBuf {
@@ -745,6 +746,149 @@ mod lowering {
         ] {
             assert_eq!(Prompt::lower(&view, &item, "en-US", &inv, &held, &weksa::Ontology::empty()).err(), Some(want));
         }
+    }
+
+    fn feature(inv: &Inventory, gloss: &str) -> weksa::InvId {
+        inv.entries().find(|e| e.gloss == gloss).unwrap().id
+    }
+
+    fn entry(language: &str, n: u32, when: Vec<Condition>, choice: &str) -> OntologyEntry {
+        OntologyEntry {
+            language: language.into(),
+            n,
+            inventory_rev: 1,
+            layer: Layer::Discourse,
+            when,
+            choice: choice.into(),
+            examples: vec![],
+            annotator: Annotator::Operator,
+        }
+    }
+
+    /// The ontology the store holds after admitting `entries` as one batch.
+    fn ontology_of(cast: &InventoryStore, entries: Vec<OntologyEntry>) -> weksa::Ontology {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = OntologyStore::open(&dir.path().join("o.cc")).unwrap();
+        store.admit(entries, cast).unwrap();
+        store.ontology().unwrap()
+    }
+
+    fn at_least(inv: &Inventory, gloss: &str, g: u16) -> Condition {
+        Condition {
+            slot: weksa::Slot::Stance,
+            feature: feature(inv, gloss),
+            test: Test::AtLeast(Grade::new(g).unwrap()),
+        }
+    }
+
+    /// The proof packet's view with the given stance restraint and discourse irony.
+    fn view_of(
+        restraint: Option<u16>,
+        irony: Option<bool>,
+        cast: &InventoryStore,
+        entities: &EntityStore,
+    ) -> LoweringInput {
+        use weksa::packet::{FeatValue, FeatureValue};
+        let inv = cast.inventory().unwrap();
+        let mut packet = proof_packet();
+        packet.stance.features = restraint
+            .map(|v| FeatureValue {
+                feature: feature(&inv, "restraint"),
+                value: FeatValue::Grade(Grade::new(v).unwrap()),
+            })
+            .into_iter()
+            .collect();
+        packet.discourse.features = irony
+            .map(|v| FeatureValue {
+                feature: feature(&inv, "irony"),
+                value: FeatValue::Flag(v),
+            })
+            .into_iter()
+            .collect();
+        admitted(packet, cast, "corpus/corpus.cc", entities)
+    }
+
+    #[test]
+    fn select_reads_stance_and_discourse_of_its_language() {
+        use weksa::packet::FeatValue;
+        let cast = InventoryStore::open(&data("interlingua/inventory.cc")).unwrap();
+        let entities = EntityStore::open(&data("entity/entity.cc")).unwrap();
+        let inv = cast.inventory().unwrap();
+        let ontology = ontology_of(&cast, vec![
+            entry("ja-JP", 1, vec![at_least(&inv, "restraint", 600)], "high"),
+            entry(
+                "ja-JP",
+                2,
+                vec![Condition {
+                    slot: weksa::Slot::Stance,
+                    feature: feature(&inv, "restraint"),
+                    test: Test::AtMost(Grade::new(300).unwrap()),
+                }],
+                "low",
+            ),
+            entry(
+                "ja-JP",
+                3,
+                vec![Condition {
+                    slot: weksa::Slot::Discourse,
+                    feature: feature(&inv, "irony"),
+                    test: Test::Is(FeatValue::Flag(true)),
+                }],
+                "ironic",
+            ),
+            entry("ja-JP", 4, vec![], "always"),
+            entry("en-US", 1, vec![], "other language"),
+        ]);
+        let keys = |view: &LoweringInput, language: &str| -> Vec<String> {
+            select(&ontology, language, view).iter().map(|e| e.key()).collect()
+        };
+        let both = view_of(Some(700), Some(true), &cast, &entities);
+        assert_eq!(keys(&both, "ja-JP"), ["onto:ja-JP:1", "onto:ja-JP:3", "onto:ja-JP:4"]);
+        assert_eq!(keys(&both, "en-US"), ["onto:en-US:1"]);
+        let low = view_of(Some(200), Some(false), &cast, &entities);
+        assert_eq!(keys(&low, "ja-JP"), ["onto:ja-JP:2", "onto:ja-JP:4"]);
+        // An absent feature meets no condition, however lax.
+        let bare = view_of(None, None, &cast, &entities);
+        assert_eq!(keys(&bare, "ja-JP"), ["onto:ja-JP:4"]);
+    }
+
+    #[test]
+    fn lowering_prompt_prints_only_selected_entries() {
+        let cast = InventoryStore::open(&data("interlingua/inventory.cc")).unwrap();
+        let cast_entities = EntityStore::open(&data("entity/entity.cc")).unwrap();
+        let inv = cast.inventory().unwrap();
+        let mut hit = entry("ja-JP", 1, vec![at_least(&inv, "restraint", 600)], "HITCHOICE");
+        hit.examples = vec!["HITEXAMPLE".into()];
+        let ontology = ontology_of(&cast, vec![
+            hit,
+            entry("ja-JP", 2, vec![at_least(&inv, "restraint", 900)], "MISSCHOICE"),
+            entry("en-US", 1, vec![], "ENGLISHCHOICE"),
+        ]);
+        let held = Held(vec![nibu(&[("ja-JP", &["ニブ"]), ("en-US", &["Nibu"])])]);
+        let item = CorpusItemId::parse("item:nibu:1").unwrap();
+        let view = view_of(Some(700), None, &cast, &cast_entities);
+        let lowered = |view: &LoweringInput, o: &weksa::Ontology| {
+            Prompt::lower(view, &item, "ja-JP", &inv, &held, o).unwrap()
+        };
+        let prompt = lowered(&view, &ontology);
+        let text = prompt.text();
+        assert!(text.contains("\n\nontology:\nonto:ja-JP:1 [discourse] HITCHOICE | e.g. HITEXAMPLE\n\n"), "{text}");
+        for absent in ["MISSCHOICE", "ENGLISHCHOICE", "onto:ja-JP:2", "onto:en-US:1"] {
+            assert!(!text.contains(absent), "{absent}");
+        }
+        // The same view with no entries: the section reads none.
+        let none = lowered(&view, &weksa::Ontology::empty());
+        assert!(none.text().contains("\n\nontology: none\n\n"));
+        // Entries move the prompt and nothing else of the view does.
+        assert_ne!(prompt.digest(), none.digest());
+        // The group is still private; the speaker's entity appears only because
+        // the packet cites it on a referent.
+        let held_item = CorpusStore::open(&data("corpus/corpus.cc"))
+            .unwrap()
+            .get(item.as_str())
+            .unwrap()
+            .unwrap();
+        assert!(!text.contains(held_item.group.as_str()));
     }
 }
 
