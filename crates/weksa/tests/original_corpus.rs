@@ -977,3 +977,43 @@ fn every_original_passage_rests_on_a_live_inventory_concept() {
         assert!(hit.len() >= 12, "{lang}: {} distinct concepts", hit.len());
     }
 }
+
+/// The committed scenes: one per live Train or Validation group of
+/// `data/original`, none for any other group, every one model-annotated and
+/// never Test evidence (a Test group gets no scene and reads `NoScene`).
+#[test]
+fn committed_scenes_cover_original_groups() {
+    use std::collections::BTreeSet;
+    use weksa::speaker::Annotator;
+    use weksa::{CorpusStore, Split, SplitScheme, SpeakerStateStore};
+    let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/original");
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path().join("speaker-state.cc");
+    std::fs::copy(data.join("speaker-state.cc"), &state).unwrap();
+    let scenes = SpeakerStateStore::open(&state).unwrap().all_scenes().unwrap();
+    let live: BTreeSet<String> = CorpusStore::open(&data.join("corpus.cc"))
+        .unwrap()
+        .all()
+        .unwrap()
+        .into_iter()
+        .filter(|i| matches!(SplitScheme::V1.live(i), Some(Split::Train | Split::Validation)))
+        .map(|i| i.group)
+        .collect();
+    assert_eq!(live.len(), 56);
+    let held: BTreeSet<String> = scenes.iter().map(|s| s.group.clone()).collect();
+    assert_eq!(held, live, "one scene per live Train or Validation group, none other");
+    assert_eq!(scenes.len(), 56, "each group holds revision 1 only");
+    for s in &scenes {
+        match &s.annotator {
+            Annotator::Model { family, generator } => {
+                assert_eq!(*family, ModelFamily::Anthropic, "{}", s.group);
+                assert_eq!(
+                    generator, "claude-sonnet-5-5 (Weksa Hands, model-annotated original scenes)",
+                    "{}",
+                    s.group
+                );
+            }
+            other => panic!("{} is {other:?}", s.group),
+        }
+    }
+}
