@@ -1,7 +1,11 @@
-//! The original corpus (`data/original`): 28 passages written for the
-//! non-memorised golf-loop target (Train and Validation, all model-written)
-//! and 8 public-domain Test items, each with its full provenance. Test is only
-//! read at a checkpoint: no round or recall prompt over this store holds it.
+//! The original corpus (`data/original`), in en-US and ja-JP: per language, 28
+//! passages written for the non-memorised golf-loop target (Train and
+//! Validation, all model-written) and 8 public-domain Test sentences, each with
+//! its full provenance. Test is only read at a checkpoint: no round or recall
+//! prompt over this store holds it. The ja-JP passages are written in Japanese,
+//! not translated; the ja-JP Test sentences are Aozora Bunko excerpts.
+
+const PANEL: [&str; 2] = ["en-US", "ja-JP"];
 
 mod common;
 
@@ -28,15 +32,21 @@ fn stores() -> (CorpusStore, EntityStore) {
 fn every_original_item_records_its_author_and_the_public_domain_ones_their_provenance() {
     let (corpus, entities) = stores();
     let items = corpus.all().unwrap();
-    assert_eq!(items.len(), 36);
-    let (mut model, mut public) = (0, 0);
+    assert_eq!(items.len(), 72);
+    let (mut model, mut public) = ([0; 2], [0; 2]);
     for item in &items {
+        let lang = PANEL.iter().position(|l| *l == item.language).unwrap();
         match &item.source {
             Source::ModelWritten {
                 family, generator, ..
             } => {
-                model += 1;
-                assert!(item.id.starts_with("item:original:"), "{}", item.id);
+                model[lang] += 1;
+                assert!(
+                    item.id
+                        .starts_with(["item:original:", "item:original-ja:"][lang]),
+                    "{}",
+                    item.id
+                );
                 assert_eq!(*family, ModelFamily::Anthropic, "{}", item.id);
                 let generator = generator.as_deref().unwrap_or_default();
                 assert!(generator.contains("claude-sonnet-5-5"), "{}", item.id);
@@ -50,22 +60,42 @@ fn every_original_item_records_its_author_and_the_public_domain_ones_their_prove
                 translator,
                 edition_year,
             } => {
-                public += 1;
-                assert!(item.id.starts_with("item:holdout:"), "{}", item.id);
-                // The edition is the page the text was taken from.
+                public[lang] += 1;
                 assert!(
-                    edition_url.starts_with("https://www.gutenberg.org/cache/epub/")
-                        && edition_url.ends_with(".txt"),
+                    item.id
+                        .starts_with(["item:holdout:", "item:holdout-ja:"][lang]),
                     "{}",
                     item.id
                 );
                 assert!(licence.contains("Public domain"), "{}", item.id);
-                assert!(
-                    licence.contains("trademark or licence matter"),
-                    "{}",
-                    item.id
-                );
                 assert!(jurisdiction.starts_with("United States"), "{}", item.id);
+                if lang == 0 {
+                    // The edition is the page the text was taken from.
+                    assert!(
+                        edition_url.starts_with("https://www.gutenberg.org/cache/epub/")
+                            && edition_url.ends_with(".txt"),
+                        "{}",
+                        item.id
+                    );
+                    assert!(
+                        licence.contains("trademark or licence matter"),
+                        "{}",
+                        item.id
+                    );
+                } else {
+                    // The card file the text was taken from, its sources kept attached.
+                    assert!(
+                        edition_url.starts_with("https://www.aozora.gr.jp/cards/")
+                            && edition_url.ends_with(".html"),
+                        "{}",
+                        item.id
+                    );
+                    for kept in ["Aozora Bunko", "底本", "入力", "校正"] {
+                        assert!(licence.contains(kept), "{} lacks {kept}", item.id);
+                    }
+                    assert!(jurisdiction.contains("Japan"), "{}", item.id);
+                    assert!(translator.starts_with("none"), "{}", item.id);
+                }
                 assert!(
                     [work, author, translator]
                         .iter()
@@ -73,8 +103,10 @@ fn every_original_item_records_its_author_and_the_public_domain_ones_their_prove
                     "{}",
                     item.id
                 );
-                // Every edition and every author is out of copyright by date.
-                assert!((1600..=1900).contains(edition_year), "{}", item.id);
+                // Every edition and every author is out of copyright by date;
+                // a ja-JP edition year is the work's first appearance.
+                let years = [1600..=1900, 1868..=1930][lang].clone();
+                assert!(years.contains(edition_year), "{}", item.id);
             }
             other => panic!("{}: not model-written or public-domain: {other:?}", item.id),
         }
@@ -84,7 +116,7 @@ fn every_original_item_records_its_author_and_the_public_domain_ones_their_prove
             item.id
         );
     }
-    assert_eq!((model, public), (28, 8));
+    assert_eq!((model, public), ([28, 28], [8, 8]));
 }
 
 #[test]
@@ -99,14 +131,30 @@ fn the_original_items_spread_over_train_and_validation_and_test_is_public_domain
             .filter(|i| SplitScheme::V1.live(i) == Some(s))
             .collect::<Vec<_>>()
     };
-    assert_eq!(in_split(Split::Train).len(), 14);
-    assert_eq!(in_split(Split::Validation).len(), 14);
+    for lang in PANEL {
+        let of = |s| {
+            in_split(s)
+                .into_iter()
+                .filter(|i| i.language == lang)
+                .count()
+        };
+        assert_eq!(
+            (of(Split::Train), of(Split::Validation), of(Split::Test)),
+            (14, 14, 8),
+            "{lang}"
+        );
+    }
     let test = in_split(Split::Test);
-    assert_eq!(test.len(), 8);
+    assert_eq!(test.len(), 16);
     assert!(
         test.iter()
             .all(|i| matches!(i.source, Source::PublicDomain { .. }))
     );
+    // No model-written passage was admitted into a Test group at all.
+    assert!(items.iter().all(|i| {
+        !matches!(i.source, Source::ModelWritten { .. })
+            || SplitScheme::V1.of_bucket(SplitScheme::V1.bucket(&i.group)) != Split::Test
+    }));
     // Train and Validation hold no public-domain item.
     for s in [Split::Train, Split::Validation] {
         assert!(
@@ -238,27 +286,27 @@ fn the_recall_probe_covers_every_live_original_item_and_names_no_work() {
         "bag",
         weksa::run::LowererReach::BriefedSubagent,
         ModelFamily::Unrecorded,
-        &["en-US".to_string()],
+        &PANEL.map(String::from),
     )
     .unwrap();
     let mut model = Unrelated(vec![]);
     let RecallOutcome::Read(reading) = run.recall(&mut model).unwrap() else {
         panic!("answered");
     };
-    let r = reading.languages[0].clone();
-    assert_eq!((r.n, r.answered), (28, 28));
-    assert!(r.chrf < 25.0, "{}", r.chrf);
-    assert_eq!(model.0.len(), 28);
+    assert_eq!(reading.languages.len(), 2);
+    for r in &reading.languages {
+        assert_eq!((r.n, r.answered), (28, 28), "{}", r.language);
+        assert!(r.chrf < 25.0, "{} {}", r.language, r.chrf);
+    }
+    assert_eq!(model.0.len(), 56);
     // No item outside Train and Validation is shown to the model.
     let all = CorpusStore::open(&c).unwrap().all().unwrap();
     for item in &all {
         let live = SplitScheme::V1.live(item);
         // A recall prompt shows the first half of the item, cut at a word boundary.
-        let mut cut = item.text.len() / 4;
-        while !item.text.is_char_boundary(cut) {
-            cut -= 1;
-        }
-        let opening = item.text[..cut].trim_end().to_string();
+        let quarter = item.text.chars().count() / 4;
+        let opening: String = item.text.chars().take(quarter).collect();
+        let opening = opening.trim_end().to_string();
         let shown = model.0.iter().any(|t| t.contains(&opening));
         assert_eq!(
             shown,
@@ -314,7 +362,7 @@ fn original_round(family: ModelFamily) -> (weksa::run::RunStores, weksa::run::Ro
         "bag",
         LowererReach::ToolLessRelay,
         family,
-        &["en-US".to_string()],
+        &PANEL.map(String::from),
     )
     .unwrap();
     let scorer = weksa::score::Scorer::new(Bag);
@@ -328,14 +376,14 @@ fn original_round(family: ModelFamily) -> (weksa::run::RunStores, weksa::run::Ro
 fn own_family_counts_and_labels() {
     // The original corpus is Anthropic-written items, all offered.
     let (run, r) = original_round(ModelFamily::Anthropic);
-    assert_eq!(r.own_family(), 28);
+    assert_eq!(r.own_family(), 56);
     assert_eq!(
         r.parse_reasons().iter().map(|c| c.count).sum::<u32>(),
-        28,
+        56,
         "every item was refused at Parse and says why"
     );
     let line = run.round_line(&r);
-    assert!(line.contains(" own-family 28"), "{line}");
+    assert!(line.contains(" own-family 56"), "{line}");
 
     // A different answerer family, or none recorded, labels nothing.
     for family in [ModelFamily::OpenAi, ModelFamily::Unrecorded] {
@@ -471,7 +519,7 @@ fn no_test_item_is_offered_to_a_round_or_recall_or_recorded() {
         "bag",
         LowererReach::ToolLessRelay,
         ModelFamily::Unrecorded,
-        &["en-US".to_string()],
+        &PANEL.map(String::from),
     )
     .unwrap();
     let items = CorpusStore::open(&p("corpus.cc")).unwrap().all().unwrap();
@@ -479,28 +527,38 @@ fn no_test_item_is_offered_to_a_round_or_recall_or_recorded() {
         .iter()
         .filter(|i| SplitScheme::V1.live(i) == Some(Split::Test))
         .collect();
-    assert_eq!(held.len(), 8);
-    // A Test item's text, or any run of five of its words, in a prompt.
+    assert_eq!(held.len(), 16);
+    // A Test item's text, or any run of five of its words (twelve characters
+    // of a text written without spaces), in a prompt.
     let leaks = |prompts: &[String], item: &weksa::corpus::CorpusItem| {
         let w: Vec<&str> = item.text.split_whitespace().collect();
-        prompts
-            .iter()
-            .any(|t| t.contains(&item.text) || w.windows(5).any(|k| t.contains(&k.join(" "))))
+        let c: Vec<char> = item.text.chars().collect();
+        prompts.iter().any(|t| {
+            t.contains(&item.text)
+                || w.windows(5).any(|k| t.contains(&k.join(" ")))
+                || (w.len() == 1
+                    && c.windows(12)
+                        .any(|k| t.contains(&k.iter().collect::<String>())))
+        })
     };
     let scorer = weksa::score::Scorer::new(Bag);
     let mut model = Record(vec![]);
     let RoundOutcome::Recorded(r) = round(&mut run, &mut model, &scorer).unwrap() else {
         panic!("answered");
     };
-    // The check bites: the round did show live items, 28 of them.
-    assert!(model.0.len() >= 28, "{}", model.0.len());
-    assert!(
-        items
-            .iter()
-            .filter(|i| matches!(SplitScheme::V1.live(i), Some(Split::Train)))
-            .any(|i| leaks(&model.0, i)),
-        "the probe cannot see a shown Train item"
-    );
+    // The check bites: the round did show live items, 56 of them, and the
+    // probe sees a shown Train item of each language.
+    assert!(model.0.len() >= 56, "{}", model.0.len());
+    for lang in PANEL {
+        assert!(
+            items
+                .iter()
+                .filter(|i| i.language == lang)
+                .filter(|i| matches!(SplitScheme::V1.live(i), Some(Split::Train)))
+                .any(|i| leaks(&model.0, i)),
+            "the probe cannot see a shown {lang} Train item"
+        );
+    }
     for item in &held {
         assert!(!leaks(&model.0, item), "round prompt held {}", item.id);
         assert!(r.calls().iter().all(|c| !c.items.contains(&item.id)));
@@ -510,8 +568,9 @@ fn no_test_item_is_offered_to_a_round_or_recall_or_recorded() {
     let weksa::run::RecallOutcome::Read(reading) = run.recall(&mut recall).unwrap() else {
         panic!("answered");
     };
-    let rr = reading.languages[0].clone();
-    assert_eq!((rr.n, rr.answered), (28, 28));
+    for rr in &reading.languages {
+        assert_eq!((rr.n, rr.answered), (28, 28), "{}", rr.language);
+    }
     for item in &held {
         assert!(!leaks(&recall.0, item), "recall prompt held {}", item.id);
     }
@@ -539,4 +598,282 @@ fn a_model_written_item_in_a_test_group_is_read_in_no_split() {
     };
     let item = item_in("item:f:2", "x opens", &group_in_bucket(80), public);
     assert_eq!(SplitScheme::V1.live(&item), Some(Split::Test));
+}
+
+/// An Aozora Bunko file carries ruby, 《》 and ｜, and ［＃…］ notes; the items
+/// hold the base text only, in NFC.
+#[test]
+fn ja_test_text_carries_no_aozora_markup() {
+    use unicode_normalization::UnicodeNormalization;
+    let (corpus, _) = stores();
+    let ja: Vec<_> = corpus
+        .all()
+        .unwrap()
+        .into_iter()
+        .filter(|i| i.language == "ja-JP")
+        .collect();
+    assert_eq!(ja.len(), 36);
+    for item in &ja {
+        for bad in ["《", "》", "｜", "［＃", "※"] {
+            assert!(!item.text.contains(bad), "{} holds {bad}", item.id);
+        }
+        assert!(!item.text.starts_with('\u{3000}'), "{}", item.id);
+        assert_eq!(
+            item.text.nfc().collect::<String>(),
+            item.text,
+            "{}",
+            item.id
+        );
+    }
+}
+
+/// A packet that cites an item's speaker lowers only if the speaker has a form
+/// in the item's language.
+#[test]
+fn every_cited_speaker_has_a_form_in_its_items_language() {
+    let (corpus, entities) = stores();
+    for item in corpus.all().unwrap() {
+        let speaker = entities.get(&item.speaker).unwrap().unwrap();
+        assert!(speaker.forms_in(&item.language).is_some(), "{}", item.id);
+    }
+}
+
+/// The panel [en-US, ja-JP] over `data/original`: both languages are read, each
+/// with 14 Validation items, and no Test item is in any call.
+#[test]
+fn a_panel_round_reads_both_languages() {
+    let (run, r) = original_round(ModelFamily::Unrecorded);
+    assert_eq!(run.record().panel, PANEL);
+    let tags: Vec<&str> = r.languages().iter().map(|l| l.language.as_str()).collect();
+    assert_eq!(tags, PANEL);
+    for l in r.languages() {
+        let refused = &l.validation_refused;
+        assert_eq!(
+            refused.parse + refused.admit + refused.lower,
+            14,
+            "{}",
+            l.language
+        );
+    }
+    let (corpus, _) = stores();
+    for item in &corpus.all().unwrap() {
+        if SplitScheme::V1.live(item) == Some(Split::Test) {
+            assert!(
+                r.calls().iter().all(|c| !c.items.contains(&item.id)),
+                "{}",
+                item.id
+            );
+        }
+    }
+}
+
+/// The eight ja-JP Test sentences, byte for byte: each is the Aozora Bunko
+/// card file's text with only the ruby (《》, ｜) removed and NFC applied, a whole
+/// sentence, checked against the card's XHTML on 2026-11-12. A change to one
+/// is a new item, never an edit of these.
+#[test]
+fn the_eight_ja_test_sentences_are_pinned_verbatim() {
+    let want = [
+        (
+            "item:holdout-ja:1",
+            "親譲りの無鉄砲で小供の時から損ばかりしている。",
+            "holdout-ja-bocchan-6",
+            "entity:pd-soseki",
+            "https://www.aozora.gr.jp/cards/000148/files/752_14964.html",
+        ),
+        (
+            "item:holdout-ja:2",
+            "尾張の停車場で他の乗組員は言合せたように、残らず下りたので、函の中にはただ上人と私と二人になった。",
+            "holdout-ja-koya-hijiri-4",
+            "entity:pd-kyoka",
+            "https://www.aozora.gr.jp/cards/000050/files/521_20583.html",
+        ),
+        (
+            "item:holdout-ja:3",
+            "高瀬舟に乗る罪人の過半は、いわゆる心得違いのために、思わぬ科を犯した人であった。",
+            "holdout-ja-takasebune-14",
+            "entity:pd-ogai",
+            "https://www.aozora.gr.jp/cards/000129/files/45245_22007.html",
+        ),
+        (
+            "item:holdout-ja:4",
+            "ジムは僕より身長が高いくせに、絵はずっと下手でした。",
+            "holdout-ja-hitofusa-no-budo-4",
+            "entity:pd-arishima",
+            "https://www.aozora.gr.jp/cards/000025/files/211_20472.html",
+        ),
+        (
+            "item:holdout-ja:5",
+            "風がどうと吹いてきて、草はざわざわ、木の葉はかさかさ、木はごとんごとんと鳴りました。",
+            "holdout-ja-chumon-6",
+            "entity:pd-kenji",
+            "https://www.aozora.gr.jp/cards/000081/files/43754_17659.html",
+        ),
+        (
+            "item:holdout-ja:6",
+            "えたいの知れない不吉な塊が私の心を始終圧えつけていた。",
+            "holdout-ja-lemon-3",
+            "entity:pd-kajii",
+            "https://www.aozora.gr.jp/cards/000074/files/424_19826.html",
+        ),
+        (
+            "item:holdout-ja:7",
+            "多摩川の二子の渡しをわたって少しばかり行くと溝口という宿場がある。",
+            "holdout-ja-wasureenu-7",
+            "entity:pd-kunikida",
+            "https://www.aozora.gr.jp/cards/000038/files/1409_34798.html",
+        ),
+        (
+            "item:holdout-ja:8",
+            "一人の下人が、羅生門の下で雨やみを待っていた。",
+            "holdout-ja-rashomon-1",
+            "entity:pd-akutagawa",
+            "https://www.aozora.gr.jp/cards/000879/files/127_15260.html",
+        ),
+    ];
+    let (corpus, _) = stores();
+    for (id, text, group, speaker, url) in want {
+        let item = corpus.get(id).unwrap().unwrap();
+        assert_eq!(item.text, text, "{id}");
+        assert_eq!(
+            (item.group.as_str(), item.speaker.as_str()),
+            (group, speaker),
+            "{id}"
+        );
+        assert_eq!(item.language, "ja-JP", "{id}");
+        assert_eq!(SplitScheme::V1.live(&item), Some(Split::Test), "{id}");
+        let Source::PublicDomain { edition_url, .. } = &item.source else {
+            panic!("{id}: not public-domain");
+        };
+        assert_eq!(edition_url, url, "{id}");
+    }
+}
+
+/// The concepts the pinned inventory holds, as each language names them in the
+/// passages: English by word stem, Japanese by a multi-character surface. This
+/// is a tripwire, not the encoder: it fails a passage that names no live
+/// concept, and `FALSE_FRIENDS` strips the idioms that hold a concept's
+/// character without its meaning (天気, 心配, 腹が立つ ...) before matching.
+const LEXICON: [(&str, &[&str], &[&str]); 21] = [
+    ("endanger", &["endanger"], &["危う", "危ない"]),
+    ("prevent", &["prevent"], &["防い", "防げ", "妨げ"]),
+    ("control", &["control"], &["操ろ", "操る", "操れ", "支配"]),
+    (
+        "request",
+        &["request"],
+        &["いただけませんか", "もらえますか", "くれませんか", "お願い"],
+    ),
+    ("sage", &["sage"], &["賢者"]),
+    ("mind", &["mind"], &["心が", "心は", "心を", "心の", "心も"]),
+    (
+        "belly",
+        &["belly", "bellies"],
+        &["お腹", "空腹", "満腹", "腹の虫"],
+    ),
+    ("will", &["will"], &["意志"]),
+    ("bone", &["bone"], &["骨が", "骨を", "骨は", "骨の"]),
+    ("empty", &["empt"], &["空っぽ", "空にし", "空の器"]),
+    ("fill", &["fill"], &["満た", "いっぱい"]),
+    ("weaken", &["weaken"], &["弱ら", "弱め", "弱っ"]),
+    ("strengthen", &["strengthen"], &["強くな", "強め", "強くし"]),
+    (
+        "heaven",
+        &["heaven"],
+        &["天が", "天を", "天は", "天上", "天の"],
+    ),
+    ("earth", &["earth"], &["大地"]),
+    ("water", &["water"], &["水が", "水を", "水は", "水面"]),
+    ("compare", &["compare"], &["比べ"]),
+    ("resemble", &["resemble"], &["似て", "似た", "似る"]),
+    ("continues_long", &[], &["長く続", "久しく続"]),
+    ("true_words", &[], &["誠の言葉", "真実の言葉"]),
+    ("seem_paradoxical", &[], &["逆さま"]),
+];
+
+/// Compounds and idioms that contain a surface above without naming its concept.
+const FALSE_FRIENDS: [&str; 8] = [
+    "天気",
+    "心配",
+    "腹が立",
+    "腹を立",
+    "水曜",
+    "骨が折れ",
+    "天の川",
+    "天井",
+];
+
+/// The live concepts a passage names, by `LEXICON`, in `lang_col` (0 en-US, 1 ja-JP).
+fn concepts_in(text: &str, col: usize) -> Vec<&'static str> {
+    let mut text = text.to_lowercase();
+    for f in FALSE_FRIENDS {
+        text = text.replace(f, "");
+    }
+    let words: Vec<&str> = text.split(|c: char| !c.is_alphabetic()).collect();
+    LEXICON
+        .iter()
+        .filter(|(_, en, ja)| {
+            if col == 0 {
+                en.iter().any(|s| words.iter().any(|w| w.starts_with(s)))
+            } else {
+                ja.iter().any(|s| text.contains(s))
+            }
+        })
+        .map(|(c, _, _)| *c)
+        .collect()
+}
+
+#[test]
+fn the_concept_lexicon_does_not_match_a_word_that_merely_holds_a_character() {
+    for ja in [
+        "今日の天気はどうだろう。",
+        "試験が心配でならない。",
+        "腹が立って仕方がない。",
+        "水曜に会いましょう。",
+        "骨が折れる仕事だ。",
+    ] {
+        assert!(concepts_in(ja, 1).is_empty(), "{ja}");
+    }
+    assert!(concepts_in("I attempt it, with a reminder.", 0).is_empty());
+    assert_eq!(concepts_in("水が澄んでいる。", 1), ["water"]);
+}
+
+#[test]
+fn every_original_passage_rests_on_a_live_inventory_concept() {
+    use weksa::inventory::Family;
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/original");
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::copy(dir.join("inventory.cc"), tmp.path().join("inventory.cc")).unwrap();
+    let inventory = InventoryStore::open(&tmp.path().join("inventory.cc"))
+        .unwrap()
+        .inventory()
+        .unwrap();
+    let rev = inventory.latest().unwrap().n;
+    let live: Vec<&str> = inventory
+        .entries()
+        .filter(|e| e.family() == Family::Concept && e.live_at(rev))
+        .map(|e| e.gloss.as_str())
+        .collect();
+    for (concept, _, _) in LEXICON {
+        assert!(live.contains(&concept), "{concept} is not a live concept");
+    }
+    let (corpus, _) = stores();
+    for (col, lang) in PANEL.iter().enumerate() {
+        let mut hit = std::collections::BTreeSet::new();
+        let mut passages = 0;
+        for item in corpus.all().unwrap() {
+            if item.language != *lang || !matches!(item.source, Source::ModelWritten { .. }) {
+                continue;
+            }
+            passages += 1;
+            let found = concepts_in(&item.text, col);
+            assert!(!found.is_empty(), "{} rests on no live concept", item.id);
+            hit.extend(found);
+        }
+        eprintln!(
+            "{lang}: {passages} passages on a live concept, {} distinct concepts",
+            hit.len()
+        );
+        assert_eq!(passages, 28);
+        assert!(hit.len() >= 12, "{lang}: {} distinct concepts", hit.len());
+    }
 }
