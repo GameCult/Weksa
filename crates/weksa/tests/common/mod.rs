@@ -123,6 +123,35 @@ pub fn ontology_in(dir: &std::path::Path) -> std::path::PathBuf {
     path
 }
 
+/// A new inventory store at `path` holding the Dao inventory as it stood at
+/// rev 3 (seed, proof, the Dao revision): the loop tests' fixed head, whose
+/// round and candidate revisions they pin. The committed
+/// `data/daodejing/inventory.cc` is rev 4 and is read by the corpus tests.
+pub fn dao_rev3_at(path: &std::path::Path) {
+    let mut store = weksa::InventoryStore::open(path).unwrap();
+    for (rev, entries) in [
+        weksa::inventory::seed(),
+        weksa::inventory::proof_revision(),
+        weksa::daodejing::revision(),
+    ] {
+        store.admit_revision(rev, entries).unwrap();
+    }
+}
+
+/// An empty speaker-state store beside `ontology` (same directory), made if absent.
+pub fn speaker_state_beside(ontology: &std::path::Path) -> std::path::PathBuf {
+    let path = ontology.with_file_name("speaker-state.cc");
+    if !path.exists() {
+        std::fs::write(&path, [0x90]).unwrap();
+    }
+    path
+}
+
+/// An empty speaker-state store at `<dir>/speaker-state.cc`, made if absent.
+pub fn speaker_state_in(dir: &std::path::Path) -> std::path::PathBuf {
+    speaker_state_beside(&dir.join("ontology.cc"))
+}
+
 /// A run over the stores `world()` and `corpus()` keep in `dir`: `c.cc`,
 /// `i.cc` and `entities.cc`. Read at the call, so create it after the items.
 /// The run's en-US panel needs a live Train and a live Validation item: a
@@ -158,6 +187,7 @@ pub fn run_over(dir: &std::path::Path) -> weksa::run::RunStores {
             inventory: &dir.join("i.cc"),
             entities: &dir.join("entities.cc"),
             ontology: &dir.join("ontology.cc"),
+            speaker_state: &speaker_state_beside(&dir.join("ontology.cc")),
         },
         "fake-model",
         "bag",

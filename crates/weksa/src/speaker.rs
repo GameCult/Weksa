@@ -71,6 +71,8 @@ pub struct Scene {
     /// The revision, from 1.
     #[cultcache(key = 1)]
     pub n: u32,
+    /// The revision, of the inventory the scene was admitted through, at which
+    /// `put_scene` read its features: provenance only; a run never reads it.
     #[cultcache(key = 2)]
     pub inventory_rev: u32,
     #[cultcache(key = 3)]

@@ -1273,7 +1273,7 @@ impl OntologyStore {
                 return Err(malformed(&key, "a language holds at most 64 entries"));
             }
             counted.insert(e.language.as_str(), e.n);
-            check_ontology_entry(e, &inv)?;
+            check_ontology_entry(e, &inv, e.inventory_rev)?;
         }
         let mut staged = Vec::new();
         for e in &batch {
@@ -1286,13 +1286,14 @@ impl OntologyStore {
 
 /// The rules of one ontology entry against an inventory: the annotator, the
 /// bounded and normalized text of the choice and examples, the condition count
-/// and each condition's feature (slot `Stance` or `Discourse`, a grade feature
-/// for `AtLeast` and `AtMost`, an option or flag value for `Is`) read at the
-/// entry's inventory revision. The store applies it on admission and a run
-/// applies it again against its own head inventory.
+/// and each condition's feature (slot `Stance`, `Discourse` or `Scene`, a grade
+/// feature for `AtLeast` and `AtMost`, an option or flag value for `Is`) read at
+/// `rev`. The store passes the entry's own `inventory_rev` on admission; a run
+/// passes its inventory's head, because beds number revisions independently.
 pub(crate) fn check_ontology_entry(
     e: &OntologyEntry,
     inventory: &Inventory,
+    rev: u32,
 ) -> Result<(), StoreError> {
     let key = e.key();
     check_annotator(&key, &e.annotator)?;
@@ -1320,21 +1321,24 @@ pub(crate) fn check_ontology_entry(
     }
     let mut out = Vec::new();
     for c in &e.when {
-        if !matches!(c.slot, Slot::Stance | Slot::Discourse) {
-            return Err(malformed(&key, "a condition reads slot Stance or Discourse"));
+        if !matches!(c.slot, Slot::Stance | Slot::Discourse | Slot::Scene) {
+            return Err(malformed(
+                &key,
+                "a condition reads slot Stance, Discourse or Scene",
+            ));
         }
         if matches!(c.test, Test::Is(FeatValue::Grade(_))) {
             return Err(malformed(&key, "Is names an option or a flag"));
         }
         out.extend(feature_refusals(
             inventory,
-            e.inventory_rev,
+            rev,
             &[c.as_value()],
             c.slot,
         ));
     }
-    if e.when.is_empty() && !inventory.has_revision(e.inventory_rev) {
-        out.extend(feature_refusals(inventory, e.inventory_rev, &[], Slot::Stance));
+    if e.when.is_empty() && !inventory.has_revision(rev) {
+        out.extend(feature_refusals(inventory, rev, &[], Slot::Stance));
     }
     if !out.is_empty() {
         return Err(StoreError::Invalid(out));

@@ -5,7 +5,8 @@ culture, and constraint, and the planned lowerer that turns an agent's
 meaning packet into the reader's display language.
 
 **What is valuable here.** The interlingua standard and the lowering design: a
-meaning packet owns what is meant, speaker and scene state (planned; not yet live) own register,
+meaning packet owns what is meant, the scene state (live: `weksa scene put|dump`; speaker
+documents are planned) owns the speaker's relation to the addressee, which selects register,
 address and politeness, and a lowerer owns surface text and leaves a trace.
 
 **The problem it solves.** An agent's outward speech today is one English
@@ -84,9 +85,9 @@ target-specific English receipt.
 
 The language ontology is `data/ontology/ontology.cc` (read it with
 `weksa ontology dump`): per language, the lexicon, grammar and discourse choices a lowerer
-reads for a stance and discourse packet. No entry fixes an address or politeness level; those
-belong to the speaker and scene state. Its en-US and ja-JP entries are
-model-drafted seeds, never Test evidence. Nothing yet grows them from accepted
+reads for a stance, a discourse and a scene relation. Only an entry with a Scene condition names an
+address or politeness level; the relation, from `data/original/speaker-state.cc`, picks it. Its
+en-US and ja-JP entries and the keeper scenes are model-drafted or model-annotated, never Test evidence. Nothing yet grows them from accepted
 rounds; until that mint exists they change only by a new `weksa ontology admit`.
 
 For the first AquaSynth speech-training handoff, see

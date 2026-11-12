@@ -17,7 +17,7 @@
       }
     },
     "inventory_rev": {
-      "description": "The inventory revision the conditions read against.",
+      "description": "The revision, of the inventory the entry was admitted through, at which the\nstore read its conditions: provenance only; a run reads the conditions'\nfeatures at its own head.",
       "type": "integer",
       "format": "uint32",
       "minimum": 0
@@ -89,7 +89,7 @@
       ]
     },
     "Condition": {
-      "description": "One feature of one slot of the view, tested. Only `Stance` and `Discourse`\nreach a lowering view today.",
+      "description": "One feature of one slot of the view, tested. `Stance`, `Discourse` and\n`Scene` reach a lowering view; `Speaker` does not yet.",
       "type": "object",
       "properties": {
         "feature": {

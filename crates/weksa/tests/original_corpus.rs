@@ -18,7 +18,7 @@ use weksa::{CorpusStore, EntityStore, InventoryStore};
 fn stores() -> (CorpusStore, EntityStore) {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/original");
     let tmp = tempfile::tempdir().unwrap();
-    for f in ["corpus.cc", "entity.cc", "inventory.cc"] {
+    for f in ["corpus.cc", "entity.cc", "inventory.cc", "speaker-state.cc"] {
         std::fs::copy(dir.join(f), tmp.path().join(f)).unwrap();
     }
     let keep = tmp.keep();
@@ -241,14 +241,22 @@ fn the_first_six_original_items_are_unchanged() {
 }
 
 #[test]
-fn the_original_inventory_is_the_dao_revision_three() {
+fn the_original_inventory_is_the_dao_inventory() {
     let dao = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/daodejing/inventory.cc");
     let own = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/original/inventory.cc");
     assert_eq!(std::fs::read(dao).unwrap(), std::fs::read(&own).unwrap());
     let tmp = tempfile::tempdir().unwrap();
     let copy = tmp.path().join("inventory.cc");
     std::fs::copy(&own, &copy).unwrap();
-    assert!(InventoryStore::open(&copy).is_ok());
+    let inventory = InventoryStore::open(&copy).unwrap().inventory().unwrap();
+    // Revision 4 is the speaker-state vocabulary: the same six features the
+    // generator admits, ids and all.
+    assert_eq!(inventory.latest().unwrap().n, 4);
+    let (rev, entries) = weksa::inventory::speaker_scene_revision(4);
+    assert_eq!(inventory.latest().unwrap().changes, rev.changes);
+    for e in &entries {
+        assert_eq!(inventory.entry(&e.id), Some(e), "{}", e.gloss);
+    }
 }
 
 /// The committed seed ontology: every entry model-drafted, exactly the two
@@ -270,8 +278,13 @@ fn committed_ontology_is_model_drafted_and_reads_every_inventory() {
         match &e.annotator {
             Annotator::Model { family, generator } => {
                 assert_eq!(*family, ModelFamily::Anthropic, "{}", e.key());
-                assert_eq!(
-                    generator, "claude-sonnet-5-5 (Weksa Hands, model-drafted seed ontology)",
+                assert!(
+                    [
+                        "claude-sonnet-5-5 (Weksa Hands, model-drafted seed ontology)",
+                        "claude-sonnet-5-5 (Weksa Hands, model-drafted scene ontology)",
+                        "claude-sonnet-5-5 (Weksa Hands, reworded seed entry)",
+                    ]
+                    .contains(&generator.as_str()),
                     "{}",
                     e.key()
                 );
@@ -283,6 +296,15 @@ fn committed_ontology_is_model_drafted_and_reads_every_inventory() {
     langs.sort();
     langs.dedup();
     assert_eq!(langs, PANEL);
+    // Every entry from number 10 on is conditioned on the scene relation, and
+    // only an entry with a Scene condition may name a politeness level.
+    for e in entries.iter().filter(|e| e.n >= 10) {
+        assert!(
+            e.when.iter().any(|c| c.slot == weksa::inventory::Slot::Scene),
+            "{} has no Scene condition",
+            e.key()
+        );
+    }
     for lang in PANEL {
         let stance = |c: &Condition| c.slot == weksa::inventory::Slot::Stance;
         assert!(
@@ -292,21 +314,35 @@ fn committed_ontology_is_model_drafted_and_reads_every_inventory() {
             "{lang} has no Stance-conditioned entry"
         );
     }
-    for (corpus, panel) in [("original", &PANEL[..]), ("daodejing", &PANEL[..1])] {
+    // A run opens over every committed inventory bed with its panel. The default
+    // bed (data/interlingua) numbers the scene revision 3 and holds no Dao
+    // revision; the Dao beds number it 4. Entries and scenes admitted at 4 open
+    // over both because a run reads features at its own head. The default bed is
+    // read with the original corpus, entities and scenes, as `loop open` with its
+    // defaults and `--corpus data/original` does.
+    for (corpus, bed, panel) in [
+        ("original", "original", &PANEL[..]),
+        ("daodejing", "daodejing", &PANEL[..1]),
+        ("original", "interlingua", &PANEL[..]),
+    ] {
         let dir = data.join(corpus);
-        let copy = |f: &str| {
-            std::fs::copy(dir.join(f), tmp.path().join(format!("{corpus}-{f}"))).unwrap();
-            tmp.path().join(format!("{corpus}-{f}"))
+        let name = format!("{corpus}-{bed}");
+        let copy = |from: &Path, f: &str| {
+            let to = tmp.path().join(format!("{name}-{f}"));
+            std::fs::copy(from.join(f), &to).unwrap();
+            to
         };
-        let (c, i, e) = (copy("corpus.cc"), copy("inventory.cc"), copy("entity.cc"));
+        let (c, i, e) = (copy(&dir, "corpus.cc"), copy(&data.join(bed), "inventory.cc"), copy(&dir, "entity.cc"));
+        let s = copy(&dir, "speaker-state.cc");
         RunStores::create(
-            &tmp.path().join(format!("run-{corpus}")),
+            &tmp.path().join(format!("run-{name}")),
             corpus,
             RunPaths {
                 corpus: &c,
                 inventory: &i,
                 entities: &e,
                 ontology: &onto,
+                speaker_state: &s,
             },
             "m",
             "bag",
@@ -314,7 +350,34 @@ fn committed_ontology_is_model_drafted_and_reads_every_inventory() {
             ModelFamily::Unrecorded,
             &panel.iter().map(|l| l.to_string()).collect::<Vec<_>>(),
         )
-        .unwrap_or_else(|e| panic!("{corpus}: {e:?}"));
+.unwrap_or_else(|e| panic!("{name}: {e:?}"));
+    }
+    // Revision numbers are local to a bed, so agreement is proven on the beds:
+    // every feature an entry condition or a committed scene relation names means
+    // the same in all three (gloss, value kind, slots, retirement).
+    let mut named: std::collections::BTreeSet<weksa::InvId> = entries
+        .iter()
+        .flat_map(|e| e.when.iter().map(|c| c.feature))
+        .collect();
+    let scenes = weksa::SpeakerStateStore::open(&data.join("original/speaker-state.cc")).unwrap();
+    for s in scenes.all_scenes().unwrap() {
+        named.extend(s.relations.iter().flat_map(|r| r.features.iter().map(|f| f.feature)));
+    }
+    let beds: Vec<_> = ["interlingua", "original", "daodejing"]
+        .iter()
+        .map(|b| {
+            let copy = tmp.path().join(format!("bed-{b}.cc"));
+            std::fs::copy(data.join(b).join("inventory.cc"), &copy).unwrap();
+            InventoryStore::open(&copy).unwrap().inventory().unwrap()
+        })
+        .collect();
+    for id in named {
+        let shape = |inv: &weksa::Inventory| {
+            let e = inv.entry(&id).unwrap_or_else(|| panic!("{id} is missing from a bed"));
+            (e.gloss.clone(), e.value_kind.clone(), e.applies_to.clone(), e.retired_rev)
+        };
+        assert_eq!(shape(&beds[0]), shape(&beds[1]), "{id}");
+        assert_eq!(shape(&beds[1]), shape(&beds[2]), "{id}");
     }
 }
 
@@ -351,6 +414,7 @@ fn the_recall_probe_covers_every_live_original_item_and_names_no_work() {
             inventory: &i,
             entities: &e,
             ontology: &o,
+            speaker_state: &common::speaker_state_beside(&o),
         },
         "m",
         "bag",
@@ -417,7 +481,7 @@ fn original_round(family: ModelFamily) -> (weksa::run::RunStores, weksa::run::Ro
     use weksa::run::{LowererReach, RoundOutcome, RunPaths, RunStores, round};
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/original");
     let tmp = tempfile::tempdir().unwrap().keep();
-    for f in ["corpus.cc", "entity.cc", "inventory.cc"] {
+    for f in ["corpus.cc", "entity.cc", "inventory.cc", "speaker-state.cc"] {
         std::fs::copy(src.join(f), tmp.join(f)).unwrap();
     }
     std::fs::write(tmp.join("ontology.cc"), [0x90]).unwrap();
@@ -429,6 +493,7 @@ fn original_round(family: ModelFamily) -> (weksa::run::RunStores, weksa::run::Ro
             inventory: &tmp.join("inventory.cc"),
             entities: &tmp.join("entity.cc"),
             ontology: &tmp.join("ontology.cc"),
+            speaker_state: &common::speaker_state_beside(&tmp.join("ontology.cc")),
         },
         "nope",
         "bag",
@@ -575,7 +640,7 @@ fn no_test_item_is_offered_to_a_round_or_recall_or_recorded() {
     use weksa::run::{LowererReach, RoundOutcome, RunPaths, RunStores, round};
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/original");
     let tmp = tempfile::tempdir().unwrap();
-    for f in ["corpus.cc", "entity.cc", "inventory.cc"] {
+    for f in ["corpus.cc", "entity.cc", "inventory.cc", "speaker-state.cc"] {
         std::fs::copy(src.join(f), tmp.path().join(f)).unwrap();
     }
     std::fs::write(tmp.path().join("ontology.cc"), [0x90]).unwrap();
@@ -588,6 +653,7 @@ fn no_test_item_is_offered_to_a_round_or_recall_or_recorded() {
             inventory: &p("inventory.cc"),
             entities: &p("entity.cc"),
             ontology: &p("ontology.cc"),
+            speaker_state: &common::speaker_state_beside(&p("ontology.cc")),
         },
         "nope",
         "bag",
@@ -949,5 +1015,97 @@ fn every_original_passage_rests_on_a_live_inventory_concept() {
         );
         assert_eq!(passages, 28);
         assert!(hit.len() >= 12, "{lang}: {} distinct concepts", hit.len());
+    }
+}
+
+/// The committed scenes: one per live Train or Validation group of
+/// `data/original`, none for any other group, every one model-annotated and
+/// never Test evidence (a Test group gets no scene and reads `NoScene`).
+#[test]
+fn committed_scenes_cover_original_groups() {
+    use std::collections::BTreeSet;
+    use weksa::speaker::Annotator;
+    use weksa::{CorpusStore, Split, SplitScheme, SpeakerStateStore};
+    let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/original");
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path().join("speaker-state.cc");
+    std::fs::copy(data.join("speaker-state.cc"), &state).unwrap();
+    let scenes = SpeakerStateStore::open(&state).unwrap().all_scenes().unwrap();
+    let live: BTreeSet<String> = CorpusStore::open(&data.join("corpus.cc"))
+        .unwrap()
+        .all()
+        .unwrap()
+        .into_iter()
+        .filter(|i| matches!(SplitScheme::V1.live(i), Some(Split::Train | Split::Validation)))
+        .map(|i| i.group)
+        .collect();
+    assert_eq!(live.len(), 56);
+    let held: BTreeSet<String> = scenes.iter().map(|s| s.group.clone()).collect();
+    assert_eq!(held, live, "a scene for each live Train or Validation group, none other");
+    // Revisions append: a group's later revisions re-derived its relation.
+    assert!(scenes.iter().all(|s| s.n <= 2));
+    for s in &scenes {
+        match &s.annotator {
+            Annotator::Model { family, generator } => {
+                assert_eq!(*family, ModelFamily::Anthropic, "{}", s.group);
+                assert_eq!(
+                    generator, "claude-sonnet-5-5 (Weksa Hands, model-annotated original scenes)",
+                    "{}",
+                    s.group
+                );
+            }
+            other => panic!("{} is {other:?}", s.group),
+        }
+    }
+}
+
+/// The committed ontology's Scene-conditioned entries, over every scene relation
+/// (relative_status x in_group x intimacy in steps of 50): two entries of one
+/// language and layer are never selected by the same relation, so the ontology
+/// never gives two instructions for one relation in one layer. Whether an entry's
+/// text keeps a politeness level on the scene is a model reading owed per change,
+/// not a test.
+#[test]
+fn scene_entries_never_co_select_in_a_layer() {
+    use weksa::inventory::Slot;
+    use weksa::ontology::{Condition, Test};
+    use weksa::packet::FeatValue;
+    use weksa::OntologyStore;
+    let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
+    let tmp = tempfile::tempdir().unwrap();
+    let onto = tmp.path().join("ontology.cc");
+    std::fs::copy(data.join("ontology/ontology.cc"), &onto).unwrap();
+    let inv = InventoryStore::open(&data.join("original/inventory.cc")).unwrap().inventory().unwrap();
+    let id = |gloss: &str| inv.entries().find(|e| e.gloss == gloss).unwrap().id;
+    let (status, intimacy, in_group) = (id("relative_status"), id("intimacy"), id("in_group"));
+    let entries = OntologyStore::open(&onto).unwrap().all().unwrap();
+    let holds = |c: &Condition, rel: (&str, u16, bool)| match (c.feature, &c.test) {
+        (f, Test::Is(FeatValue::Option(l))) if f == status => l.as_str() == rel.0,
+        (f, Test::AtLeast(g)) if f == intimacy => rel.1 >= g.get(),
+        (f, Test::AtMost(g)) if f == intimacy => rel.1 <= g.get(),
+        (f, Test::Is(FeatValue::Flag(b))) if f == in_group => *b == rel.2,
+        _ => panic!("a Scene condition this test does not model"),
+    };
+    let selects = |e: &weksa::OntologyEntry, rel| {
+        e.when.iter().all(|c| c.slot != Slot::Scene || holds(c, rel))
+            && e.when.iter().all(|c| c.slot == Slot::Scene)
+    };
+    for st in ["below", "level", "above"] {
+        for ig in [false, true] {
+            for it in (0..=1000).step_by(50) {
+                let rel = (st, it, ig);
+                let mut seen = std::collections::BTreeSet::new();
+                for e in entries.iter().filter(|e| e.when.iter().any(|c| c.slot == Slot::Scene)) {
+                    if selects(e, rel) {
+                        assert!(
+                            seen.insert((e.language.clone(), e.layer.name())),
+                            "{} co-selects with another {} entry at {rel:?}",
+                            e.key(),
+                            e.layer.name()
+                        );
+                    }
+                }
+            }
+        }
     }
 }

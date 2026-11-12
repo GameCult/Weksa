@@ -10,7 +10,8 @@ use unicode_normalization::UnicodeNormalization;
 use weksa::corpus::{CorpusItem, ModelFamily, NameSpan, Source, Turn};
 use weksa::encode::OntologyDraft;
 use weksa::entity::{Entity, EntityOrigin, LanguageForms, Pronunciation};
-use weksa::inventory::{proof_revision, seed};
+use weksa::inventory::{proof_revision, seed, speaker_scene_revision};
+use weksa::packet::{FeatValue, FeatureValue, Grade};
 use weksa::packet::proof_packet;
 use weksa::model::RecordedAnswers;
 use weksa::run::{
@@ -18,8 +19,8 @@ use weksa::run::{
 };
 use weksa::score::ScoreInput;
 use weksa::{
-    Annotator, AnswerFiles, CorpusStore, EntityId, EntityStore, InventoryStore, OllamaEmbedder, OntologyStore, PacketStore,
-    Scorer, Split, SplitScheme, StoreError, lower, pronounce, validate,
+    Annotator, AnswerFiles, CorpusStore, EntityId, EntityStore, Family, InventoryStore, OllamaEmbedder, OntologyStore, OptionLabel,
+    PacketStore, PairRelation, Party, Scene, Slot, SpeakerStateStore, ValueKind, Scorer, Split, SplitScheme, StoreError, lower, pronounce, validate,
 };
 
 #[derive(Parser)]
@@ -40,6 +41,9 @@ struct Cli {
     /// The language ontology store.
     #[arg(long, global = true, default_value = "data/ontology/ontology.cc")]
     ontology: PathBuf,
+    /// The speaker-state store (scenes).
+    #[arg(long, global = true, default_value = "data/corpus/speaker-state.cc")]
+    speaker_state: PathBuf,
     #[command(subcommand)]
     command: Command,
 }
@@ -56,6 +60,8 @@ enum Command {
     Entity(EntityCommand),
     #[command(subcommand)]
     Ontology(OntologyCommand),
+    #[command(subcommand)]
+    Scene(SceneCommand),
     #[command(subcommand)]
     Packet(PacketCommand),
     /// Lower a stored packet to English text.
@@ -87,7 +93,7 @@ enum Command {
 
 #[derive(Subcommand)]
 enum LoopCommand {
-    /// Pin the global --corpus, --inventory, --entities and --ontology as a run at ROOT.
+    /// Pin the global --corpus, --inventory, --entities, --ontology and --speaker-state as a run at ROOT.
     Open {
         root: PathBuf,
         #[arg(long)]
@@ -191,6 +197,38 @@ enum InventoryCommand {
     Proof,
     /// Admit revision 3 of the Dao De Jing test bed stores (after seed and proof).
     Dao,
+    /// Admit the speaker-state revision (Scene and Speaker features) as the
+    /// inventory's latest plus one.
+    SpeakerScene,
+}
+
+#[derive(Subcommand)]
+enum SceneCommand {
+    /// Append a scene revision for one corpus group: its one live speaker's
+    /// relation to the addressee, as Scene-slot feature values.
+    Put {
+        #[arg(long)]
+        group: String,
+        /// `entity:<slug>` of a named addressee, or `unnamed`.
+        #[arg(long)]
+        to: String,
+        /// The inventory revision the glosses resolve at.
+        #[arg(long)]
+        inventory_rev: u32,
+        /// `gloss=value`, repeated: a grade 0-1000, an option label or true/false.
+        #[arg(long = "set", value_name = "GLOSS=VALUE")]
+        set: Vec<String>,
+        #[arg(long, requires = "generator", conflicts_with = "operator")]
+        model_family: Option<ModelFamilyArg>,
+        /// The attestation string naming the annotating model.
+        #[arg(long, requires = "model_family")]
+        generator: Option<String>,
+        /// Annotated by the operator, not a model.
+        #[arg(long)]
+        operator: bool,
+    },
+    /// Text projection of the scenes for review; not a store.
+    Dump,
 }
 
 #[derive(Subcommand)]
@@ -734,6 +772,143 @@ fn main() -> Result<()> {
                 .map_err(refused)?;
             println!("admitted rev:2 with {count} entries");
         }
+        Command::Inventory(InventoryCommand::SpeakerScene) => {
+            let store = InventoryStore::open(&cli.inventory)?;
+            let latest = store
+                .inventory()?
+                .latest()
+                .map(|r| r.n)
+                .context("the inventory holds no revision")?;
+            let (rev, entries) = speaker_scene_revision(latest + 1);
+            let (n, count) = (rev.n, entries.len());
+            let mut store = store;
+            store.admit_revision(rev, entries).map_err(refused)?;
+            println!("admitted rev:{n} with {count} entries");
+        }
+        Command::Scene(SceneCommand::Put {
+            group,
+            to,
+            inventory_rev,
+            set,
+            model_family,
+            generator,
+            operator,
+        }) => {
+            let annotator = match (model_family, generator, operator) {
+                (Some(family), Some(generator), false) => Annotator::Model {
+                    family: family.into(),
+                    generator,
+                },
+                (None, None, true) => Annotator::Operator,
+                _ => bail!("name the annotator: --model-family with --generator, or --operator"),
+            };
+            let inventory_store = InventoryStore::open(&cli.inventory)?;
+            let inventory = inventory_store.inventory()?;
+            let corpus = CorpusStore::open(&cli.corpus)?;
+            let live: Vec<CorpusItem> = corpus
+                .all()?
+                .into_iter()
+                .filter(|i| i.group == group && !i.withdrawn)
+                .collect();
+            let mut speakers: Vec<EntityId> = live.iter().map(|i| i.speaker.clone()).collect();
+            speakers.sort();
+            speakers.dedup();
+            let [from] = speakers.as_slice() else {
+                bail!("a scene group holds one live speaker; multi-party scenes wait");
+            };
+            let to = match to.as_str() {
+                "unnamed" => Party::Unnamed,
+                named => Party::Named(
+                    EntityId::parse(named).map_err(|_| anyhow::anyhow!("the addressee is unnamed or an entity id"))?,
+                ),
+            };
+            let mut features = Vec::new();
+            for pair in &set {
+                let bad = || anyhow::anyhow!("a --set is gloss=value of a live Scene feature");
+                let (gloss, value) = pair.split_once('=').ok_or_else(bad)?;
+                let entry = inventory
+                    .entries()
+                    .find(|e| {
+                        e.family() == Family::Feature
+                            && e.gloss == gloss
+                            && e.live_at(inventory_rev)
+                            && e.applies_to.contains(&Slot::Scene)
+                    })
+                    .ok_or_else(bad)?;
+                let value = match entry.value_kind.as_ref().ok_or_else(bad)? {
+                    ValueKind::Grade => FeatValue::Grade(
+                        Grade::new(value.parse().map_err(|_| bad())?).map_err(|_| bad())?,
+                    ),
+                    ValueKind::Options(_) => {
+                        FeatValue::Option(OptionLabel::parse(value).map_err(|_| bad())?)
+                    }
+                    ValueKind::Flag => FeatValue::Flag(value.parse().map_err(|_| bad())?),
+                };
+                features.push(FeatureValue { feature: entry.id, value });
+            }
+            let mut participants = vec![from.clone()];
+            if let Party::Named(a) = &to
+                && a != from
+            {
+                participants.push(a.clone());
+            }
+            let mut state = SpeakerStateStore::open(&cli.speaker_state)?;
+            let latest = state.scene(&group)?;
+            let mut scene = Scene {
+                group,
+                n: latest.as_ref().map_or(1, |l| l.n + 1),
+                inventory_rev,
+                participants,
+                relations: vec![PairRelation { from: from.clone(), to, features }],
+                annotator,
+            };
+            if let Some(l) = &latest {
+                let same = Scene { n: l.n, ..scene.clone() };
+                if &same == l {
+                    println!("unchanged");
+                    return Ok(());
+                }
+            }
+            scene.n = latest.map_or(1, |l| l.n + 1);
+            let key = weksa::speaker::scene_key(&scene.group, scene.n);
+            let outcome = state
+                .put_scene(scene, &inventory_store, &corpus, &EntityStore::open(&cli.entities)?)
+                .map_err(refused)?;
+            println!("{outcome:?} {key}");
+        }
+        Command::Scene(SceneCommand::Dump) => {
+            let inventory = InventoryStore::open(&cli.inventory)?.inventory()?;
+            let gloss = |f: &FeatureValue| {
+                let name = inventory.entry(&f.feature).map_or("?", |e| e.gloss.as_str());
+                match &f.value {
+                    FeatValue::Grade(g) => format!("{name}={}", g.get()),
+                    FeatValue::Option(l) => format!("{name}={l}"),
+                    FeatValue::Flag(b) => format!("{name}={b}"),
+                }
+            };
+            for s in SpeakerStateStore::open(&cli.speaker_state)?.all_scenes()? {
+                let who = match &s.annotator {
+                    Annotator::Operator => "Operator".to_string(),
+                    Annotator::Model { family, generator } => format!("Model {family:?} {generator}"),
+                };
+                let people: Vec<&str> = s.participants.iter().map(|p| p.as_str()).collect();
+                println!(
+                    "scene:{}@{} rev:{} {who} [{}]",
+                    s.group,
+                    s.n,
+                    s.inventory_rev,
+                    people.join(",")
+                );
+                for r in &s.relations {
+                    let to = match &r.to {
+                        Party::Named(e) => e.as_str().to_string(),
+                        Party::Unnamed => "unnamed".to_string(),
+                    };
+                    let feats: Vec<String> = r.features.iter().map(&gloss).collect();
+                    println!("  {}->{to} {}", r.from, feats.join(" "));
+                }
+            }
+        }
         Command::Inventory(InventoryCommand::Dao) => {
             let (rev, entries) = weksa::daodejing::revision();
             let count = entries.len();
@@ -850,6 +1025,7 @@ fn main() -> Result<()> {
                     inventory: &cli.inventory,
                     entities: &cli.entities,
                     ontology: &cli.ontology,
+                    speaker_state: &cli.speaker_state,
                 },
                 &answerer,
                 &embed_model,

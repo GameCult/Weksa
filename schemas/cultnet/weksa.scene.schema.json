@@ -12,6 +12,7 @@
       "type": "string"
     },
     "inventory_rev": {
+      "description": "The revision, of the inventory the scene was admitted through, at which\n`put_scene` read its features: provenance only; a run never reads it.",
       "type": "integer",
       "format": "uint32",
       "minimum": 0

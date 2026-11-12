@@ -259,6 +259,7 @@ fn lower_error(e: &LowerError) -> Value {
         LowerError::ConsentMissing { predication } => ("ConsentMissing", format!("{predication} is a request the packet does not carry the addressee's consent to")),
         LowerError::AskerNotAddressee { predication } => ("AskerNotAddressee", format!("the agent of {predication} is not the addressee")),
         LowerError::EntityRead { entity, .. } => ("EntityRead", format!("the entity store failed reading {entity}")),
+        LowerError::SceneUnread => ("SceneUnread", "the view's scene was never read".to_string()),
     };
     json!({ "variant": variant, "reason": reason })
 }

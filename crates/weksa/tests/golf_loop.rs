@@ -24,12 +24,13 @@ fn rewrite_run(root: &Path, change: impl FnOnce(&mut RunRecord)) {
     cache.put(format!("run:{}", record.label), &record).unwrap();
 }
 
-fn paths(dir: &Path) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+fn paths(dir: &Path) -> (PathBuf, PathBuf, PathBuf, PathBuf, PathBuf) {
     (
         dir.join("c.cc"),
         dir.join("i.cc"),
         dir.join("entities.cc"),
         common::ontology_in(dir),
+        common::speaker_state_in(dir),
     )
 }
 
@@ -42,7 +43,7 @@ fn a_run_pins_its_stores_and_refuses_drift() {
     let mut w = world();
     let dir = w.dir.path().to_path_buf();
     let root = dir.join("run");
-    let (c, i, e, o) = paths(&dir);
+    let (c, i, e, o, s) = paths(&dir);
     let at = |label: &str, model: &str| {
         RunStores::create(
             &root,
@@ -52,6 +53,7 @@ fn a_run_pins_its_stores_and_refuses_drift() {
                 inventory: &i,
                 entities: &e,
                 ontology: &o,
+                speaker_state: &s,
             },
             model,
             "bag",
@@ -147,7 +149,7 @@ fn a_run_works_on_its_own_copy_of_the_inventory() {
     let w = world();
     let dir = w.dir.path().to_path_buf();
     let root = dir.join("run");
-    let (c, i, e, o) = paths(&dir);
+    let (c, i, e, o, s) = paths(&dir);
     let source_bytes = std::fs::read(&i).unwrap();
     let mut run = RunStores::create(
         &root,
@@ -157,6 +159,7 @@ fn a_run_works_on_its_own_copy_of_the_inventory() {
             inventory: &i,
             entities: &e,
             ontology: &o,
+            speaker_state: &s,
         },
         "fake-model",
         "bag",
@@ -236,6 +239,7 @@ fn create_refuses_a_root_that_holds_an_inventory_and_never_truncates_it() {
                 inventory,
                 entities: &dao.entities,
                 ontology: &dao.ontology,
+                speaker_state: &common::speaker_state_beside(&dao.ontology),
             },
             "fake-model",
             "bag",
@@ -285,6 +289,7 @@ fn a_create_that_fails_leaves_no_inventory_and_the_retry_succeeds() {
                 inventory,
                 entities,
                 ontology: &dao.ontology,
+                speaker_state: &common::speaker_state_beside(&dao.ontology),
             },
             "fake-model",
             "bag",
@@ -398,11 +403,13 @@ fn a_store_changed_between_its_digest_and_its_open_is_drift() {
     }
     let (c, i, e) = (dir.join("c.cc"), dir.join("i.cc"), dir.join("entities.cc"));
     let o = dir.join("ontology.cc");
+    let s = common::speaker_state_beside(&o);
     let paths = || weksa::run::RunPaths {
         corpus: &c,
         inventory: &i,
         entities: &e,
         ontology: &o,
+        speaker_state: &s,
     };
     assert_eq!(
         RunStores::create_between(
@@ -457,6 +464,7 @@ fn window(
         inventory: &i,
         entities: &e,
         ontology: &o,
+        speaker_state: &common::speaker_state_beside(&o),
     };
     let created = RunStores::create_between(
         &root,
@@ -888,9 +896,11 @@ fn dao_build(
         std::fs::copy(src.join(from), dir.path().join(to)).unwrap();
         dir.path().join(to)
     };
+    // The Dao inventory at rev 3: the pins below are written against it.
+    common::dao_rev3_at(&dir.path().join("i.cc"));
     let (corpus, inventory, entities) = (
         copy("corpus.cc", "c.cc"),
-        copy("inventory.cc", "i.cc"),
+        dir.path().join("i.cc"),
         copy("entity.cc", "e.cc"),
     );
     edit(&corpus, &entities);
@@ -905,6 +915,7 @@ fn dao_build(
             inventory: &inventory,
             entities: &entities,
             ontology: &ontology,
+            speaker_state: &common::speaker_state_beside(&ontology),
         },
         "fake-model",
         "bag",
@@ -1087,6 +1098,8 @@ fn lowering_prompts(dao: &Dao, inventory: &InventoryStore) -> Vec<(String, Promp
             let view = store
                 .admit(packet, inventory, &corpus, dao.run.entities())
                 .unwrap();
+            let state = weksa::SpeakerStateStore::open(&dir.path().join("s.cc")).unwrap();
+            let view = view.with_scene(&inv, &state, &corpus).unwrap();
             let prompt = Prompt::lower(&view, &key, "en-US", &inv, dao.run.entities(), &weksa::Ontology::empty()).unwrap();
             (key.to_string(), prompt)
         })
@@ -1560,6 +1573,7 @@ fn errors_echo_no_input() {
         inventory: &missing,
         entities: &missing,
         ontology: &missing,
+        speaker_state: &common::speaker_state_beside(&missing),
     };
     let e = RunStores::create(
         &root,
@@ -1629,6 +1643,7 @@ fn errors_echo_no_input() {
             inventory: &dao.inventory,
             entities: &dao.entities,
             ontology: &dao.ontology,
+            speaker_state: &common::speaker_state_beside(&dao.ontology),
         },
         "fake-model",
         "bag",
@@ -2551,6 +2566,7 @@ fn a_changed_head_is_drift() {
             inventory: &dao.inventory,
             entities: &dao.entities,
             ontology: &dao.ontology,
+            speaker_state: &common::speaker_state_beside(&dao.ontology),
         },
         "fake-model",
         "bag",
@@ -2891,6 +2907,7 @@ fn a_summary_line_says_how_lowerings_were_answered() {
         inventory: &dao.inventory,
         entities: &dao.entities,
         ontology: &dao.ontology,
+        speaker_state: &common::speaker_state_beside(&dao.ontology),
     };
     RunStores::create(
         &root,
@@ -3615,6 +3632,7 @@ fn mixed_family_round(family: ModelFamily) -> u32 {
             inventory: &dir.join("i.cc"),
             entities: &dir.join("entities.cc"),
             ontology: &dir.join("ontology.cc"),
+            speaker_state: &common::speaker_state_beside(&dir.join("ontology.cc")),
         },
         "not-a-draft",
         "bag",
@@ -4402,7 +4420,7 @@ fn open_refuses_a_bad_panel() {
         let created = RunStores::create(
             &root,
             "p",
-            RunPaths { corpus, inventory, entities, ontology: &dao.ontology },
+            RunPaths { corpus, inventory, entities, ontology: &dao.ontology, speaker_state: &common::speaker_state_beside(&dao.ontology) },
             "fake-model",
             "bag",
             weksa::run::LowererReach::ToolLessRelay,
@@ -4762,6 +4780,7 @@ fn create_refuses_an_entry_its_inventory_cannot_read() {
                 inventory: &dir.join("i.cc"),
                 entities: &dir.join("e.cc"),
                 ontology,
+                speaker_state: &common::speaker_state_beside(ontology),
             },
             "fake-model",
             "bag",
@@ -4816,4 +4835,282 @@ fn round_lowering_prompts_carry_selected_entries() {
         seen.insert(item.to_string());
     }
     assert_eq!(seen.len(), 6, "three items in each language");
+}
+
+/// Admits the speaker-state revision (rev 4) onto the rev-3 Dao inventory at
+/// `inventory`, and the scene for the group of `item:daodejing:3`: Laozi's
+/// relation to an unnamed party, above, intimacy 200.
+fn put_dao_scene(speaker_state: &Path, inventory: &Path, corpus: &Path, entities: &Path) {
+    use weksa::packet::{FeatValue, FeatureValue};
+    let mut inv_store = InventoryStore::open(inventory).unwrap();
+    let (rev, entries) = weksa::inventory::speaker_scene_revision(4);
+    inv_store.admit_revision(rev, entries).unwrap();
+    let inv = inv_store.inventory().unwrap();
+    let id = |gloss: &str| inv.entries().find(|e| e.gloss == gloss).unwrap().id;
+    let corpus = CorpusStore::open(corpus).unwrap();
+    let item = corpus.get("item:daodejing:3").unwrap().unwrap();
+    let scene = weksa::Scene {
+        group: item.group.clone(),
+        n: 1,
+        inventory_rev: 4,
+        participants: vec![item.speaker.clone()],
+        relations: vec![weksa::PairRelation {
+            from: item.speaker.clone(),
+            to: weksa::Party::Unnamed,
+            features: vec![
+                FeatureValue {
+                    feature: id("relative_status"),
+                    value: FeatValue::Option(common::lab("above")),
+                },
+                FeatureValue {
+                    feature: id("intimacy"),
+                    value: FeatValue::Grade(common::grade(200)),
+                },
+            ],
+        }],
+        annotator: weksa::Annotator::Operator,
+    };
+    weksa::SpeakerStateStore::open(speaker_state)
+        .unwrap()
+        .put_scene(scene, &inv_store, &corpus, &weksa::EntityStore::open(entities).unwrap())
+        .unwrap();
+}
+
+/// A Dao run whose store holds a scene for item 3's group and whose ontology
+/// holds en-US:1, selected when the speaker is above the addressee.
+fn scene_dao(extra: impl FnOnce(&Path, &Path)) -> Dao {
+    dao_build(
+        |_, _| {},
+        &["en-US"],
+        |ontology, inventory| {
+            use weksa::{Condition, Layer, OntologyEntry, OntologyStore, Slot, Test};
+            let dir = ontology.parent().unwrap();
+            put_dao_scene(
+                &common::speaker_state_beside(ontology),
+                inventory,
+                &dir.join("c.cc"),
+                &dir.join("e.cc"),
+            );
+            let inv_store = InventoryStore::open(inventory).unwrap();
+            let status = inv_store
+                .inventory()
+                .unwrap()
+                .entries()
+                .find(|e| e.gloss == "relative_status")
+                .unwrap()
+                .id;
+            OntologyStore::open(ontology)
+                .unwrap()
+                .admit(
+                    vec![OntologyEntry {
+                        language: "en-US".into(),
+                        n: 1,
+                        inventory_rev: 4,
+                        layer: Layer::Discourse,
+                        when: vec![Condition {
+                            slot: Slot::Scene,
+                            feature: status,
+                            test: Test::Is(weksa::packet::FeatValue::Option(common::lab("above"))),
+                        }],
+                        choice: "ENABOVE".into(),
+                        examples: vec![],
+                        annotator: weksa::Annotator::Operator,
+                    }],
+                    &inv_store,
+                )
+                .unwrap();
+            extra(&dir.join("c.cc"), &dir.join("e.cc"));
+        },
+    )
+}
+
+/// Answers for items 1 to 3 where item 3 names referent n2 (no entity) as its
+/// addressee, or nobody.
+fn addressing(addressee: Option<&str>) -> Vec<(usize, String)> {
+    (1..=3)
+        .map(|n| {
+            let mut v = serde_json::to_value(draft_of(n)).unwrap();
+            if n == 3 {
+                v["discourse"]["addressee"] = serde_json::json!(addressee);
+            }
+            (n, v.to_string())
+        })
+        .collect()
+}
+
+fn lowering_of(model: &FakeModel, marker: &str) -> Vec<String> {
+    lowering_texts(model)
+        .into_iter()
+        .filter(|t| t.contains(marker))
+        .map(String::from)
+        .collect()
+}
+
+#[test]
+fn round_prompts_carry_scene_selected_entries() {
+    // Above an unnamed addressee: item 3's prompt holds the entry, the other
+    // two (no scene for their groups) read NoScene and print without it.
+    let mut dao = scene_dao(|_, _| {});
+    let mut model = fake(&addressing(Some("n2")));
+    recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    assert_eq!(lowering_texts(&model).len(), 3);
+    let with = lowering_of(&model, "\nonto:en-US:1 [discourse] ENABOVE");
+    assert_eq!(with.len(), 1, "only item 3 has a scene and an addressee");
+    assert_eq!(
+        lowering_texts(&model).iter().filter(|t| t.contains("ontology: none")).count(),
+        2
+    );
+    // The same item with no addressee selects no Scene entry.
+    let mut dao = scene_dao(|_, _| {});
+    let mut model = fake(&addressing(None));
+    recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    assert!(lowering_of(&model, "ENABOVE").is_empty());
+    assert_eq!(lowering_texts(&model).len(), 3);
+}
+
+#[test]
+fn a_scene_read_failure_is_a_lower_refusal() {
+    // A live item of item 3's group, in a language outside the panel, spoken by
+    // someone the scene does not cover: V16 for that group.
+    let mut dao = scene_dao(|corpus, entities| {
+        let mut entity_store = weksa::EntityStore::open(entities).unwrap();
+        entity_store.put(ent("stranger", "en-US", &["Stranger"])).unwrap();
+        let mut store = CorpusStore::open(corpus).unwrap();
+        let mut twin = store.get("item:daodejing:3").unwrap().unwrap();
+        twin.id = "item:daodejing:93".into();
+        twin.language = "pt-BR".into();
+        twin.text = "PORTUGUESEMARK 93 o sabio".into();
+        twin.speaker = common::eid("stranger");
+        twin.names = vec![];
+        twin.prior_turns = vec![];
+        store.add(twin, &entity_store).unwrap();
+    });
+    let mut model = fake(&addressing(Some("n2")));
+    let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    // Item 3 never reached the model; items 1 and 2 did, and the round recorded.
+    assert_eq!(lowering_texts(&model).len(), 2);
+    assert_eq!(r.n(), 1);
+}
+
+#[test]
+fn a_run_pins_its_speaker_state_and_refuses_drift() {
+    let dao = scene_dao(|_, _| {});
+    let r = dao.run.record();
+    let path = dao.ontology.with_file_name("speaker-state.cc");
+    assert_eq!(r.speaker_state, std::fs::canonicalize(&path).unwrap().to_str().unwrap());
+    assert_eq!(r.speaker_state_digest, hex(&path));
+    let root = dao.root.clone();
+    assert_eq!(RunStores::open(&root).unwrap().record(), dao.run.record());
+    let mut bytes = std::fs::read(&path).unwrap();
+    bytes.push(0xc0);
+    std::fs::write(&path, bytes).unwrap();
+    assert_eq!(
+        RunStores::open(&root).err(),
+        Some(RunError::Drift(DriftOf::SpeakerState))
+    );
+}
+
+#[test]
+fn create_refuses_a_scene_its_inventory_cannot_read() {
+    // The scene is admitted against a copy that gained rev 4; the run's head
+    // inventory stops at rev 3.
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/daodejing");
+    let dir = tempfile::tempdir().unwrap();
+    for (from, to) in [("corpus.cc", "c.cc"), ("entity.cc", "e.cc")] {
+        std::fs::copy(src.join(from), dir.path().join(to)).unwrap();
+    }
+    common::dao_rev3_at(&dir.path().join("i.cc"));
+    common::dao_rev3_at(&dir.path().join("rich.cc"));
+    let state = common::speaker_state_in(dir.path());
+    put_dao_scene(&state, &dir.path().join("rich.cc"), &dir.path().join("c.cc"), &dir.path().join("e.cc"));
+    let ontology = common::ontology_in(dir.path());
+    let root = dir.path().join("run");
+    let create = || {
+        RunStores::create(
+            &root,
+            "x",
+            RunPaths {
+                corpus: &dir.path().join("c.cc"),
+                inventory: &dir.path().join("i.cc"),
+                entities: &dir.path().join("e.cc"),
+                ontology: &ontology,
+                speaker_state: &state,
+            },
+            "fake-model",
+            "bag",
+            weksa::run::LowererReach::ToolLessRelay,
+            ModelFamily::Unrecorded,
+            &["en-US".to_string()],
+        )
+    };
+    assert_eq!(create().err(), Some(RunError::SpeakerState));
+    assert!(!root.join("run.cc").exists());
+    assert!(!root.join("inventory.cc").exists());
+}
+
+#[test]
+fn a_run_reads_entries_and_scenes_at_its_own_head() {
+    use weksa::{Condition, Layer, OntologyEntry, OntologyStore, Slot, Test};
+    // An entry and a scene admitted at rev 4 through a Dao-shaped inventory open
+    // a run whose own inventory is seed, proof and the scene revision as rev 3:
+    // beds number revisions independently, so a run reads features at its head.
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/daodejing");
+    let dir = tempfile::tempdir().unwrap();
+    for (from, to) in [("corpus.cc", "c.cc"), ("entity.cc", "e.cc")] {
+        std::fs::copy(src.join(from), dir.path().join(to)).unwrap();
+    }
+    let rich = dir.path().join("rich.cc");
+    common::dao_rev3_at(&rich);
+    let state = common::speaker_state_in(dir.path());
+    put_dao_scene(&state, &rich, &dir.path().join("c.cc"), &dir.path().join("e.cc"));
+    let rich_store = InventoryStore::open(&rich).unwrap();
+    let status = rich_store.inventory().unwrap().entries().find(|e| e.gloss == "relative_status").unwrap().id;
+    let ontology = common::ontology_in(dir.path());
+    OntologyStore::open(&ontology)
+        .unwrap()
+        .admit(
+            vec![OntologyEntry {
+                language: "en-US".into(),
+                n: 1,
+                inventory_rev: 4,
+                layer: Layer::Discourse,
+                when: vec![Condition {
+                    slot: Slot::Scene,
+                    feature: status,
+                    test: Test::Is(weksa::packet::FeatValue::Option(common::lab("above"))),
+                }],
+                choice: "ENABOVE".into(),
+                examples: vec![],
+                annotator: weksa::Annotator::Operator,
+            }],
+            &rich_store,
+        )
+        .unwrap();
+    let head = dir.path().join("i.cc");
+    let mut own = InventoryStore::open(&head).unwrap();
+    for (rev, entries) in [
+        weksa::inventory::seed(),
+        weksa::inventory::proof_revision(),
+        weksa::inventory::speaker_scene_revision(3),
+    ] {
+        own.admit_revision(rev, entries).unwrap();
+    }
+    drop(own);
+    let run = RunStores::create(
+        &dir.path().join("run"),
+        "x",
+        RunPaths {
+            corpus: &dir.path().join("c.cc"),
+            inventory: &head,
+            entities: &dir.path().join("e.cc"),
+            ontology: &ontology,
+            speaker_state: &state,
+        },
+        "fake-model",
+        "bag",
+        weksa::run::LowererReach::ToolLessRelay,
+        ModelFamily::Unrecorded,
+        &["en-US".to_string()],
+    );
+    assert!(run.is_ok(), "{:?}", run.err());
 }

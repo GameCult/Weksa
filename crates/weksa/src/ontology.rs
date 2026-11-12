@@ -1,7 +1,7 @@
 //! The language ontology: per target language, the choices its culture makes
 //! about word, grammar, discourse, sound and script for a speaker in a stance
 //! (ruling `persona-drives-ontology`). An entry says when it applies (feature
-//! conditions over the lowering view's stance and discourse) and what it
+//! conditions over the lowering view's stance, discourse and scene relation) and what it
 //! chooses. `select` is the only reader that decides which entries a lowering
 //! prompt carries, and it runs only inside `Prompt::lower`;
 //! `OntologyStore::admit` is the only writer. Entries are immutable.
@@ -51,8 +51,8 @@ pub enum Test {
     Is(FeatValue),
 }
 
-/// One feature of one slot of the view, tested. Only `Stance` and `Discourse`
-/// reach a lowering view today.
+/// One feature of one slot of the view, tested. `Stance`, `Discourse` and
+/// `Scene` reach a lowering view; `Speaker` does not yet.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Condition {
     pub slot: Slot,
@@ -100,7 +100,9 @@ pub struct OntologyEntry {
     /// The entry's number within its language, from 1.
     #[cultcache(key = 1)]
     pub n: u32,
-    /// The inventory revision the conditions read against.
+    /// The revision, of the inventory the entry was admitted through, at which the
+    /// store read its conditions: provenance only; a run reads the conditions'
+    /// features at its own head.
     #[cultcache(key = 2)]
     pub inventory_rev: u32,
     #[cultcache(key = 3)]
@@ -149,8 +151,9 @@ impl Ontology {
 }
 
 /// The entries of exactly `language` whose every condition holds against the
-/// view's stance and discourse features, in `n` order. An absent feature meets
-/// no condition. Nothing else of the view is read.
+/// view's stance, discourse and scene-relation features (the scene's only when
+/// `with_scene` selected a relation), in `n` order. An absent feature meets no
+/// condition. Nothing else of the view is read.
 pub fn select<'a>(
     o: &'a Ontology,
     language: &str,
@@ -163,6 +166,7 @@ pub fn select<'a>(
             e.when.iter().all(|c| match c.slot {
                 Slot::Stance => c.holds(&input.stance().features),
                 Slot::Discourse => c.holds(&input.discourse().features),
+                Slot::Scene => c.holds(input.scene()),
                 _ => false,
             })
         })
