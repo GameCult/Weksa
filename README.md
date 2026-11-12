@@ -25,7 +25,9 @@ measured.
   published schemas in `schemas/cultnet/`.
 - `data/corpus/corpus.cc`, `data/entity/entity.cc` and `data/interlingua/inventory.cc`: the English
   corpus, its entities and the inventory, read with `weksa corpus dump`,
-  `weksa entity dump` and `weksa inventory dump`.
+  `weksa entity dump` and `weksa inventory dump`. `data/original/inventory.cc`
+  carries its own Validation-informed lexicon revision (rev 5) for lowering
+  measurements; scored runs use `data/interlingua`.
 - [Lowering target](./docs/targets/interlingua-lowering.md) and
   [its map](./docs/targets/interlingua-lowering-map.md): the design, scoring
   and cut sequence.
