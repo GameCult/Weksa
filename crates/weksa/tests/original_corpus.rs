@@ -314,11 +314,12 @@ fn committed_ontology_is_model_drafted_and_reads_every_inventory() {
             "{lang} has no Stance-conditioned entry"
         );
     }
-    // Every committed inventory bed, the default one included, carries the
-    // revisions the entries bind to: a run opens over each with its panel.
-    // The default bed (data/interlingua) is read with the original corpus,
-    // entities and scenes, as `loop open` with its defaults and `--corpus
-    // data/original` does.
+    // A run opens over every committed inventory bed with its panel. The default
+    // bed (data/interlingua) numbers the scene revision 3 and holds no Dao
+    // revision; the Dao beds number it 4. Entries and scenes admitted at 4 open
+    // over both because a run reads features at its own head. The default bed is
+    // read with the original corpus, entities and scenes, as `loop open` with its
+    // defaults and `--corpus data/original` does.
     for (corpus, bed, panel) in [
         ("original", "original", &PANEL[..]),
         ("daodejing", "daodejing", &PANEL[..1]),
@@ -349,7 +350,34 @@ fn committed_ontology_is_model_drafted_and_reads_every_inventory() {
             ModelFamily::Unrecorded,
             &panel.iter().map(|l| l.to_string()).collect::<Vec<_>>(),
         )
-        .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+.unwrap_or_else(|e| panic!("{name}: {e:?}"));
+    }
+    // Revision numbers are local to a bed, so agreement is proven on the beds:
+    // every feature an entry condition or a committed scene relation names means
+    // the same in all three (gloss, value kind, slots, retirement).
+    let mut named: std::collections::BTreeSet<weksa::InvId> = entries
+        .iter()
+        .flat_map(|e| e.when.iter().map(|c| c.feature))
+        .collect();
+    let scenes = weksa::SpeakerStateStore::open(&data.join("original/speaker-state.cc")).unwrap();
+    for s in scenes.all_scenes().unwrap() {
+        named.extend(s.relations.iter().flat_map(|r| r.features.iter().map(|f| f.feature)));
+    }
+    let beds: Vec<_> = ["interlingua", "original", "daodejing"]
+        .iter()
+        .map(|b| {
+            let copy = tmp.path().join(format!("bed-{b}.cc"));
+            std::fs::copy(data.join(b).join("inventory.cc"), &copy).unwrap();
+            InventoryStore::open(&copy).unwrap().inventory().unwrap()
+        })
+        .collect();
+    for id in named {
+        let shape = |inv: &weksa::Inventory| {
+            let e = inv.entry(&id).unwrap_or_else(|| panic!("{id} is missing from a bed"));
+            (e.gloss.clone(), e.value_kind.clone(), e.applies_to.clone(), e.retired_rev)
+        };
+        assert_eq!(shape(&beds[0]), shape(&beds[1]), "{id}");
+        assert_eq!(shape(&beds[1]), shape(&beds[2]), "{id}");
     }
 }
 
@@ -1032,12 +1060,13 @@ fn committed_scenes_cover_original_groups() {
 }
 
 /// The committed ontology's Scene-conditioned entries, over every scene relation
-/// (relative_status x in_group x intimacy in steps of 50): an entry that names
-/// a register or politeness level has a Scene condition, and two Scene-conditioned
-/// entries of one language and layer are never selected by the same relation, so
-/// the ontology never gives opposing instructions for one relation.
+/// (relative_status x in_group x intimacy in steps of 50): two entries of one
+/// language and layer are never selected by the same relation, so the ontology
+/// never gives two instructions for one relation in one layer. Whether an entry's
+/// text keeps a politeness level on the scene is a model reading owed per change,
+/// not a test.
 #[test]
-fn scene_entries_never_co_select_in_a_layer_and_levels_hang_on_the_scene() {
+fn scene_entries_never_co_select_in_a_layer() {
     use weksa::inventory::Slot;
     use weksa::ontology::{Condition, Test};
     use weksa::packet::FeatValue;
@@ -1050,27 +1079,6 @@ fn scene_entries_never_co_select_in_a_layer_and_levels_hang_on_the_scene() {
     let id = |gloss: &str| inv.entries().find(|e| e.gloss == gloss).unwrap().id;
     let (status, intimacy, in_group) = (id("relative_status"), id("intimacy"), id("in_group"));
     let entries = OntologyStore::open(&onto).unwrap().all().unwrap();
-    // Terms that name a register or politeness level.
-    let levels = [
-        "teineigo", "sonkeigo", "kenjogo", "desu/masu", "honorific", "register",
-        "politeness", "polite", "formal", "informal", "casual",
-    ];
-    for e in &entries {
-        let lower = e.choice.to_lowercase();
-        if levels.iter().any(|t| lower.contains(t)) {
-            // The seed entries that say they set no level carry "no politeness" or
-            // follow the rest of the line; every other naming is Scene-conditioned.
-            let disclaimed = lower.contains("sets no politeness")
-                || lower.contains("politeness follows the rest")
-                || lower.contains("politeness follows")
-                || lower.contains("own register allows");
-            assert!(
-                disclaimed || e.when.iter().any(|c: &Condition| c.slot == Slot::Scene),
-                "{} names a level without a Scene condition",
-                e.key()
-            );
-        }
-    }
     let holds = |c: &Condition, rel: (&str, u16, bool)| match (c.feature, &c.test) {
         (f, Test::Is(FeatValue::Option(l))) if f == status => l.as_str() == rel.0,
         (f, Test::AtLeast(g)) if f == intimacy => rel.1 >= g.get(),

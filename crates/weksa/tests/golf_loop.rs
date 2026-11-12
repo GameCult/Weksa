@@ -5047,3 +5047,70 @@ fn create_refuses_a_scene_its_inventory_cannot_read() {
     assert!(!root.join("run.cc").exists());
     assert!(!root.join("inventory.cc").exists());
 }
+
+#[test]
+fn a_run_reads_entries_and_scenes_at_its_own_head() {
+    use weksa::{Condition, Layer, OntologyEntry, OntologyStore, Slot, Test};
+    // An entry and a scene admitted at rev 4 through a Dao-shaped inventory open
+    // a run whose own inventory is seed, proof and the scene revision as rev 3:
+    // beds number revisions independently, so a run reads features at its head.
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/daodejing");
+    let dir = tempfile::tempdir().unwrap();
+    for (from, to) in [("corpus.cc", "c.cc"), ("entity.cc", "e.cc")] {
+        std::fs::copy(src.join(from), dir.path().join(to)).unwrap();
+    }
+    let rich = dir.path().join("rich.cc");
+    common::dao_rev3_at(&rich);
+    let state = common::speaker_state_in(dir.path());
+    put_dao_scene(&state, &rich, &dir.path().join("c.cc"), &dir.path().join("e.cc"));
+    let rich_store = InventoryStore::open(&rich).unwrap();
+    let status = rich_store.inventory().unwrap().entries().find(|e| e.gloss == "relative_status").unwrap().id;
+    let ontology = common::ontology_in(dir.path());
+    OntologyStore::open(&ontology)
+        .unwrap()
+        .admit(
+            vec![OntologyEntry {
+                language: "en-US".into(),
+                n: 1,
+                inventory_rev: 4,
+                layer: Layer::Discourse,
+                when: vec![Condition {
+                    slot: Slot::Scene,
+                    feature: status,
+                    test: Test::Is(weksa::packet::FeatValue::Option(common::lab("above"))),
+                }],
+                choice: "ENABOVE".into(),
+                examples: vec![],
+                annotator: weksa::Annotator::Operator,
+            }],
+            &rich_store,
+        )
+        .unwrap();
+    let head = dir.path().join("i.cc");
+    let mut own = InventoryStore::open(&head).unwrap();
+    for (rev, entries) in [
+        weksa::inventory::seed(),
+        weksa::inventory::proof_revision(),
+        weksa::inventory::speaker_scene_revision(3),
+    ] {
+        own.admit_revision(rev, entries).unwrap();
+    }
+    drop(own);
+    let run = RunStores::create(
+        &dir.path().join("run"),
+        "x",
+        RunPaths {
+            corpus: &dir.path().join("c.cc"),
+            inventory: &head,
+            entities: &dir.path().join("e.cc"),
+            ontology: &ontology,
+            speaker_state: &state,
+        },
+        "fake-model",
+        "bag",
+        weksa::run::LowererReach::ToolLessRelay,
+        ModelFamily::Unrecorded,
+        &["en-US".to_string()],
+    );
+    assert!(run.is_ok(), "{:?}", run.err());
+}

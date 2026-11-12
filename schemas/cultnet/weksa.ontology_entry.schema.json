@@ -17,7 +17,7 @@
       }
     },
     "inventory_rev": {
-      "description": "The inventory revision the conditions read against.",
+      "description": "The revision, of the inventory the entry was admitted through, at which the\nstore read its conditions: provenance only; a run reads the conditions'\nfeatures at its own head.",
       "type": "integer",
       "format": "uint32",
       "minimum": 0

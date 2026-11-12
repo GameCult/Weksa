@@ -43,7 +43,6 @@ use crate::corpus::{CorpusItem, CorpusItemId, ModelFamily, Source};
 use crate::encode::{EditDraft, LoweringDraft, PacketDraft, encoder_id};
 use crate::form::{is_attestation, is_language_tag, is_slug};
 use crate::model::{ModelPort, PortError};
-use crate::ontology::OntologyEntry;
 use crate::packet::{Packet, Stance};
 use crate::score::{CHRF_VERSION, chrf, Embedder, ItemScore, ScoreInput, Scorer, SplitMean, aggregate};
 use crate::split::{Split, SplitScheme, fnv1a64, fnv1a64_of, hex16};
@@ -807,46 +806,34 @@ impl RunStores {
     }
 
     /// Every ontology entry of a panel language reads against the run's head
-    /// inventory at its own revision: the check the store applied at admission,
-    /// applied again to this inventory.
+    /// inventory: every condition's feature is live at the head in the
+    /// condition's slot and fits its test. An entry's `inventory_rev` names a
+    /// revision of the inventory it was admitted through, and beds number
+    /// revisions independently, so a run never reads it.
     fn check_ontology(&self) -> Result<(), RunError> {
         let inventory = self.inventory.inventory().map_err(|_| RunError::Store)?;
         let entries = self.ontology.all().map_err(|_| RunError::Store)?;
-        let head = inventory.latest().map(|r| r.n);
         entries
             .iter()
             .filter(|e| self.record.panel.contains(&e.language))
             .try_for_each(|e| {
-                // At its own revision, and again at the head: an entry on a
-                // feature the head retired could never select.
-                let at_head = OntologyEntry {
-                    inventory_rev: head.ok_or(RunError::Ontology)?,
-                    ..e.clone()
-                };
-                check_ontology_entry(e, &inventory)
-                    .and_then(|()| check_ontology_entry(&at_head, &inventory))
-                    .map_err(|_| RunError::Ontology)
+                let head = inventory.latest().map(|r| r.n).ok_or(RunError::Ontology)?;
+                check_ontology_entry(e, &inventory, head).map_err(|_| RunError::Ontology)
             })
     }
 
-    /// Every scene's relation features read against the run's inventory at the
-    /// scene's own revision, and again at the head: the checks `put_scene`
-    /// applied, applied again to this inventory.
+    /// Every scene's relation features read against the run's head inventory
+    /// in slot `Scene`, as [`check_ontology`](Self::check_ontology) reads
+    /// entries: the scene's `inventory_rev` is admission provenance a run never reads.
     fn check_scenes(&self) -> Result<(), RunError> {
         let inventory = self.inventory.inventory().map_err(|_| RunError::Store)?;
         let scenes = self.speaker_state.all_scenes().map_err(|_| RunError::Store)?;
-        for scene in &scenes {
-            let head = inventory.latest().map(|r| r.n).ok_or(RunError::SpeakerState)?;
-            for r in &scene.relations {
-                for rev in [scene.inventory_rev, head] {
-                    if !feature_refusals(&inventory, rev, &r.features, Slot::Scene).is_empty() {
-                        return Err(RunError::SpeakerState);
-                    }
-                }
-            }
-            if scene.relations.is_empty()
-                && !(inventory.has_revision(scene.inventory_rev) && inventory.has_revision(head))
-            {
+        if scenes.is_empty() {
+            return Ok(());
+        }
+        let head = inventory.latest().map(|r| r.n).ok_or(RunError::SpeakerState)?;
+        for r in scenes.iter().flat_map(|s| &s.relations) {
+            if !feature_refusals(&inventory, head, &r.features, Slot::Scene).is_empty() {
                 return Err(RunError::SpeakerState);
             }
         }

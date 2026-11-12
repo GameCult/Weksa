@@ -100,7 +100,9 @@ pub struct OntologyEntry {
     /// The entry's number within its language, from 1.
     #[cultcache(key = 1)]
     pub n: u32,
-    /// The inventory revision the conditions read against.
+    /// The revision, of the inventory the entry was admitted through, at which the
+    /// store read its conditions: provenance only; a run reads the conditions'
+    /// features at its own head.
     #[cultcache(key = 2)]
     pub inventory_rev: u32,
     #[cultcache(key = 3)]
