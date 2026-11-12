@@ -1722,7 +1722,7 @@ impl Reading {
 pub enum Metric {
     Chrf,
     Meaning,
-    /// Only the panel rule reads it: [`decide_panel`].
+    /// The composite fell, or a reading was not a finite number.
     Composite,
 }
 
@@ -1758,15 +1758,32 @@ fn nano(x: f64) -> i64 {
     (x * 1e9).round() as i64
 }
 
-/// The accept rule. A metric that falls by more than its tolerance (the floor,
-/// at least one step) rejects; otherwise the composite must gain strictly more
-/// than [`threshold`]. Means count a refused Validation item as 0, so refusing a
+/// The accept rule, the one owner of what regresses a language. In order: a
+/// non-finite reading or difference rejects as `Regressed(Composite)` (fail
+/// closed: `nano` reads NaN as 0, which would otherwise read as unchanged); a
+/// metric that falls by more than its tolerance (the floor, at least one step)
+/// rejects; a composite strictly below the base composite rejects, with no
+/// tolerance; otherwise the composite must gain strictly more than
+/// [`threshold`]. Means count a refused Validation item as 0, so refusing a
 /// weak item cannot raise a reading. Differences are compared in billionths.
+///
+/// The Ladder bound (Blum and Hardt 2015) rests on the composite rule: an
+/// accepted edit lowers no composite (on the billionth grid) and raises one by
+/// more than [`threshold`], at least one [`LADDER_STEP`]. A composite lies in
+/// 0 to 1 and never falls, so a language's head can be raised at most
+/// `1 / LADDER_STEP` times, and a panel of `L` languages accepts at most
+/// `L / LADDER_STEP` edits in a run. A tolerance on the composite would let
+/// accepts ratchet a language down and back up forever.
 pub fn decide(base: &Reading, candidate: &Reading, floor: &Reading) -> Verdict {
-    if nano(candidate.chrf - base.chrf) < -nano(floor.chrf.max(100.0 * LADDER_STEP)) {
+    let finite = |r: &Reading| r.chrf.is_finite() && r.meaning.is_finite() && r.composite.is_finite();
+    if !(finite(base) && finite(candidate) && finite(floor)) {
+        Verdict::Rejected(Why::Regressed(Metric::Composite))
+    } else if nano(candidate.chrf - base.chrf) < -nano(floor.chrf.max(100.0 * LADDER_STEP)) {
         Verdict::Rejected(Why::Regressed(Metric::Chrf))
     } else if nano(candidate.meaning - base.meaning) < -nano(floor.meaning.max(LADDER_STEP)) {
         Verdict::Rejected(Why::Regressed(Metric::Meaning))
+    } else if nano(candidate.composite - base.composite) < 0 {
+        Verdict::Rejected(Why::Regressed(Metric::Composite))
     } else if nano(candidate.composite - base.composite) > nano(threshold(floor)) {
         Verdict::Accepted
     } else {
@@ -1775,32 +1792,21 @@ pub fn decide(base: &Reading, candidate: &Reading, floor: &Reading) -> Verdict {
 }
 
 /// The accept rule across the panel, over one `(base, candidate, floor)` row
-/// per panel language in panel order: [`decide`] per language, unchanged, then
-/// Pareto non-regression. Any language that regresses rejects (the first in
-/// panel order names the metric); a language regresses when [`decide`] says so
-/// or when its composite falls below its base by more than its tolerance, the
-/// floor but never under one [`LADDER_STEP`] (compared in billionths, as
-/// [`decide`] does), because each metric inside its tolerance can still sum to
-/// a composite drop that two opposed accepts would ratchet. Otherwise the edit is accepted when at least
-/// one language gains past its own threshold, and rejected as no gain when none
-/// does. A language never buys another's regression: Wang, Lipton and Tsvetkov
-/// (EMNLP 2020) measure negative interference between languages sharing
-/// parameters, and the convergence test reads the same way (no accepted change
-/// raised any panel language's composite).
+/// per panel language in panel order: [`decide`] per language and nothing
+/// else, then Pareto non-regression. Any language that regresses rejects (the
+/// first in panel order names the metric); otherwise the edit is accepted when
+/// at least one language gains past its own threshold, and rejected as no gain
+/// when none does. A one-language panel is `decide` exactly. A language never
+/// buys another's regression: Wang, Lipton and Tsvetkov (EMNLP 2020) measure
+/// negative interference between languages sharing parameters, and the
+/// convergence test reads the same way (no accepted change raised any panel
+/// language's composite while lowering another's). Every accept raises some
+/// language's composite by more than its threshold and lowers none, which
+/// bounds a run's accepts by `L / LADDER_STEP` (see [`decide`]).
 pub fn decide_panel(rows: &[(Reading, Reading, Reading)]) -> Verdict {
     let verdicts: Vec<Verdict> = rows
         .iter()
-        .map(|(base, candidate, floor)| {
-            match decide(base, candidate, floor) {
-                Verdict::Rejected(Why::NoGain) | Verdict::Accepted
-                    if nano(candidate.composite - base.composite)
-                        < -nano(floor.composite.max(LADDER_STEP)) =>
-                {
-                    Verdict::Rejected(Why::Regressed(Metric::Composite))
-                }
-                verdict => verdict,
-            }
-        })
+        .map(|(base, candidate, floor)| decide(base, candidate, floor))
         .collect();
     if let Some(regressed) = verdicts
         .iter()
@@ -2344,7 +2350,26 @@ mod tests {
         assert_eq!(decide(&base, &gain(0.504), &zero), rejected(Why::NoGain));
         assert_eq!(decide(&base, &gain(0.506), &zero), Verdict::Accepted);
         assert_eq!(decide(&base, &gain(0.5), &zero), rejected(Why::NoGain));
-        assert_eq!(decide(&base, &gain(0.4), &zero), rejected(Why::NoGain));
+        // A composite below the base rejects with no tolerance; a tie does not.
+        let composite = rejected(Why::Regressed(Metric::Composite));
+        assert_eq!(decide(&base, &gain(0.4), &zero), composite);
+        assert_eq!(decide(&base, &gain(0.5 - 1e-8), &zero), composite);
+        assert_eq!(decide(&base, &gain(0.5 - 1e-10), &zero), rejected(Why::NoGain), "under a billionth");
+        // Whatever the floors say: a wide composite floor and a wide meaning
+        // floor buy no composite fall, and each metric inside its own tolerance
+        // does not either.
+        let wide = reading(50.0, 0.4, 0.4);
+        assert_eq!(decide(&base, &gain(0.5 - 1e-8), &wide), composite);
+        assert_eq!(decide(&base, &reading(49.6, 0.496, 0.4), &zero), composite);
+        assert_eq!(decide(&base, &gain(0.5), &wide), rejected(Why::NoGain));
+        // Fail closed: NaN and infinity read as a regression, never as unchanged.
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(decide(&base, &reading(bad, 0.5, 0.6), &zero), composite);
+            assert_eq!(decide(&base, &reading(50.0, bad, 0.6), &zero), composite);
+            assert_eq!(decide(&base, &reading(50.0, 0.5, bad), &zero), composite);
+            assert_eq!(decide(&reading(50.0, 0.5, bad), &gain(0.6), &zero), composite);
+            assert_eq!(decide(&base, &gain(0.6), &reading(0.0, 0.0, bad)), composite);
+        }
         // A floor above the step sets the threshold: a gain equal to it is no gain.
         let floor = reading(0.0, 0.0, 0.25);
         assert_eq!(decide(&base, &gain(0.75), &floor), rejected(Why::NoGain));
@@ -2380,11 +2405,16 @@ mod tests {
             decide_panel(&[(base, meaning_down, zero), (base, regressed, zero)]),
             rejected(Why::Regressed(Metric::Meaning))
         );
-        // Both within their floors, neither gaining: no gain.
+        // Neither gaining: no gain.
+        assert_eq!(
+            decide_panel(&[(base, flat, zero), (base, flat, zero)]),
+            rejected(Why::NoGain)
+        );
+        // A wide chrF floor forgives the chrF fall, not the composite's.
         let wide = reading(15.0, 0.2, 0.2);
         assert_eq!(
             decide_panel(&[(base, regressed, wide), (base, flat, zero)]),
-            rejected(Why::NoGain)
+            rejected(Why::Regressed(Metric::Composite))
         );
         // A big gain in one language cannot buy a small regression in another,
         // however few items the other holds.
@@ -2397,7 +2427,7 @@ mod tests {
         // another language's gain cannot buy it.
         let sag = reading(49.6, 0.496, 0.4);
         let tol = reading(0.5, 0.005, 0.05);
-        assert_eq!(decide(&base, &sag, &tol), rejected(Why::NoGain));
+        assert_eq!(decide(&base, &sag, &tol), rejected(Why::Regressed(Metric::Composite)));
         assert_eq!(
             decide_panel(&[(base, gained, zero), (base, sag, tol)]),
             rejected(Why::Regressed(Metric::Composite))
@@ -2412,19 +2442,125 @@ mod tests {
         let (b0, b1) = (reading(50.0, 0.5, 0.50), reading(50.0, 0.5, 0.40));
         assert_eq!(decide_panel(&[(a0, a1, zero), (b0, b1, zero)]), rejected(Why::Regressed(Metric::Composite)));
         assert_eq!(decide_panel(&[(a1, a0, zero), (b1, b0, zero)]), rejected(Why::Regressed(Metric::Composite)));
-        // A fall inside the floor (and each metric inside its own) still accepts.
-        let wide = reading(50.0, 0.5, 0.05);
-        assert_eq!(
-            decide_panel(&[(base, gained, zero), (base, reading(49.6, 0.496, 0.47), wide)]),
-            Verdict::Accepted
-        );
         // A one-language panel is decide().
-        for candidate in [gained, regressed, flat, meaning_down] {
+        for candidate in [gained, regressed, flat, meaning_down, sag, reading(50.0, 0.5, f64::NAN)] {
             assert_eq!(
                 decide_panel(&[(base, candidate, zero)]),
                 decide(&base, &candidate, &zero)
             );
         }
+    }
+
+    /// One panel row per language: (base, candidate, floor), metrics held
+    /// inside every tolerance so only the composite moves.
+    fn rows(bases: &[f64], moves: &[f64], floor: f64) -> Vec<(Reading, Reading, Reading)> {
+        bases
+            .iter()
+            .zip(moves)
+            .map(|(b, d)| {
+                (
+                    reading(50.0, 0.5, *b),
+                    reading(50.0, 0.5, b + d),
+                    reading(0.0, 0.0, floor),
+                )
+            })
+            .collect()
+    }
+
+    /// Soul's cycling cases: edits that raise one language and lower the others
+    /// inside every metric tolerance used to be accepted forever. None is.
+    #[test]
+    fn a_rotation_of_gains_and_small_falls_is_never_accepted() {
+        // Three languages: each edit raises one by 0.0075, lowers two by 0.00375.
+        let mut head = [0.5, 0.5, 0.5];
+        let mut accepted = 0;
+        for k in 0..300 {
+            let mut step = [-0.00375; 3];
+            step[k % 3] = 0.0075;
+            if decide_panel(&rows(&head, &step, 0.0)) == Verdict::Accepted {
+                accepted += 1;
+                for (h, d) in head.iter_mut().zip(step) {
+                    *h += d;
+                }
+            }
+        }
+        assert_eq!(accepted, 0, "of 300");
+        // Two languages: a gain of the threshold plus 2e-9 against a fall of the
+        // threshold, alternating, with the composites flat overall.
+        let t = LADDER_STEP;
+        let head = [0.5, 0.5];
+        let mut accepted = 0;
+        for k in 0..2000 {
+            let mut step = [-t, -t];
+            step[k % 2] = t + 2e-9;
+            if decide_panel(&rows(&head, &step, 0.0)) == Verdict::Accepted {
+                accepted += 1;
+            }
+        }
+        assert_eq!(accepted, 0, "of 2000");
+    }
+
+    /// Over a random walk of proposed edits, an accept lowers no composite and a
+    /// run accepts at most `L / LADDER_STEP` of them (the Ladder bound).
+    #[test]
+    fn accepts_per_run_stay_inside_the_ladder_bound() {
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for languages in [1usize, 2, 3, 5] {
+            let mut head: Vec<f64> = (0..languages).map(|_| 0.2 * next()).collect();
+            let floor = 0.006 * next();
+            let mut accepted = 0usize;
+            for _ in 0..50_000 {
+                // A composite is a mean of fractions: candidates stay in 0 to 1.
+                let step: Vec<f64> = head
+                    .iter()
+                    .map(|h| (h + (next() - 0.03) * 0.02).clamp(0.0, 1.0) - h)
+                    .collect();
+                if decide_panel(&rows(&head, &step, floor)) == Verdict::Accepted {
+                    accepted += 1;
+                    for (h, d) in head.iter_mut().zip(&step) {
+                        assert!(*d > -1e-9, "an accept lowered a composite by {d}");
+                        *h += d;
+                    }
+                }
+            }
+            let bound = (languages as f64 / LADDER_STEP) as usize;
+            assert!(accepted <= bound, "{languages} languages: {accepted} accepts > {bound}");
+            assert!(accepted > 0, "the walk accepts something ({languages} languages)");
+        }
+    }
+
+    #[test]
+    fn a_composite_regression_prints_its_name() {
+        let r = reading(50.0, 0.5, 0.5);
+        let d = Decision {
+            k: 1,
+            base_round: 1,
+            base_rev: 3,
+            base_inventory_digest: String::new(),
+            edit: Call { prompt: String::new(), items: vec![] },
+            edit_answer_digest: None,
+            candidate_rev: Some(4),
+            candidate_inventory_digest: None,
+            candidate_round: None,
+            verdict: Verdict::Rejected(Why::Regressed(Metric::Composite)),
+            panel: vec![PanelReading {
+                language: "en-US".into(),
+                base: r,
+                candidate: Some(reading(50.0, 0.5, 0.4)),
+                floor: reading(0.0, 0.0, 0.0),
+                threshold: LADDER_STEP,
+            }],
+        };
+        assert_eq!(
+            d.line(),
+            "cycle 1 rev 3->4 en-US base=0.5000 candidate=0.4000 floor=0.0000 threshold=0.0050 rejected regressed-composite"
+        );
     }
 
     #[test]

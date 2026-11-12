@@ -107,7 +107,7 @@
           ]
         },
         {
-          "description": "Only the panel rule reads it: [`decide_panel`].",
+          "description": "The composite fell, or a reading was not a finite number.",
           "type": "string",
           "const": "Composite"
         }
