@@ -666,3 +666,163 @@ fn a_panel_round_reads_both_languages() {
         }
     }
 }
+
+/// The eight ja-JP Test sentences, byte for byte: each is the Aozora Bunko
+/// card file's text with only the ruby (《》, ｜) removed and NFC applied, a whole
+/// sentence, checked against the card's XHTML on 2026-11-12. A change to one
+/// is a new item, never an edit of these.
+#[test]
+fn the_eight_ja_test_sentences_are_pinned_verbatim() {
+    let want = [
+        (
+            "item:holdout-ja:1",
+            "親譲りの無鉄砲で小供の時から損ばかりしている。",
+            "holdout-ja-bocchan-6",
+            "entity:pd-soseki",
+            "https://www.aozora.gr.jp/cards/000148/files/752_14964.html",
+        ),
+        (
+            "item:holdout-ja:2",
+            "尾張の停車場で他の乗組員は言合せたように、残らず下りたので、函の中にはただ上人と私と二人になった。",
+            "holdout-ja-koya-hijiri-4",
+            "entity:pd-kyoka",
+            "https://www.aozora.gr.jp/cards/000050/files/521_20583.html",
+        ),
+        (
+            "item:holdout-ja:3",
+            "高瀬舟に乗る罪人の過半は、いわゆる心得違いのために、思わぬ科を犯した人であった。",
+            "holdout-ja-takasebune-14",
+            "entity:pd-ogai",
+            "https://www.aozora.gr.jp/cards/000129/files/45245_22007.html",
+        ),
+        (
+            "item:holdout-ja:4",
+            "ジムは僕より身長が高いくせに、絵はずっと下手でした。",
+            "holdout-ja-hitofusa-no-budo-4",
+            "entity:pd-arishima",
+            "https://www.aozora.gr.jp/cards/000025/files/211_20472.html",
+        ),
+        (
+            "item:holdout-ja:5",
+            "風がどうと吹いてきて、草はざわざわ、木の葉はかさかさ、木はごとんごとんと鳴りました。",
+            "holdout-ja-chumon-6",
+            "entity:pd-kenji",
+            "https://www.aozora.gr.jp/cards/000081/files/43754_17659.html",
+        ),
+        (
+            "item:holdout-ja:6",
+            "えたいの知れない不吉な塊が私の心を始終圧えつけていた。",
+            "holdout-ja-lemon-3",
+            "entity:pd-kajii",
+            "https://www.aozora.gr.jp/cards/000074/files/424_19826.html",
+        ),
+        (
+            "item:holdout-ja:7",
+            "多摩川の二子の渡しをわたって少しばかり行くと溝口という宿場がある。",
+            "holdout-ja-wasureenu-7",
+            "entity:pd-kunikida",
+            "https://www.aozora.gr.jp/cards/000038/files/1409_34798.html",
+        ),
+        (
+            "item:holdout-ja:8",
+            "一人の下人が、羅生門の下で雨やみを待っていた。",
+            "holdout-ja-rashomon-1",
+            "entity:pd-akutagawa",
+            "https://www.aozora.gr.jp/cards/000879/files/127_15260.html",
+        ),
+    ];
+    let (corpus, _) = stores();
+    for (id, text, group, speaker, url) in want {
+        let item = corpus.get(id).unwrap().unwrap();
+        assert_eq!(item.text, text, "{id}");
+        assert_eq!(
+            (item.group.as_str(), item.speaker.as_str()),
+            (group, speaker),
+            "{id}"
+        );
+        assert_eq!(item.language, "ja-JP", "{id}");
+        assert_eq!(SplitScheme::V1.live(&item), Some(Split::Test), "{id}");
+        let Source::PublicDomain { edition_url, .. } = &item.source else {
+            panic!("{id}: not public-domain");
+        };
+        assert_eq!(edition_url, url, "{id}");
+    }
+}
+
+/// The concepts the pinned inventory holds, as each language names them in the
+/// passages (a surface that appears in a passage). Every passage of both
+/// languages rests on at least one live concept, so the two panel legs are
+/// measured on the same inventory.
+const LEXICON: [(&str, &[&str], &[&str]); 21] = [
+    ("endanger", &["endanger"], &["危う", "危な"]),
+    ("prevent", &["prevent"], &["防げ", "妨げ"]),
+    ("control", &["control"], &["操", "支配"]),
+    (
+        "request",
+        &["please ask", "request"],
+        &["くれませんか", "いただけませんか", "お願い"],
+    ),
+    ("sage", &["sage"], &["賢者"]),
+    ("mind", &["mind"], &["心"]),
+    ("belly", &["belly"], &["腹"]),
+    ("will", &["will"], &["意志"]),
+    ("bone", &["bone"], &["骨"]),
+    ("empty", &["empt"], &["空にし", "空の器", "空なのに"]),
+    ("fill", &["fill"], &["満た", "いっぱい"]),
+    ("weaken", &["weaken"], &["弱ら", "弱っ"]),
+    ("strengthen", &["strengthen"], &["強く", "強い"]),
+    ("heaven", &["heaven"], &["天"]),
+    ("earth", &["earth"], &["大地", "地は", "天と地"]),
+    ("water", &["water"], &["水"]),
+    ("compare", &["compare"], &["比べ"]),
+    ("resemble", &["resemble"], &["似"]),
+    ("continues_long", &[], &["長く続", "久しく続"]),
+    ("true_words", &[], &["誠の言葉", "真実の言葉"]),
+    ("seem_paradoxical", &[], &["逆さま"]),
+];
+
+#[test]
+fn every_original_passage_rests_on_a_live_inventory_concept() {
+    use weksa::inventory::Family;
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/original");
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::copy(dir.join("inventory.cc"), tmp.path().join("inventory.cc")).unwrap();
+    let inventory = InventoryStore::open(&tmp.path().join("inventory.cc"))
+        .unwrap()
+        .inventory()
+        .unwrap();
+    let rev = inventory.latest().unwrap().n;
+    let live: Vec<&str> = inventory
+        .entries()
+        .filter(|e| e.family() == Family::Concept && e.live_at(rev))
+        .map(|e| e.gloss.as_str())
+        .collect();
+    for (concept, _, _) in LEXICON {
+        assert!(live.contains(&concept), "{concept} is not a live concept");
+    }
+    let (corpus, _) = stores();
+    for (lang, col) in [("en-US", 0), ("ja-JP", 1)] {
+        let mut hit = std::collections::BTreeSet::new();
+        let mut passages = 0;
+        for item in corpus.all().unwrap() {
+            if item.language != lang || !matches!(item.source, Source::ModelWritten { .. }) {
+                continue;
+            }
+            passages += 1;
+            let text = item.text.to_lowercase();
+            let found: Vec<&str> = LEXICON
+                .iter()
+                .filter(|(_, en, ja)| [en, ja][col].iter().any(|s| text.contains(s)))
+                .map(|(c, _, _)| *c)
+                .collect();
+            assert!(!found.is_empty(), "{} rests on no live concept", item.id);
+            hit.extend(found);
+        }
+        eprintln!(
+            "{lang}: {passages} passages on a live concept, {} distinct concepts",
+            hit.len()
+        );
+        assert_eq!(passages, 28);
+        assert!(hit.len() >= 12, "{lang}: {} distinct concepts", hit.len());
+    }
+}
