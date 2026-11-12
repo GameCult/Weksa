@@ -750,36 +750,92 @@ fn the_eight_ja_test_sentences_are_pinned_verbatim() {
 }
 
 /// The concepts the pinned inventory holds, as each language names them in the
-/// passages (a surface that appears in a passage). Every passage of both
-/// languages rests on at least one live concept, so the two panel legs are
-/// measured on the same inventory.
+/// passages: English by word stem, Japanese by a multi-character surface. This
+/// is a tripwire, not the encoder: it fails a passage that names no live
+/// concept, and `FALSE_FRIENDS` strips the idioms that hold a concept's
+/// character without its meaning (天気, 心配, 腹が立つ ...) before matching.
 const LEXICON: [(&str, &[&str], &[&str]); 21] = [
-    ("endanger", &["endanger"], &["危う", "危な"]),
-    ("prevent", &["prevent"], &["防げ", "妨げ"]),
-    ("control", &["control"], &["操", "支配"]),
+    ("endanger", &["endanger"], &["危う", "危ない"]),
+    ("prevent", &["prevent"], &["防い", "防げ", "妨げ"]),
+    ("control", &["control"], &["操ろ", "操る", "操れ", "支配"]),
     (
         "request",
-        &["please ask", "request"],
-        &["くれませんか", "いただけませんか", "お願い"],
+        &["request"],
+        &["いただけませんか", "もらえますか", "くれませんか", "お願い"],
     ),
     ("sage", &["sage"], &["賢者"]),
-    ("mind", &["mind"], &["心"]),
-    ("belly", &["belly"], &["腹"]),
+    ("mind", &["mind"], &["心が", "心は", "心を", "心の", "心も"]),
+    (
+        "belly",
+        &["belly", "bellies"],
+        &["お腹", "空腹", "満腹", "腹の虫"],
+    ),
     ("will", &["will"], &["意志"]),
-    ("bone", &["bone"], &["骨"]),
-    ("empty", &["empt"], &["空にし", "空の器", "空なのに"]),
+    ("bone", &["bone"], &["骨が", "骨を", "骨は", "骨の"]),
+    ("empty", &["empt"], &["空っぽ", "空にし", "空の器"]),
     ("fill", &["fill"], &["満た", "いっぱい"]),
-    ("weaken", &["weaken"], &["弱ら", "弱っ"]),
-    ("strengthen", &["strengthen"], &["強く", "強い"]),
-    ("heaven", &["heaven"], &["天"]),
-    ("earth", &["earth"], &["大地", "地は", "天と地"]),
-    ("water", &["water"], &["水"]),
+    ("weaken", &["weaken"], &["弱ら", "弱め", "弱っ"]),
+    ("strengthen", &["strengthen"], &["強くな", "強め", "強くし"]),
+    (
+        "heaven",
+        &["heaven"],
+        &["天が", "天を", "天は", "天上", "天の"],
+    ),
+    ("earth", &["earth"], &["大地"]),
+    ("water", &["water"], &["水が", "水を", "水は", "水面"]),
     ("compare", &["compare"], &["比べ"]),
-    ("resemble", &["resemble"], &["似"]),
+    ("resemble", &["resemble"], &["似て", "似た", "似る"]),
     ("continues_long", &[], &["長く続", "久しく続"]),
     ("true_words", &[], &["誠の言葉", "真実の言葉"]),
     ("seem_paradoxical", &[], &["逆さま"]),
 ];
+
+/// Compounds and idioms that contain a surface above without naming its concept.
+const FALSE_FRIENDS: [&str; 8] = [
+    "天気",
+    "心配",
+    "腹が立",
+    "腹を立",
+    "水曜",
+    "骨が折れ",
+    "天の川",
+    "天井",
+];
+
+/// The live concepts a passage names, by `LEXICON`, in `lang_col` (0 en-US, 1 ja-JP).
+fn concepts_in(text: &str, col: usize) -> Vec<&'static str> {
+    let mut text = text.to_lowercase();
+    for f in FALSE_FRIENDS {
+        text = text.replace(f, "");
+    }
+    let words: Vec<&str> = text.split(|c: char| !c.is_alphabetic()).collect();
+    LEXICON
+        .iter()
+        .filter(|(_, en, ja)| {
+            if col == 0 {
+                en.iter().any(|s| words.iter().any(|w| w.starts_with(s)))
+            } else {
+                ja.iter().any(|s| text.contains(s))
+            }
+        })
+        .map(|(c, _, _)| *c)
+        .collect()
+}
+
+#[test]
+fn the_concept_lexicon_does_not_match_a_word_that_merely_holds_a_character() {
+    for ja in [
+        "今日の天気はどうだろう。",
+        "試験が心配でならない。",
+        "腹が立って仕方がない。",
+        "水曜に会いましょう。",
+        "骨が折れる仕事だ。",
+    ] {
+        assert!(concepts_in(ja, 1).is_empty(), "{ja}");
+    }
+    assert!(concepts_in("I attempt it, with a reminder.", 0).is_empty());
+    assert_eq!(concepts_in("水が澄んでいる。", 1), ["water"]);
+}
 
 #[test]
 fn every_original_passage_rests_on_a_live_inventory_concept() {
@@ -801,20 +857,15 @@ fn every_original_passage_rests_on_a_live_inventory_concept() {
         assert!(live.contains(&concept), "{concept} is not a live concept");
     }
     let (corpus, _) = stores();
-    for (lang, col) in [("en-US", 0), ("ja-JP", 1)] {
+    for (col, lang) in PANEL.iter().enumerate() {
         let mut hit = std::collections::BTreeSet::new();
         let mut passages = 0;
         for item in corpus.all().unwrap() {
-            if item.language != lang || !matches!(item.source, Source::ModelWritten { .. }) {
+            if item.language != *lang || !matches!(item.source, Source::ModelWritten { .. }) {
                 continue;
             }
             passages += 1;
-            let text = item.text.to_lowercase();
-            let found: Vec<&str> = LEXICON
-                .iter()
-                .filter(|(_, en, ja)| [en, ja][col].iter().any(|s| text.contains(s)))
-                .map(|(c, _, _)| *c)
-                .collect();
+            let found = concepts_in(&item.text, col);
             assert!(!found.is_empty(), "{} rests on no live concept", item.id);
             hit.extend(found);
         }
