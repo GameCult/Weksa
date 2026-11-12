@@ -45,8 +45,8 @@ fn chrf_matches_sacrebleu_vectors() {
 
 #[test]
 fn chrf_argument_order() {
-    let short = "mind the hatch";
-    let long = "mind the hatch before the storm arrives tonight";
+    let short = "shut the gate";
+    let long = "shut the gate before the storm arrives tonight";
     let (as_hypothesis, as_reference) = (chrf(short, long), chrf(long, short));
     assert!(
         as_hypothesis < as_reference - 1.0,
@@ -104,8 +104,8 @@ fn chrf_whitespace_parity() {
 
 #[test]
 fn scorer_argument_order() {
-    let short = "mind the hatch";
-    let long = "mind the hatch before the storm arrives tonight";
+    let short = "shut the gate";
+    let long = "shut the gate before the storm arrives tonight";
     let scorer = Scorer::new(Bag);
     let got = score_one(&scorer, long, short);
     assert_eq!(got.chrf, chrf(short, long));
@@ -156,7 +156,7 @@ impl Embedder for Fixed {
 fn scorer_refuses_bad_vectors() {
     let run = |vectors: Vec<Vec<f32>>| {
         Scorer::new(Fixed(vectors)).score(&[ScoreInput {
-            reference: "mind the hatch",
+            reference: "shut the gate",
             output: "mind the door",
         }])
     };
@@ -671,16 +671,16 @@ fn every_script_scores_a_near_miss_as_sacrebleu_does() {
 #[test]
 fn coverage_splits_at_any_non_word_character() {
     let items = [
-        validation("item:v:1", "mind the hatch before the storm"),
+        validation("item:v:1", "shut the gate before the storm"),
         train("item:t:1", UNRELATED),
     ];
-    let want = read(&["mind the hatch"], &items);
+    let want = read(&["shut the gate"], &items);
     assert_eq!(want, [(5, 3), (5, 2), (4, 1)]);
     for joiner in [
         ":", "\u{b7}", "'", "\u{2019}", "\u{ff3f}", "-", "/", "\u{2014}", "|", "+", "\u{ff1a}",
         "\u{30fb}",
     ] {
-        let glued = format!("mind{joiner}the{joiner}hatch");
+        let glued = format!("shut{joiner}the{joiner}gate");
         assert_eq!(read(&[&glued], &items), want, "{joiner:?}");
     }
     // a mark, a joiner or a digit is part of its word, not a break

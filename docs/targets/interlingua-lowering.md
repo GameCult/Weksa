@@ -25,8 +25,8 @@ ground truth is Discord text, which can never feed this loop
 
 An agent's outward speech today is English text the model chose, so meaning,
 register and voice are fused in one string nobody can inspect or re-target.
-Weksa's design already separates them: the packet owns meaning, the target
-profile owns address, politeness and forbidden flattenings, the lowerer owns
+Weksa's design already separates them: the packet owns meaning, speaker and scene state own address and politeness
+(the language ontology holds only per-language lexicon, grammar and discourse choices), the lowerer owns
 surface text and a trace. The campaign makes that design real for a live
 reader, and gives Weksa's Persona a working body when her mind
 (`eureka-body:follow_up:weksa-mind`) wakes.

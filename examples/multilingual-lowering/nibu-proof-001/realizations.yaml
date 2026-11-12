@@ -22,7 +22,7 @@ realizations:
       script: Latn
       register: sharp technical casual
       cultural_ontology_refs:
-        - data/target-language-ontology/en-US.yaml
+        - data/ontology/ontology.cc
     outputs:
       visible_action: The cockpit lights snap from amber to surgical white around the damaged control.
       spoken_text: "Take your hand off that control unless you want your nervous system to become my least useful circuit diagram."
@@ -52,8 +52,6 @@ realizations:
       locale: pt-BR
       script: Latn
       register: direct technical casual
-      cultural_ontology_refs:
-        - data/target-language-ontology/pt-BR.yaml
     outputs:
       visible_action: As luzes do cockpit passam de âmbar para branco cirúrgico ao redor do controle danificado.
       spoken_text: "Tira a mão desse controle, a não ser que você queira transformar o seu sistema nervoso no meu diagrama de circuitos menos útil."
@@ -90,7 +88,7 @@ realizations:
       script: Jpan
       register: sharp technical plain
       cultural_ontology_refs:
-        - data/target-language-ontology/ja-JP.yaml
+        - data/ontology/ontology.cc
     outputs:
       visible_action: 損傷した制御盤の周囲で、操縦室の灯りが琥珀色から外科灯のような白へ切り替わる。
       spoken_text: "その制御盤から手を離して。神経系を、私のいちばん役に立たない回路図にしたくないなら。"

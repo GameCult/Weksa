@@ -1,7 +1,6 @@
 schema_version: weksa.utterance_lowering.agent_run.v0
 source_packet_id: nibu-proof-001
 source_packet_ref: examples/english-lowering/nibu-proof-001/interlingua.yaml
-target_profile_ref: .weksa/cultural-ontology/starter-targets.cc
 target_profile_id: weksa.cultural_ontology.en.transatlantic.v0
 target_agent_id: nibu
 realization:
@@ -11,8 +10,6 @@ realization:
     locale: en-001
     script: Latn
     register: cultivated transatlantic English; cross-Atlantic intelligibility; measured technical warning
-    cultural_ontology_refs:
-      - .weksa/cultural-ontology/starter-targets.cc
     cultural_ontology_profile_ids:
       - weksa.cultural_ontology.en.transatlantic.v0
   outputs:

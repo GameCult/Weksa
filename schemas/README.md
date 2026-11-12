@@ -23,9 +23,6 @@ them.
 - [utterance-lowering-packet.md](./utterance-lowering-packet.md): shared packet
   contract for lowering interlingua and projected speaker context into one or
   more target-language utterance realizations.
-- [target-language-cultural-ontology.md](./target-language-cultural-ontology.md):
-  contract for the address, politeness, register, idiom, metaphor, script, and
-  forbidden-flattening profiles consumed by target lowerers.
 - [cultural-ontology-profile.md](./cultural-ontology-profile.md): nested
   CultCache profile contract for cultural ontology, including typed salience
   axes, linguistic affordance feature records, evidence, activation gates, and

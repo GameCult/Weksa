@@ -369,6 +369,12 @@ target. A Qdrant nearest neighbor is a witness candidate, not a cultural fact.
 
 \section{Proposed CultCache State Shape}
 
+No profile store exists. The per-language lowering choices live in
+\texttt{data/ontology/ontology.cc}; the typed profiles once stored under
+\texttt{.weksa/cultural-ontology/} and the \texttt{weksa.target\_cultural\_ontology.*}
+base profiles named in the listing and sketches below are deleted. Community and dialect
+profiles belong to follow-up \texttt{language-ontology-communities}.
+
 The following shape should become a typed CultCache document family:
 \texttt{weksa.cultural\_ontology\_profile.v0}. It can represent base languages,
 dialects, sociolects, regional overlays, ritual registers, and communities of
@@ -611,15 +617,6 @@ lowerer ask fine-grained questions without parsing prose, such as whether a
 feature requires speaker authority, whether it can be rendered in text or only
 speech synthesis, which source hashes support it, and what must be reported if
 the feature is rejected.
-
-Recommended CultCache paths:
-
-\begin{lstlisting}[basicstyle=\ttfamily\small]
-.weksa/cultural-ontology/{profileId}.cc
-.weksa/cultural-ontology/{baseProfileId}/overlays/{overlayId}.cc
-.weksa/cultural-ontology/catalogs/{catalogId}.cc
-.weksa/cultural-ontology/evidence-bundles/{bundleId}.cc
-\end{lstlisting}
 
 \section{Dialect Profile Sketches}
 

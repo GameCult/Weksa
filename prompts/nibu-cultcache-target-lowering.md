@@ -24,20 +24,10 @@ text. Lower from the interlingua packet and projected context.
 
 ## Cultural Ontology Authority
 
-Use the CultCache store:
-
-- `.weksa/cultural-ontology/starter-targets.cc`
-
-It contains:
-
-- `weksa.cultural_ontology.pt-BR.vanilla_brazilian.v0`
-- `weksa.cultural_ontology.en.transatlantic.v0`
-- `weksa.cultural_ontology.ja-JP.kanto.contemporary.v0`
-
-Qdrant-style retrieval and old YAML profiles may be useful context, but the
-CultCache profile named in your task is the target authority. Treat the target
-profile as draft guarded typed state: preserve its activation gates, forbidden
-flattenings, and nested linguistic affordance feature IDs in your trace.
+The language ontology is `data/ontology/ontology.cc` (`weksa ontology dump`).
+It holds model-drafted seed entries for en-US and ja-JP only; there is no
+pt-BR entry yet. Treat an entry as a draft: say in your trace which entries you
+used, and when no entry covers the target, say so rather than inventing one.
 
 ## Output Contract
 
@@ -50,8 +40,6 @@ The file must use this shape:
 schema_version: weksa.utterance_lowering.agent_run.v0
 source_packet_id: nibu-proof-001
 source_packet_ref: examples/english-lowering/nibu-proof-001/interlingua.yaml
-target_profile_ref: .weksa/cultural-ontology/starter-targets.cc
-target_profile_id:
 target_agent_id: nibu
 realization:
   realization_id:
@@ -60,10 +48,6 @@ realization:
     locale:
     script:
     register:
-    cultural_ontology_refs:
-      - .weksa/cultural-ontology/starter-targets.cc
-    cultural_ontology_profile_ids:
-      - 
   outputs:
     visible_action:
     spoken_text:

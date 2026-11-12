@@ -5,7 +5,7 @@ culture, and constraint, and the planned lowerer that turns an agent's
 meaning packet into the reader's display language.
 
 **What is valuable here.** The interlingua standard and the lowering design: a
-meaning packet owns what is meant, a target-language profile owns register,
+meaning packet owns what is meant, speaker and scene state (planned; not yet live) own register,
 address and politeness, and a lowerer owns surface text and leaves a trace.
 
 **The problem it solves.** An agent's outward speech today is one English
@@ -28,7 +28,7 @@ measured.
 - [Lowering target](./docs/targets/interlingua-lowering.md) and
   [its map](./docs/targets/interlingua-lowering-map.md): the design, scoring
   and cut sequence.
-- `data/`: the cultural ontology and target-language profile data.
+- `data/`: the committed stores (corpora, entities, inventory, language ontology) and research data; there are no target-language profiles.
 - `settings/`: setting-specific proving grounds for language projects.
 
 **Live versus planned.** Live: docs, fixtures, examples, ontology data and the
@@ -82,9 +82,12 @@ English, Brazilian Portuguese, Japanese, and later target-language dialogue.
 [Flavored English Lowering](./docs/flavored-english-lowering.md) remains the
 target-specific English receipt.
 
-See [Target-Language Cultural Ontology Profiles](./data/target-language-ontology/README.md)
-for the reviewable address, register, politeness, idiom, metaphor, and script
-distinctions that target lowerers must inspect before producing output.
+The language ontology is `data/ontology/ontology.cc` (read it with
+`weksa ontology dump`): per language, the lexicon, grammar and discourse choices a lowerer
+reads for a stance and discourse packet. No entry fixes an address or politeness level; those
+belong to the speaker and scene state. Its en-US and ja-JP entries are
+model-drafted seeds, never Test evidence. Nothing yet grows them from accepted
+rounds; until that mint exists they change only by a new `weksa ontology admit`.
 
 For the first AquaSynth speech-training handoff, see
 [Tiny PanPhon v0.1 Speech Curriculum](./examples/speech-training/tiny-panphon-v0.1/README.md).
