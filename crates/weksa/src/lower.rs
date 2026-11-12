@@ -43,8 +43,10 @@ use crate::phones::{Phone, PhoneInventory, SegmentError};
 use crate::store::EntityStore;
 use crate::validate::LoweringInput;
 
-/// The language tag this lowerer's entity forms are read under, spelled as an
-/// entity's `LanguageForms::language` and a corpus item's language are.
+/// The language tag of the template table and the phones: what `weksa lower`
+/// says in. The golf loop lowers each item in its own language and does not
+/// read this. Spelled as an entity's `LanguageForms::language` and a corpus
+/// item's language are.
 pub const TARGET_LANGUAGE: &str = "en-US";
 
 /// The lowerer's whole view of the entity store: one entity by id. Narrow so a

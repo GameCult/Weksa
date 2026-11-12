@@ -49,6 +49,13 @@
       "description": "The answering model.",
       "type": "string"
     },
+    "panel": {
+      "description": "The languages the run offers, reads and decides on: BCP 47-form tags,\nsorted, unique, at least one, set once at open. An item of any other\nlanguage is never offered, minted from, probed or scored.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "prompt_digest": {
       "type": "string"
     }
@@ -65,7 +72,8 @@
     "embedder",
     "chrf_version",
     "inventory_digest",
-    "lowerer_reach"
+    "lowerer_reach",
+    "panel"
   ],
   "$defs": {
     "LowererReach": {
