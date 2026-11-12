@@ -40,7 +40,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::context::{EditFeedback, EncoderOffer, Prompt, TrainItems};
 use crate::corpus::{CorpusItem, CorpusItemId, ModelFamily, Source};
-use crate::encode::{EditDraft, LoweringDraft, PacketDraft, encoder_id};
+use crate::encode::{EditDraft, LoweringDraft, MAX_EDIT_CHANGES, PacketDraft, encoder_id};
 use crate::form::{is_attestation, is_language_tag, is_slug};
 use crate::model::{ModelPort, PortError};
 use crate::packet::{Packet, Stance};
@@ -2257,7 +2257,7 @@ pub fn cycle<M: ModelPort, E: Embedder>(
     let Some(draft) = answer.as_deref().and_then(|a| EditDraft::parse(a).ok()) else {
         return reject(run, Why::EditParse);
     };
-    let Some((revision, entries)) = draft.into_revision(&inventory, base_rev) else {
+    let Some((revision, entries)) = draft.into_revision(&inventory, base_rev, MAX_EDIT_CHANGES) else {
         return reject(run, Why::EditAdmit);
     };
     let candidate_rev = revision.n;

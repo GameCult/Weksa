@@ -8,7 +8,7 @@ use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use unicode_normalization::UnicodeNormalization;
 use weksa::corpus::{CorpusItem, ModelFamily, NameSpan, Source, Turn};
-use weksa::encode::OntologyDraft;
+use weksa::encode::{EditDraft, OntologyDraft};
 use weksa::entity::{Entity, EntityOrigin, LanguageForms, Pronunciation};
 use weksa::inventory::{proof_revision, seed, speaker_scene_revision};
 use weksa::packet::{FeatValue, FeatureValue, Grade};
@@ -200,7 +200,14 @@ enum InventoryCommand {
     /// Admit the speaker-state revision (Scene and Speaker features) as the
     /// inventory's latest plus one.
     SpeakerScene,
+    /// Admit a model's inventory draft (a JSON file, {add, retire} as the
+    /// loop's editor writes it) as the inventory's latest plus one.
+    Admit { answer: PathBuf },
 }
+
+/// The most changes `inventory admit` takes in one draft. A hand-admitted draft
+/// is reviewed whole in its cut, so the cap is not the loop editor's.
+const MAX_ADMIT_CHANGES: usize = 256;
 
 #[derive(Subcommand)]
 enum SceneCommand {
@@ -782,6 +789,22 @@ fn main() -> Result<()> {
             let (rev, entries) = speaker_scene_revision(latest + 1);
             let (n, count) = (rev.n, entries.len());
             let mut store = store;
+            store.admit_revision(rev, entries).map_err(refused)?;
+            println!("admitted rev:{n} with {count} entries");
+        }
+        Command::Inventory(InventoryCommand::Admit { answer }) => {
+            let text = std::fs::read_to_string(&answer).context("the draft would not read")?;
+            let draft = EditDraft::parse(&text)?;
+            let mut store = InventoryStore::open(&cli.inventory)?;
+            let inventory = store.inventory()?;
+            let latest = inventory
+                .latest()
+                .map(|r| r.n)
+                .context("the inventory holds no revision")?;
+            let (rev, entries) = draft
+                .into_revision(&inventory, latest, MAX_ADMIT_CHANGES)
+                .context("the draft makes no change or more than the cap")?;
+            let (n, count) = (rev.n, entries.len());
             store.admit_revision(rev, entries).map_err(refused)?;
             println!("admitted rev:{n} with {count} entries");
         }

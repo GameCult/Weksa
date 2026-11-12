@@ -223,19 +223,22 @@ impl EditDraft {
     }
 
     /// The revision after `base` this edit asks for, and the entries it adds.
-    /// `None` when the edit makes no change or more than [`MAX_EDIT_CHANGES`].
+    /// `None` when the edit makes no change or more than `max_changes`. The
+    /// loop's cycle passes [`MAX_EDIT_CHANGES`]; the CLI's `inventory admit`
+    /// passes its own larger cap for a draft reviewed whole in its cut.
     /// Every id is the store's: an added entry takes the next number of its
     /// family after the highest in `inventory`, retired entries included, in
     /// draft order. Nothing else is judged here: the gloss, the entry's shape,
     /// whether a retire target is live and a repeated id are
     /// `InventoryStore::admit_revision`'s to refuse.
-    pub(crate) fn into_revision(
+    pub fn into_revision(
         self,
         inventory: &Inventory,
         base: u32,
+        max_changes: usize,
     ) -> Option<(InventoryRevision, Vec<InventoryEntry>)> {
         let count = self.add.len() + self.retire.len();
-        if count == 0 || count > MAX_EDIT_CHANGES {
+        if count == 0 || count > max_changes {
             return None;
         }
         let n = base.checked_add(1)?;
@@ -583,7 +586,7 @@ mod tests {
                 InvId::parse("frame:2").unwrap(),
             ],
         };
-        let (rev, entries) = draft.clone().into_revision(&inv, 6).unwrap();
+        let (rev, entries) = draft.clone().into_revision(&inv, 6, MAX_EDIT_CHANGES).unwrap();
         let ids: Vec<String> = entries.iter().map(|e| e.id.to_string()).collect();
         // After the highest of the family, retired ones included, in draft order.
         assert_eq!(ids, ["concept:4", "role:1", "concept:5", "frame:3"]);
@@ -626,20 +629,25 @@ mod tests {
                 .collect(),
             retire: vec![],
         };
-        assert!(adds(0).into_revision(&inv, 1).is_none());
-        assert!(adds(1).into_revision(&inv, 1).is_some());
-        assert_eq!(adds(8).into_revision(&inv, 1).unwrap().1.len(), 8);
-        assert!(adds(9).into_revision(&inv, 1).is_none());
+        assert!(adds(0).into_revision(&inv, 1, MAX_EDIT_CHANGES).is_none());
+        assert!(adds(1).into_revision(&inv, 1, MAX_EDIT_CHANGES).is_some());
+        assert_eq!(adds(8).into_revision(&inv, 1, MAX_EDIT_CHANGES).unwrap().1.len(), 8);
+        assert!(adds(9).into_revision(&inv, 1, MAX_EDIT_CHANGES).is_none());
         // Adds and retires count together.
         let mixed = |a: usize, r: usize| EditDraft {
             add: (0..a).map(|_| add(Family::Concept, "g")).collect(),
             retire: vec![InvId::parse("concept:1").unwrap(); r],
         };
-        assert!(mixed(4, 4).into_revision(&inv, 1).is_some());
-        assert!(mixed(4, 5).into_revision(&inv, 1).is_none());
-        assert!(mixed(0, 9).into_revision(&inv, 1).is_none());
+        assert!(mixed(4, 4).into_revision(&inv, 1, MAX_EDIT_CHANGES).is_some());
+        assert!(mixed(4, 5).into_revision(&inv, 1, MAX_EDIT_CHANGES).is_none());
+        assert!(mixed(0, 9).into_revision(&inv, 1, MAX_EDIT_CHANGES).is_none());
         // A repeated retire is the door's to refuse, not this fn's.
-        assert!(mixed(0, 2).into_revision(&inv, 1).is_some());
+        assert!(mixed(0, 2).into_revision(&inv, 1, MAX_EDIT_CHANGES).is_some());
+        // The cap is the caller's.
+        let (_, entries) = adds(200).into_revision(&inv, 1, 256).unwrap();
+        assert_eq!(entries.first().unwrap().id.to_string(), "concept:2");
+        assert_eq!(entries.last().unwrap().id.to_string(), "concept:201");
+        assert!(adds(257).into_revision(&inv, 1, 256).is_none());
     }
 
     #[test]

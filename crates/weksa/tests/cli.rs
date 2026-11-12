@@ -1875,3 +1875,31 @@ fn scene_put_and_dump() {
     assert!(!o.status.success());
     assert!(!out(&o).contains("scene-1"), "{}", out(&o));
 }
+
+#[test]
+fn inventory_admit_numbers_a_draft_and_refuses_an_empty_one() {
+    let d = tempfile::tempdir().unwrap();
+    assert!(weksa(d.path(), &["inventory", "seed"]).status.success());
+    let path = |name: &str, text: &str| {
+        let p = d.path().join(name);
+        std::fs::write(&p, text).unwrap();
+        p.to_str().unwrap().to_owned()
+    };
+    let before = out(&weksa(d.path(), &["inventory", "dump"]));
+
+    for (name, text) in [("empty.json", "{}"), ("junk.json", "not json at all")] {
+        let refused = weksa(d.path(), &["inventory", "admit", &path(name, text)]);
+        assert!(!refused.status.success(), "{}", out(&refused));
+        assert_eq!(before, out(&weksa(d.path(), &["inventory", "dump"])));
+    }
+
+    let draft = path(
+        "draft.json",
+        r#"{"add":[{"family":"Concept","gloss":"bath_house"},{"family":"Frame","gloss":"fly_a_kite"}]}"#,
+    );
+    let admitted = weksa(d.path(), &["inventory", "admit", &draft]);
+    assert!(admitted.status.success(), "{}", out(&admitted));
+    assert!(out(&admitted).contains("admitted rev:2 with 2 entries"));
+    let dump = out(&weksa(d.path(), &["inventory", "dump"]));
+    assert!(dump.contains("bath_house") && dump.contains("fly_a_kite"), "{dump}");
+}
