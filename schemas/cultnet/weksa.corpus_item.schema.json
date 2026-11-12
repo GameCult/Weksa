@@ -170,7 +170,7 @@
           ]
         },
         {
-          "description": "A public-domain work, with everything a reader needs to check the claim:\nthe edition's licence and the jurisdiction the public-domain status is\nasserted in, who translated it (the translation is the text's copyright,\nnot the original's) and when the edition appeared. A work missing any\nis refused at admission.",
+          "description": "A public-domain work, with everything a reader needs to check the claim:\nthe edition's licence and the jurisdiction the public-domain status is\nasserted in, who translated it (the translation is the text's copyright,\nnot the original's) and when the work or translation first appeared. A work missing any\nis refused at admission.",
           "type": "object",
           "properties": {
             "PublicDomain": {
@@ -183,6 +183,7 @@
                   "type": "string"
                 },
                 "edition_year": {
+                  "description": "The year the work, or for a translation this translation, first\nappeared. It is not the year of the `edition_url` file's source\nprint: Project Gutenberg's text may be a later or modernised\nedition, and the claim rests on the date of first appearance.",
                   "type": "integer",
                   "format": "uint16",
                   "maximum": 65535,

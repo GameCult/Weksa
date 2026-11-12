@@ -258,7 +258,7 @@ fn lower_error(e: &LowerError) -> Value {
         LowerError::DanglingStress { entity, at } => ("DanglingStress", format!("the ruled pronunciation of {entity} has a stress mark at {at} with no vowel after it")),
         LowerError::ConsentMissing { predication } => ("ConsentMissing", format!("{predication} is a request the packet does not carry the addressee's consent to")),
         LowerError::AskerNotAddressee { predication } => ("AskerNotAddressee", format!("the agent of {predication} is not the addressee")),
-        LowerError::EntityRead { entity, why } => ("EntityRead", format!("reading {entity}: {why}")),
+        LowerError::EntityRead { entity, .. } => ("EntityRead", format!("the entity store failed reading {entity}")),
     };
     json!({ "variant": variant, "reason": reason })
 }
@@ -279,11 +279,11 @@ fn run(w: &World, dir: &Path, packet: &Packet) -> Result<(String, Value), Value>
         Err(StoreError::Invalid(rs)) => {
             return Err(json!({
                 "kind": "admission_refused",
-                "refusals": rs.iter().map(|r| json!({ "rule": r.rule(), "detail": format!("{r:?}") })).collect::<Vec<_>>(),
+                "refusals": rs.iter().map(|r| json!({ "rule": r.rule(), "detail": r.to_string() })).collect::<Vec<_>>(),
             }));
         }
         Err(e) => {
-            return Err(json!({ "kind": "admission_refused", "refusals": [{ "rule": "store", "detail": format!("{e:?}") }] }));
+            return Err(json!({ "kind": "admission_refused", "refusals": [{ "rule": "store", "detail": e.to_string() }] }));
         }
     };
     let text = lower(&view, &w.inv, &w.entities).map_err(|e| {

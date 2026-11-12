@@ -59,7 +59,9 @@ for m in re.finditer(r'^(item:\S+) \[(.*?)\]\n  "(.*)"$', run([str(weksa_bin), "
 if set(corpus) != cited:
     sys.exit(f"corpus dump lacks cited items {sorted(cited - set(corpus))}; unexpected {sorted(set(corpus) - cited)}")
 # The dump's meta ends with the split (`... group=g Validation`, `... excluded`).
-held_out = {k: v["meta"].split()[-1] for k, v in corpus.items() if v["meta"].split()[-1] in ("Validation", "Test")}
+# Only Train and split-less items publish; any other name, including a split
+# added later, is held out until it is allowed here.
+held_out = {k: v["meta"].split()[-1] for k, v in corpus.items() if v["meta"].split()[-1] not in ("Train", "excluded")}
 if held_out:
     sys.exit(f"refusing to publish held-out items (nothing written): {held_out}")
 model = "qwen3-embedding:0.6b"
