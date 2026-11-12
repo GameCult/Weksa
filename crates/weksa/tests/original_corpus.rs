@@ -270,7 +270,11 @@ fn committed_ontology_is_model_drafted_and_reads_every_inventory() {
         match &e.annotator {
             Annotator::Model { family, generator } => {
                 assert_eq!(*family, ModelFamily::Anthropic, "{}", e.key());
-                assert!(generator.contains("claude"), "{}", e.key());
+                assert_eq!(
+                    generator, "claude-sonnet-5-5 (Weksa Hands, model-drafted seed ontology)",
+                    "{}",
+                    e.key()
+                );
             }
             other => panic!("{} is {other:?}", e.key()),
         }

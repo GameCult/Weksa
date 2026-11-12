@@ -265,14 +265,11 @@ cultural_ontology_trace:
 
 ## Storage
 
-Recommended CultCache paths:
-
-```text
-.weksa/cultural-ontology/{profileId}.cc
-.weksa/cultural-ontology/{baseProfileId}/overlays/{overlayId}.cc
-.weksa/cultural-ontology/catalogs/{catalogId}.cc
-.weksa/cultural-ontology/evidence-bundles/{bundleId}.cc
-```
+No profile store exists. The per-language lowering choices live in
+`data/ontology/ontology.cc` (`weksa ontology dump`); the typed profiles that
+once sat under `.weksa/cultural-ontology/`, and the `weksa.target_cultural_ontology.*`
+base profiles named in the examples below, are deleted. Community and dialect
+profiles are owned by follow-up `language-ontology-communities`.
 
 Qdrant may store chunks, vectors, and payload filters for retrieval. It does
 not own profile acceptance, feature activation, or renderer authority.

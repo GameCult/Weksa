@@ -612,14 +612,11 @@ feature requires speaker authority, whether it can be rendered in text or only
 speech synthesis, which source hashes support it, and what must be reported if
 the feature is rejected.
 
-Recommended CultCache paths:
-
-\begin{lstlisting}[basicstyle=\ttfamily\small]
-.weksa/cultural-ontology/{profileId}.cc
-.weksa/cultural-ontology/{baseProfileId}/overlays/{overlayId}.cc
-.weksa/cultural-ontology/catalogs/{catalogId}.cc
-.weksa/cultural-ontology/evidence-bundles/{bundleId}.cc
-\end{lstlisting}
+No profile store exists. The per-language lowering choices live in
+\texttt{data/ontology/ontology.cc}; the typed profiles once stored under
+\texttt{.weksa/cultural-ontology/} and the \texttt{weksa.target\_cultural\_ontology.*}
+base profiles named in the sketches below are deleted. Community and dialect
+profiles belong to follow-up \texttt{language-ontology-communities}.
 
 \section{Dialect Profile Sketches}
 

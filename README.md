@@ -85,7 +85,8 @@ target-specific English receipt.
 The language ontology is `data/ontology/ontology.cc` (read it with
 `weksa ontology dump`): per language, the address, register, politeness and script
 choices a lowerer makes for a speaker in a stance. Its en-US and ja-JP entries are
-model-drafted seeds, never Test evidence; accepted rounds grow them.
+model-drafted seeds, never Test evidence. Nothing yet grows them from accepted
+rounds; until that mint exists they change only by a new `weksa ontology admit`.
 
 For the first AquaSynth speech-training handoff, see
 [Tiny PanPhon v0.1 Speech Curriculum](./examples/speech-training/tiny-panphon-v0.1/README.md).
