@@ -379,19 +379,29 @@ gain past the noise of the panel's sum (the root of the languages' composite
 floors squared, at least one step), Rejected(Regressed) a loss past a language's
 floor, Rejected(NoGain) neither. The cycle's own floor is still the spread of two
 round replicates (`floor_of`); it has no per-item scores to pair.
-Calibration (`runs/distil-base`, 8 prompted draws, each its own subagent, 14
+Calibration (`runs/distil-base`, 8 prompted draws by one model family on
+identical prompts, no draw sharing more than 7 of 28 answers with another; 14
 en-US and 14 ja-JP Validation items; every base, candidate and 3-arm floor
 combination, 1120 trials from 28 unordered pairs; intervals bootstrap over
 draws, each degraded arm one fixed draw): a prompted repeat reads NoGain 92%
 (80 to 100), Regressed 8% (0 to 20), Accepted 0%, which with 28 pairs bounds
 false-accept only to about 10%; an all-"Yes." arm reads Regressed 100%; a mild
 degradation (one detail blurred per utterance) 100%; a subtler one 75% (50 to
-100). At 14 items a degradation under about three standard errors (a composite
-near 0.06) cannot be told from noise, and no arm known to be better exists, so
-the rule's power to accept a real gain is unmeasured. `FLOOR_Z` was chosen on
-this data (2.5 gives NoGain 84% and 93% on the subtler arm), so the rates are
-in-sample. Without the noise term in the gain test a prompted repeat reads
-Accepted in 40% of the trials.
+100), whose mean composite drop (0.044) sits under the mean floor (0.060).
+`FLOOR_Z` was chosen on this data (2.5 gives NoGain 84% and 93% on the subtler
+arm), so the rates are in-sample. Without the noise term in the gain test a
+prompted repeat reads Accepted in 40% of the trials.
+Power (can the rule Accept a real gain?): the only better arm that could be
+built without Test or Validation answers is a lowerer shown the Train sentences
+of the corpus (no packets, no Validation or Test text) as a register guide.
+Four such draws beat the prompted draws' mean composite in both languages (en-US
+0.742 to 0.759 to 0.795; ja-JP 0.559 to 0.578 to 0.620), so the premise that it is
+better is measured on the very Validation items the rule reads, not independent.
+Against the prompted bases with 3-arm floors the rule reads it Accepted in 29%
+of 1120 trials, NoGain 71%, Regressed 0%: a net gain of 0.079 against a mean
+noise term of 0.079. At 14 items per language the rule is therefore a low-power
+filter for a gain of this size; by 1/sqrt(n), about 35 or more items per
+language would bring the noise term near 0.05 (an extrapolation, not measured).
 Training pairs are Train only, at a frozen revision; the export is 12b.
 
 ## Lowerer first cut (`golf-loop-lowerer-cut`)
