@@ -1,6 +1,7 @@
 schema_version: weksa.persona_culture_lowering_trace.v0
 fixture_id: brokkr-edda-voice
 item_id: command-without-receipt
+# The data/cultural-ontology files cited below were deleted from main (cut delete-cultural-ontology); see git history.
 profile_stack:
   - profile_id: weksa.cultural_referent.old_norse_edda_source_tradition.v0
     ref: data/cultural-ontology/referents/old-norse-edda-source-tradition.yaml
