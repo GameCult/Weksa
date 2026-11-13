@@ -5136,10 +5136,10 @@ fn answer_files_withhold_prompts_that_hold_test_text() {
     assert!(refused("nibu  says\n mind the\n\n hatch"));
     assert!(refused("\u{ff2e}ibu says mind the hatch."));
     assert!(!round.exists(), "a refused prompt creates nothing");
-    // A short text counts only as the end of a line after a non-letter.
-    assert!(refused("the hatch."));
-    assert!(!refused("hatch"), "a mid-word short text is not the line's end");
-    assert!(!refused("mind the"));
+    // The threshold is 12 normalised characters: "the hatch" (8) says nothing about a
+    // prompt, "mind the hatch" (12) does.
+    assert!(!refused("the hatch"));
+    assert!(refused("mind the hatch"));
     assert!(!refused("   "), "a blank withheld text matches nothing");
     // Unrelated text passes and the prompt is then written for its answerer.
     let mut clean = AnswerFiles::new(round.clone(), "m".into(), vec!["The ferry leaves at noon.".into()]);
@@ -5188,11 +5188,54 @@ fn a_round_stops_on_a_prompt_that_holds_test_text() {
         assert_eq!(files.answer(&encode(key)), Err(PortError::Withheld), "{key}");
     }
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "only the clean prompt");
-    // The round stops on it rather than skipping the item.
+    // The round stops on it rather than skipping the item. A model-written line in a
+    // Test group is withheld too: it is in no split, and its text is still held out.
+    // (Covered by test_texts taking every Test-group item, below.)
     let scorer = weksa::score::Scorer::new(OneBag);
     let mut round_files = run.answer_files(w.dir.path().join("round")).unwrap();
     assert!(matches!(
         round(&mut run, &mut round_files, &scorer),
         Err(RunError::Withheld)
     ));
+}
+
+/// Refuses every prompt as holding Test text, as the answer door does.
+struct Refuses;
+
+impl weksa::model::ModelPort for Refuses {
+    fn model(&self) -> &str {
+        "fake-model"
+    }
+    fn answer(&mut self, _: &weksa::context::Prompt) -> Result<String, weksa::model::PortError> {
+        Err(weksa::model::PortError::Withheld)
+    }
+}
+
+#[test]
+fn every_model_call_stops_on_a_withheld_prompt() {
+    use weksa::run::{RunError, round};
+    let w = world();
+    let mut run = run_over(w.dir.path());
+    let scorer = weksa::score::Scorer::new(OneBag);
+    let r = round(&mut run, &mut Refuses, &scorer);
+    assert!(matches!(r, Err(RunError::Withheld)), "{:?}", r.map(|_| ()));
+    assert!(matches!(run.mint_ontology(&mut Refuses, "en-US"), Err(RunError::Withheld)));
+}
+
+#[test]
+fn model_written_test_group_text_is_withheld_too() {
+    use common::{entities_in, group_in_bucket, item_in, model};
+    let mut w = world();
+    let entities = entities_in(w.dir.path());
+    w.corpus
+        .add(item_in("item:held:5", "A model line of a Test meaning.", &group_in_bucket(92), model()), &entities)
+        .unwrap();
+    assert!(
+        w.corpus
+            .test_texts()
+            .unwrap()
+            .iter()
+            .any(|t| t == "A model line of a Test meaning."),
+        "a model-written Test-group item is in no split, and its text is still held out"
+    );
 }

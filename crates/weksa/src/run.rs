@@ -939,7 +939,7 @@ impl RunStores {
     }
 
     /// The answer door for prompts in `dir`: refuses a prompt that holds the text
-    /// of any live Test item of the corpus, in any language.
+    /// of any item in a Test group of the corpus, in any language.
     pub fn answer_files(&self, dir: PathBuf) -> anyhow::Result<AnswerFiles> {
         let withheld = self.corpus.test_texts()?;
         Ok(AnswerFiles::new(dir, self.record.model.clone(), withheld))

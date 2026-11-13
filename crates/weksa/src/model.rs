@@ -56,29 +56,17 @@ impl AnswerFiles {
     }
 }
 
-/// Normalised length from which a Test text is matched anywhere in a prompt.
+/// Normalised length from which a Test text is matched. Every live Test text is
+/// longer; a shorter one ("Stop.") would match any prompt that says "Stop. Then
+/// ...", so a Test item that short is not caught here.
 const LONG: usize = 12;
 
-/// Whether `prompt` holds `text`. The corpus door's own sameness
-/// ([`normalized`]: NFKC, case fold, spacing and punctuation dropped) decides
-/// for a text of `LONG` normalised characters or more, so a re-cased,
-/// re-spaced, wrapped or width-changed copy still counts. A shorter text would
-/// match anything ("Stop." is in "Stop. Then ..."), so it counts only as a
-/// line's end after a non-letter (every renderer prints an item's text last on its line).
+/// Whether `prompt` holds `text`, by the corpus door's own sameness
+/// ([`normalized`]: NFKC, case fold, spacing and punctuation dropped): a
+/// re-cased, re-spaced, wrapped or width-changed copy still counts.
 fn holds(prompt: &str, text: &str) -> bool {
-    let text = text.trim();
     let key = normalized(text);
-    if key.is_empty() {
-        return false;
-    }
-    if key.chars().count() >= LONG {
-        return normalized(prompt).contains(&key);
-    }
-    prompt.lines().any(|l| {
-        l.trim_end().strip_suffix(text).is_some_and(|head| {
-            head.chars().next_back().is_none_or(|c| !c.is_alphanumeric())
-        })
-    })
+    key.chars().count() >= LONG && normalized(prompt).contains(&key)
 }
 
 /// Answers read from one directory and nothing else: `<digest>.answer` is the
