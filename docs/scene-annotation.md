@@ -76,3 +76,41 @@ member, false to true).
 In_group true across the 98: 42 before, 15 after; every unaddressed line is now
 false (it was true on 17 of the 21 unaddressed vgrow groups). Disagreements are
 reported, not adjudicated.
+
+## Reproducing the cut
+
+`scripts/scene-annotation/` holds the standard-library scripts of this cut, run
+from the repo root with `WEKSA` (the binary) and `SCENE_SCRATCH` (a directory
+that is never committed): `build_briefs.py` writes the two annotator briefs from
+the Rubric r1 section and prints each brief's Test-leak count (must be 0) and
+sha256 (it reproduces the briefs of this cut byte for byte); `put_labels.py`
+puts A's `A-en.jsonl` and `A-ja.jsonl`; `agreement.py` prints the tables above and
+must run before the puts, against the store at 76fa685, because the older labels
+are then its latest revisions (it also reads the round-1 encoder answers of
+`runs/growth-base` through `ROUND1`). `DIGEST_OF_THE_RUBRIC` and
+`DIGEST_OF_THE_EARLIER_SCENES` in `crates/weksa/tests/original_corpus.rs` pin the
+rubric text and the 113 earlier revisions.
+
+## Known limits of r1 labels
+
+Found by Soul's pass on this cut (`weksa-lowering:verdict:cut-scene-in-group.s1`).
+They are not fixed in r1; a reviewer's pass over the labels is follow-up
+`weksa-lowering:follow_up:scene-labels-reader-review`.
+
+- The new labels change which ontology entries are selected for 37 groups. Eight
+  addressed lines move onto the casual in-group entries (en-US:12: lantern,
+  broom, mirror, seedling; ja-JP:12: furo, asa, irori, yurikago), while their
+  references are polite requests. The reader default (level, 500, false) is
+  exactly the condition of ja-JP:11.
+- `relative_status` tracks request form for some lines: imperatives read above,
+  favour questions read level or below, so the same household request gets
+  different standing in two forms (hane above/650/true, kabin below/500/false;
+  B gave both level/false). Form is what signals the speech act, which is what
+  part 2 asks for, and register is what part 2 forbids.
+- `in_group` is true on some requests alone (lantern, mulch, stool, hane) and on
+  a line whose only family member is named inside it (original-ja-ane), though r1
+  says a request or a person named inside the line is not enough. A and B
+  agreeing does not clear this.
+- A run opened on the old speaker-state refuses to continue after merge:
+  `runs/growth-base` pins the store of `/var/lib/mind-weksa-self/Weksa-growth`
+  (main), and that checkout must not be pulled while the run is wanted.

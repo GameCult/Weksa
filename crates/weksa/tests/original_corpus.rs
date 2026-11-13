@@ -1111,7 +1111,44 @@ fn committed_scenes_cover_original_groups() {
         DIGEST_OF_THE_SCENES,
         "a latest scene changed without a rubric revision"
     );
+    // The revisions before rubric r1 are provenance and never change: 113 of them.
+    let mut earlier: Vec<&weksa::speaker::Scene> = scenes
+        .iter()
+        .filter(|s| !matches!(&s.annotator, Annotator::Model { generator, .. } if generator == RUBRIC))
+        .collect();
+    earlier.sort_by(|a, b| (&a.group, a.n).cmp(&(&b.group, b.n)));
+    assert_eq!(earlier.len(), 113);
+    let lines: Vec<String> = earlier
+        .iter()
+        .map(|s| format!("{}\n{}\n{:?}\n{:?}", s.group, s.n, s.annotator, s.relations))
+        .collect();
+    let parts: Vec<&[u8]> = lines.iter().map(|l| l.as_bytes()).collect();
+    assert_eq!(
+        weksa::split::fnv1a64_of(&parts),
+        DIGEST_OF_THE_EARLIER_SCENES,
+        "an earlier scene revision changed"
+    );
+    // Rubric r1 is text the labels cite: the section, as committed, is pinned.
+    let doc = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/scene-annotation.md"),
+    )
+    .unwrap();
+    let from = doc.find("## Rubric r1").expect("the doc holds Rubric r1");
+    let rest = &doc[from + "## Rubric r1".len()..];
+    let section = &doc[from..from + "## Rubric r1".len() + rest.find("\n## ").expect("a section follows r1")];
+    assert_eq!(
+        weksa::split::fnv1a64_of(&[section.trim().as_bytes()]),
+        DIGEST_OF_THE_RUBRIC,
+        "rubric r1 was edited; a new rubric is a new section and a new generator"
+    );
 }
+
+/// Taken over the 113 scene revisions that precede rubric r1, 2026-11-13.
+const DIGEST_OF_THE_EARLIER_SCENES: u64 = 2598828882325200913;
+
+/// Taken over the text of the `## Rubric r1` section of docs/scene-annotation.md
+/// (trimmed), 2026-11-13.
+const DIGEST_OF_THE_RUBRIC: u64 = 11823581212652524671;
 
 /// Taken over each live group's latest revision (group, n, features) at rubric r1,
 /// 2026-11-13.
