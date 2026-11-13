@@ -5428,6 +5428,17 @@ fn relower_counts_an_unusable_arm_answer_as_zero() {
 }
 
 #[test]
+fn relower_scores_an_unusable_recorded_answer_as_zero_without_counting_it_against_the_arm() {
+    let (dao, _) = recorded_dao(|_| {});
+    let (whole, _) = relowered(relower(&dao, &mut Lowerer::new(blind), &mut Lowerer::new(blind), None));
+    let (langs, _) = relowered(relower(&dao, &mut Breaks("item:daodejing:3"), &mut Lowerer::new(blind), None));
+    let l = &langs[0];
+    assert_eq!(l.unusable, 0, "{}", l.line());
+    assert_eq!(l.arm, whole[0].arm);
+    assert!(l.recorded.chrf < whole[0].recorded.chrf && l.recorded.meaning < whole[0].recorded.meaning);
+}
+
+#[test]
 fn relower_decides_by_decide_panel_against_the_floor_arm() {
     use weksa::run::decide_panel;
     let (dao, _) = recorded_dao(|_| {});
