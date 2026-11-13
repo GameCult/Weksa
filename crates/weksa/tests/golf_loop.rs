@@ -5335,14 +5335,14 @@ fn the_cycles_candidate_round_stops_on_a_withheld_lowering_prompt() {
 
 use weksa::run::{RelowerOutcome, RelowerReading};
 
-/// `relower` of round 1 with the Bag scorer; `floor` is an optional second arm.
+/// `relower` of round 1 with the Bag scorer; `floors` are the floor arms (none, or three or more).
 fn relower(
     dao: &Dao,
     recorded: &mut dyn ModelPort,
     arm: &mut dyn ModelPort,
-    floor: Option<&mut dyn ModelPort>,
+    floors: &mut [&mut dyn ModelPort],
 ) -> Result<RelowerOutcome, RunError> {
-    dao.run.relower(1, "arm", recorded, arm, floor, &Scorer::new(Bag))
+    dao.run.relower(1, "arm", recorded, arm, floors, &Scorer::new(Bag))
 }
 
 fn relowered(outcome: Result<RelowerOutcome, RunError>) -> (Vec<RelowerReading>, Option<weksa::run::Verdict>) {
@@ -5360,7 +5360,7 @@ fn relower_asks_only_validation_lowering_prompts_of_the_round() {
     // which digest is which item's.
     let (mut every, mut rec, mut arm) = (Lowerer::new(reader), Lowerer::new(reader), Lowerer::new(reader));
     read(ablate(&dao, &mut every, &mut Lowerer::new(reader)).unwrap());
-    relowered(relower(&dao, &mut rec, &mut arm, None));
+    relowered(relower(&dao, &mut rec, &mut arm, &mut []));
     let of = |keys: &[&str]| -> Vec<String> {
         every
             .seen
@@ -5400,7 +5400,7 @@ fn relower_reads_recorded_and_arm_against_the_item() {
         &dao,
         &mut Lowerer::new(reader),
         &mut Lowerer::new(blind),
-        None,
+        &mut [],
     ));
     let l = &langs[0];
     assert_eq!((l.language.as_str(), l.n, l.unusable), ("en-US", 3, 0));
@@ -5408,7 +5408,7 @@ fn relower_reads_recorded_and_arm_against_the_item() {
     assert!(l.arm.composite > l.recorded.composite);
     assert!(l.floor.is_none() && verdict.is_none(), "no floor arm, no verdict");
     // An arm equal to the recorded answers reads equal.
-    let (langs, _) = relowered(relower(&dao, &mut Lowerer::new(reader), &mut Lowerer::new(reader), None));
+    let (langs, _) = relowered(relower(&dao, &mut Lowerer::new(reader), &mut Lowerer::new(reader), &mut []));
     assert_eq!(langs[0].recorded, langs[0].arm);
 }
 
@@ -5432,11 +5432,11 @@ impl ModelPort for Breaks {
 fn relower_counts_an_unusable_arm_answer_as_zero() {
     let (dao, _) = recorded_dao(|_| {});
     let keys = ["item:daodejing:2", "item:daodejing:3", WRITTEN];
-    let (whole, _) = relowered(relower(&dao, &mut Lowerer::new(blind), &mut Lowerer::new(blind), None));
+    let (whole, _) = relowered(relower(&dao, &mut Lowerer::new(blind), &mut Lowerer::new(blind), &mut []));
     let whole = whole[0].arm;
     let (mut chrf, mut meaning) = (0.0, 0.0);
     for key in keys {
-        let (langs, _) = relowered(relower(&dao, &mut Lowerer::new(blind), &mut Breaks(key), None));
+        let (langs, _) = relowered(relower(&dao, &mut Lowerer::new(blind), &mut Breaks(key), &mut []));
         let l = &langs[0];
         assert_eq!((l.n, l.unusable), (3, 1), "{}", l.line());
         assert!(l.arm.chrf < whole.chrf && l.arm.meaning < whole.meaning, "{}", l.line());
@@ -5452,8 +5452,8 @@ fn relower_counts_an_unusable_arm_answer_as_zero() {
 #[test]
 fn relower_scores_an_unusable_recorded_answer_as_zero_without_counting_it_against_the_arm() {
     let (dao, _) = recorded_dao(|_| {});
-    let (whole, _) = relowered(relower(&dao, &mut Lowerer::new(blind), &mut Lowerer::new(blind), None));
-    let (langs, _) = relowered(relower(&dao, &mut Breaks("item:daodejing:3"), &mut Lowerer::new(blind), None));
+    let (whole, _) = relowered(relower(&dao, &mut Lowerer::new(blind), &mut Lowerer::new(blind), &mut []));
+    let (langs, _) = relowered(relower(&dao, &mut Breaks("item:daodejing:3"), &mut Lowerer::new(blind), &mut []));
     let l = &langs[0];
     assert_eq!(l.unusable, 0, "{}", l.line());
     assert_eq!(l.arm, whole[0].arm);
@@ -5465,16 +5465,16 @@ fn relower_decides_by_decide_panel_against_the_floor_arm() {
     use weksa::run::decide_panel;
     let (dao, _) = recorded_dao(|_| {});
     let run = |recorded: fn(&str, &str) -> String, arm: fn(&str, &str) -> String| {
-        let mut floor = Lowerer::new(recorded);
+        let (mut f1, mut f2, mut f3) = (Lowerer::new(recorded), Lowerer::new(recorded), Lowerer::new(recorded));
         let (langs, verdict) = relowered(relower(
             &dao,
             &mut Lowerer::new(recorded),
             &mut Lowerer::new(arm),
-            Some(&mut floor),
+            &mut [&mut f1, &mut f2, &mut f3],
         ));
         let l = &langs[0];
         let floor_reading = l.floor.expect("a floor arm gives a floor");
-        // A floor arm that equals the recorded answers has no spread.
+        // Floor arms that equal the recorded answers have no spread.
         assert_eq!((floor_reading.chrf, floor_reading.meaning, floor_reading.composite), (0.0, 0.0, 0.0));
         assert_eq!(verdict, Some(decide_panel(&[(l.recorded, l.arm, floor_reading)])));
         verdict.unwrap()
@@ -5485,29 +5485,34 @@ fn relower_decides_by_decide_panel_against_the_floor_arm() {
 }
 
 #[test]
-fn relower_floor_is_the_spread_of_recorded_and_the_floor_arm() {
+fn relower_floor_is_the_paired_noise_of_recorded_against_the_floor_arms() {
     let (dao, _) = recorded_dao(|_| {});
     let (langs, _) = relowered(relower(
         &dao,
         &mut Lowerer::new(blind),
         &mut Lowerer::new(blind),
-        Some(&mut Breaks("item:daodejing:3")),
+        &mut [&mut Lowerer::new(blind), &mut Lowerer::new(blind), &mut Breaks("item:daodejing:3")],
     ));
     let l = &langs[0];
     let f = l.floor.unwrap();
-    // The floor arm read as an arm against the same recorded answers.
-    let (as_arm, _) = relowered(relower(&dao, &mut Lowerer::new(blind), &mut Breaks("item:daodejing:3"), None));
-    let a = as_arm[0].arm;
-    assert!(f.chrf > 0.0 && f.meaning > 0.0 && f.composite > 0.0);
-    assert!((f.chrf - (l.recorded.chrf - a.chrf).abs()).abs() < 1e-9, "{}", l.line());
-    assert!((f.composite - (l.recorded.composite - a.composite).abs()).abs() < 1e-9);
+    assert!(f.chrf > 0.0 && f.meaning > 0.0 && f.composite > 0.0, "{}", l.line());
     assert!(l.line().contains(&format!("| floor chrf={:.2}", f.chrf)), "{}", l.line());
     assert_eq!(l.unusable, 0, "unusable counts the arm, not the floor");
-    assert_eq!(l.floor_unusable, 1, "the floor arm's refusal is counted apart");
+    assert_eq!(l.floor_unusable, 1, "a floor arm's refusal is counted apart");
     assert!(l.line().contains(" unusable=0 recorded "), "{}", l.line());
     assert!(l.line().ends_with(" unusable=1"), "the floor's refusal is on the line: {}", l.line());
-    // Without a floor arm there is none to count.
-    assert_eq!(as_arm[0].floor_unusable, 0);
+    // A floor needs three arms: fewer measure no noise, and nothing is asked of the arm.
+    for arms in [1usize, 2] {
+        let mut fs: Vec<Lowerer> = (0..arms).map(|_| Lowerer::new(blind)).collect();
+        let mut dyns: Vec<&mut dyn ModelPort> = fs.iter_mut().map(|f| f as &mut dyn ModelPort).collect();
+        let mut arm = Lowerer::new(blind);
+        let r = relower(&dao, &mut Lowerer::new(blind), &mut arm, &mut dyns);
+        assert!(matches!(r, Err(RunError::FloorArms)));
+        assert!(arm.seen.is_empty());
+    }
+    // Without floor arms there is none to count.
+    let (none, _) = relowered(relower(&dao, &mut Lowerer::new(blind), &mut Lowerer::new(blind), &mut []));
+    assert_eq!(none[0].floor_unusable, 0);
 }
 
 #[test]
@@ -5517,7 +5522,7 @@ fn relower_skips_and_counts_an_item_the_round_refused_before_admission() {
         answers.insert("item:daodejing:3".into(), "not a draft".into());
     });
     let (mut rec, mut arm) = (Lowerer::new(blind), Lowerer::new(blind));
-    let (langs, _) = relowered(relower(&dao, &mut rec, &mut arm, None));
+    let (langs, _) = relowered(relower(&dao, &mut rec, &mut arm, &mut []));
     let l = &langs[0];
     assert_eq!((l.n, l.skipped, l.unusable), (2, 1, 0), "{}", l.line());
     assert!(l.line().starts_with("relower en-US n=2 skipped=1 unusable=0 "), "{}", l.line());
@@ -5536,7 +5541,7 @@ fn relower_skips_and_counts_an_item_whose_lowering_prompt_the_round_refused() {
     let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
     assert_eq!(r.language("ja-JP").unwrap().validation_refused.lower, 1);
     let (mut rec, mut arm) = (Lowerer::new(bi_blind), Lowerer::new(bi_blind));
-    let (langs, _) = relowered(relower(&dao, &mut rec, &mut arm, None));
+    let (langs, _) = relowered(relower(&dao, &mut rec, &mut arm, &mut []));
     let ja = langs.iter().find(|l| l.language == "ja-JP").unwrap();
     assert_eq!((ja.n, ja.skipped), (1, 1), "{}", ja.line());
     assert_eq!(ja.recorded, ja.arm);
@@ -5579,7 +5584,7 @@ fn relower_decides_over_the_whole_panel_not_its_first_language() {
         &dao,
         &mut Lowerer::new(bi_reader),
         &mut Lowerer::new(bi_ja_lost),
-        Some(&mut Lowerer::new(bi_reader)),
+        &mut [&mut Lowerer::new(bi_reader), &mut Lowerer::new(bi_reader), &mut Lowerer::new(bi_reader)],
     ));
     assert_eq!(
         langs.iter().map(|l| (l.language.as_str(), l.n)).collect::<Vec<_>>(),
@@ -5603,16 +5608,16 @@ fn relower_refuses_a_cycle_round_and_a_missing_recorded_answer() {
     run_cycle(&mut dao, &mut cycle_fake(ONE_CONCEPT));
     let candidate = dao.run.rounds().unwrap().into_iter().find(|r| r.cycle().is_some()).unwrap().n();
     let mut arm = Lowerer::new(reader);
-    let r = dao.run.relower(candidate, "arm", &mut Lowerer::new(reader), &mut arm, None, &Scorer::new(Bag));
+    let r = dao.run.relower(candidate, "arm", &mut Lowerer::new(reader), &mut arm, &mut [], &Scorer::new(Bag));
     assert!(matches!(r, Err(RunError::Malformed("round"))));
-    let r = dao.run.relower(99, "arm", &mut Lowerer::new(reader), &mut arm, None, &Scorer::new(Bag));
+    let r = dao.run.relower(99, "arm", &mut Lowerer::new(reader), &mut arm, &mut [], &Scorer::new(Bag));
     assert!(matches!(r, Err(RunError::Malformed("round"))));
     assert!(arm.seen.is_empty());
 
     let (dao, _) = recorded_dao(|_| {});
     let mut empty = RecordedAnswers::new(dao.root.join("round-1/nowhere"), "fake-model".into());
     let mut arm = Lowerer::new(reader);
-    let r = relower(&dao, &mut empty, &mut arm, None);
+    let r = relower(&dao, &mut empty, &mut arm, &mut []);
     assert!(matches!(r, Err(RunError::Unrecorded)));
     assert!(arm.seen.is_empty(), "nothing is asked of the arm before the round's answer exists");
 }
@@ -5622,7 +5627,12 @@ fn relower_floor_arm_with_an_unanswered_prompt_is_refused() {
     use weksa::model::RecordedAnswers;
     let (dao, _) = recorded_dao(|_| {});
     let mut floor = RecordedAnswers::new(dao.root.join("relower-1-floor"), "fake-model".into());
-    let r = relower(&dao, &mut Lowerer::new(reader), &mut Lowerer::new(reader), Some(&mut floor));
+    let r = relower(
+        &dao,
+        &mut Lowerer::new(reader),
+        &mut Lowerer::new(reader),
+        &mut [&mut floor, &mut Lowerer::new(reader), &mut Lowerer::new(reader)],
+    );
     assert!(matches!(r, Err(RunError::FloorUnanswered)));
     assert!(!dao.root.join("relower-1-floor").exists(), "a floor arm is never written to");
 }
@@ -5640,9 +5650,9 @@ fn relower_checks_the_embedder_not_the_model() {
     }
     let (dao, _) = recorded_dao(|_| {});
     let mut other = Named(Lowerer::new(blind));
-    relowered(relower(&dao, &mut Lowerer::new(reader), &mut other, None));
+    relowered(relower(&dao, &mut Lowerer::new(reader), &mut other, &mut []));
     let mut arm = Lowerer::new(reader);
-    let r = dao.run.relower(1, "arm", &mut Lowerer::new(reader), &mut arm, None, &Scorer::new(OtherEmbedder));
+    let r = dao.run.relower(1, "arm", &mut Lowerer::new(reader), &mut arm, &mut [], &Scorer::new(OtherEmbedder));
     assert!(matches!(r, Err(RunError::Drift(DriftOf::Embedder))));
     assert!(arm.seen.is_empty());
 }
@@ -5676,7 +5686,7 @@ fn relower_records_nothing() {
     // An unanswered arm writes its prompts in its own directory only.
     let mut files = dao.run.answer_files(dao.run.relower_dir(1, "arm")).unwrap();
     // The recorded answers are files here, as the relay leaves them.
-    let r = relower(&dao, &mut recorded, &mut files, None);
+    let r = relower(&dao, &mut recorded, &mut files, &mut []);
     assert!(matches!(r, Err(RunError::Unrecorded)), "no round answer files yet");
     let after = tree(&dao.root);
     for (path, bytes) in &before {
@@ -5699,7 +5709,7 @@ fn relower_records_nothing() {
     let before = tree(&dao.root);
     let mut recorded = RecordedAnswers::new(dao.root.join("round-1"), "fake-model".into());
     let mut files = dao.run.answer_files(dao.run.relower_dir(1, "arm")).unwrap();
-    let RelowerOutcome::Unanswered { prompts } = relower(&dao, &mut recorded, &mut files, None).unwrap() else {
+    let RelowerOutcome::Unanswered { prompts } = relower(&dao, &mut recorded, &mut files, &mut []).unwrap() else {
         panic!("the arm is unanswered")
     };
     assert_eq!(prompts.len(), 3);
@@ -5727,7 +5737,7 @@ fn relower_arm_prompt_holding_test_text_is_withheld() {
         |_| {},
     );
     let mut files = dao.run.answer_files(dao.run.relower_dir(1, "arm")).unwrap();
-    let r = relower(&dao, &mut Lowerer::new(reader), &mut files, None);
+    let r = relower(&dao, &mut Lowerer::new(reader), &mut files, &mut []);
     assert!(matches!(r, Err(RunError::Withheld)), "{:?}", r.map(|_| ()));
     let dir = dao.run.relower_dir(1, "arm");
     let prompts = std::fs::read_dir(&dir)

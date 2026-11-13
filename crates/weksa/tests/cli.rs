@@ -1833,12 +1833,19 @@ fn cli_loop_relower_exits_3_until_answered_and_refuses_bad_labels() {
     assert_eq!(o.status.code(), Some(1), "{}", out(&o));
     assert!(!root.join("relower-1-second").exists());
 
-    // Answered floor: a verdict line.
-    std::fs::create_dir(root.join("relower-1-second")).unwrap();
-    for digest in &digests {
-        std::fs::write(root.join(format!("relower-1-second/{digest}.answer")), said).unwrap();
-    }
+    // Fewer than three floor arms is refused: one pair measures no noise.
     let o = relower(&["--arm", "tuned", "--floor", "second"]);
+    assert_eq!(o.status.code(), Some(1), "{}", out(&o));
+    assert!(out(&o).contains("three or more floor arms"), "{}", out(&o));
+
+    // Answered floors: a verdict line.
+    for label in ["second", "third", "fourth"] {
+        std::fs::create_dir_all(root.join(format!("relower-1-{label}"))).unwrap();
+        for digest in &digests {
+            std::fs::write(root.join(format!("relower-1-{label}/{digest}.answer")), said).unwrap();
+        }
+    }
+    let o = relower(&["--arm", "tuned", "--floor", "second", "--floor", "third", "--floor", "fourth"]);
     assert!(o.status.success(), "{}", out(&o));
     let text = out(&o);
     assert!(text.contains("| floor chrf=0.00") && text.trim_end().ends_with("verdict Rejected(NoGain)"), "{text}");
@@ -1852,6 +1859,7 @@ fn cli_loop_relower_exits_3_until_answered_and_refuses_bad_labels() {
         vec!["--arm", &long],
         vec!["--arm", "../x"],
         vec!["--arm", "tuned", "--floor", "Bad"],
+        vec!["--arm", "tuned", "--floor", "b", "--floor", "b", "--floor", "c"],
     ] {
         let o = relower(&args);
         assert_eq!(o.status.code(), Some(1), "{args:?}: {}", out(&o));

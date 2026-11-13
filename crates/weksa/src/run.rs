@@ -498,6 +498,8 @@ pub enum RunError {
     /// The floor arm of a relower holds no answer to a prompt; it is a
     /// reference, never written to, and must be answered whole first.
     FloorUnanswered,
+    /// A relower was given fewer floor arms than [`FLOOR_ARMS_MIN`].
+    FloorArms,
 }
 
 impl fmt::Display for RunError {
@@ -526,6 +528,7 @@ impl fmt::Display for RunError {
             RunError::SpeakerState => {
                 f.write_str("a scene does not read against the run's inventory")
             }
+            RunError::FloorArms => f.write_str("a floor needs three or more floor arms; fewer measure no noise"),
             RunError::FloorUnanswered => {
                 f.write_str("the floor arm holds no answer to a lowering prompt; answer it whole first")
             }
@@ -1586,13 +1589,14 @@ pub struct RelowerReading {
     pub skipped: u32,
     /// Arm answers that were not a usable lowering; each scored 0.
     pub unusable: u32,
-    /// Floor-arm answers that were not a usable lowering; each scored 0, which
-    /// widens `floor`. Zero without a floor arm.
+    /// Floor-arm answers that were not a usable lowering, over every floor arm;
+    /// each scored 0, which widens `floor`. Zero without floor arms.
     pub floor_unusable: u32,
     /// The round's own lowering, read against the items.
     pub recorded: Reading,
     pub arm: Reading,
-    /// `spread(recorded, floor arm)`, when a floor arm was given.
+    /// [`paired_floor`] of the recorded lowering against the floor arms, when
+    /// floor arms were given.
     pub floor: Option<Reading>,
 }
 
@@ -1637,9 +1641,10 @@ impl RunStores {
     /// distil decision, whether a tuned lowerer is worth keeping against the
     /// prompted one (calibration-pending: see the map). Asks `arm` the byte-identical lowering prompts of round `n`'s live
     /// Validation items, reads the arm and the round's own lowering
-    /// (`recorded`) against the items, and, given a `floor` arm (a second
-    /// prompted lowering, so the floor is lowering-only noise), decides by
-    /// [`decide_panel`] over (recorded, arm, spread(recorded, floor)). Only
+    /// (`recorded`) against the items, and, given `floors` (three or more
+    /// prompted repeats of the recorded lowering, so the floor is lowering-only
+    /// noise), decides by [`decide_panel`] over (recorded, arm,
+    /// [`paired_floor`]). Only
     /// the model of `arm` is unpinned; the embedder is checked. An arm answer
     /// that is not a usable lowering scores 0 and is counted in `unusable`.
     /// Records nothing; `arm_label` names only where the scratch packet store
@@ -1650,7 +1655,7 @@ impl RunStores {
         arm_label: &str,
         recorded: &mut dyn ModelPort,
         arm: &mut dyn ModelPort,
-        mut floor: Option<&mut dyn ModelPort>,
+        floors: &mut [&mut dyn ModelPort],
         scorer: &Scorer<E>,
     ) -> Result<RelowerOutcome, RunError> {
         let store = |_| RunError::Store;
@@ -1666,9 +1671,12 @@ impl RunStores {
         }
         let mut scratch = PacketStore::open(&dir.join("base.cc")).map_err(store)?;
 
-        // Per language, per item: the item text, then the recorded, arm and floor
-        // lowerings (`None` when unusable).
-        type Row = (String, Option<String>, Option<String>, Option<String>);
+        if (1..FLOOR_ARMS_MIN).contains(&floors.len()) {
+            return Err(RunError::FloorArms);
+        }
+        // Per language, per item: the item text, then the recorded and arm
+        // lowerings and one per floor arm (`None` when unusable).
+        type Row = (String, Option<String>, Option<String>, Vec<Option<String>>);
         let mut waiting: Vec<String> = Vec::new();
         let mut floor_waiting = false;
         let mut rows: Vec<Vec<Row>> = Vec::new();
@@ -1690,16 +1698,16 @@ impl RunStores {
                     Asked::Waiting => return Err(RunError::Unrecorded),
                     other => text(other),
                 };
-                let floor_text = match floor.as_deref_mut() {
-                    Some(f) => match asked(f, &prompt)? {
+                let mut floor_texts = Vec::new();
+                for f in floors.iter_mut() {
+                    floor_texts.push(match asked(&mut **f, &prompt)? {
                         Asked::Waiting => {
                             floor_waiting = true;
                             None
                         }
                         other => text(other),
-                    },
-                    None => None,
-                };
+                    });
+                }
                 let arm_text = match asked(arm, &prompt)? {
                     Asked::Waiting => {
                         let d = prompt.digest();
@@ -1710,7 +1718,7 @@ impl RunStores {
                     }
                     other => text(other),
                 };
-                language_rows.push((item.text.clone(), recorded_text, arm_text, floor_text));
+                language_rows.push((item.text.clone(), recorded_text, arm_text, floor_texts));
             }
             rows.push(language_rows);
         }
@@ -1723,8 +1731,8 @@ impl RunStores {
 
         // One score call: each usable lowering against its item, in row order.
         let mut inputs: Vec<ScoreInput> = Vec::new();
-        for (reference, recorded, arm, floor_text) in rows.iter().flatten() {
-            for output in [recorded, arm, floor_text].into_iter().flatten() {
+        for (reference, recorded, arm, floor_texts) in rows.iter().flatten() {
+            for output in [recorded, arm].into_iter().chain(floor_texts).flatten() {
                 inputs.push(ScoreInput { reference, output });
             }
         }
@@ -1751,7 +1759,8 @@ impl RunStores {
         let mut languages = Vec::new();
         let live = self.corpus.all().map_err(store)?;
         for ((language, _, _), language_rows) in held.iter().zip(&rows) {
-            let (mut rec, mut arm_scores, mut floor_scores) = (Vec::new(), Vec::new(), Vec::new());
+            let (mut rec, mut arm_scores) = (Vec::new(), Vec::new());
+            let mut floor_scores: Vec<Vec<ItemScore>> = vec![Vec::new(); floors.len()];
             let (mut unusable, mut floor_unusable) = (0u32, 0u32);
             for (_, r, a, f) in language_rows {
                 rec.push(next(r)?);
@@ -1759,9 +1768,9 @@ impl RunStores {
                 if a.is_none() {
                     unusable += 1;
                 }
-                if floor.is_some() {
-                    floor_scores.push(next(f)?);
-                    if f.is_none() {
+                for (scores, t) in floor_scores.iter_mut().zip(f) {
+                    scores.push(next(t)?);
+                    if t.is_none() {
                         floor_unusable += 1;
                     }
                 }
@@ -1781,14 +1790,10 @@ impl RunStores {
                 floor_unusable,
                 recorded: recorded_reading,
                 arm: reading_of(&arm_scores)?,
-                floor: if floor.is_some() {
-                    Some(spread(&recorded_reading, &reading_of(&floor_scores)?))
-                } else {
-                    None
-                },
+                floor: if floors.is_empty() { None } else { Some(paired_floor(&rec, &floor_scores)) },
             });
         }
-        let verdict = if floor.is_some() {
+        let verdict = if !floors.is_empty() {
             let panel: Vec<(Reading, Reading, Reading)> = languages
                 .iter()
                 .filter_map(|l| Some((l.recorded, l.arm, l.floor?)))
@@ -2261,7 +2266,11 @@ pub fn decide(base: &Reading, candidate: &Reading, floor: &Reading) -> Verdict {
 /// decides whether a language regressed (any regression rejects; the first in
 /// panel order names the metric), and the gain test is [`decide`]'s for one
 /// language and, for two or more, the panel's: the sum over languages of the
-/// composite deltas (billionths) must exceed one [`LADDER_STEP`]. A language
+/// composite deltas (billionths) must exceed the larger of one [`LADDER_STEP`]
+/// and the noise of that sum, the root of the languages' composite floors
+/// squared (independent languages; a one-language panel's noise is its floor,
+/// as in [`decide`]). Without that noise term a prompted repeat of the base
+/// lowering read Accepted in 40% of the calibration trials on `distil-base` at `FLOOR_Z` 3. A language
 /// may lose up to its own noise floor if the panel nets more than a step; the
 /// rule gives up strict Pareto non-regression, which on noisy per-language
 /// readings ratchets every base to a favourable draw and strangles the loop
@@ -2289,7 +2298,10 @@ pub fn decide_panel(rows: &[(Reading, Reading, Reading)]) -> Verdict {
         .iter()
         .map(|(base, candidate, _)| nano(candidate.composite - base.composite))
         .sum();
-    if net > nano(LADDER_STEP) {
+    // The noise of a sum of independent languages' differences: the root of the
+    // sum of their floors squared.
+    let noise = rows.iter().map(|(_, _, floor)| floor.composite.powi(2)).sum::<f64>().sqrt();
+    if net > nano(noise.max(LADDER_STEP)) {
         Verdict::Accepted
     } else {
         Verdict::Rejected(Why::NoGain)
@@ -2486,6 +2498,50 @@ fn floor_of(
             ))
         })
         .collect()
+}
+
+/// How many standard errors of a prompted-vs-prompted mean difference the
+/// relower floor is wide, and the fewest floor arms (prompted repeats of the
+/// recorded lowering) it is measured over. Calibrated on `runs/distil-base`
+/// (eight prompted draws of 14 en-US and 14 ja-JP Validation items, 28
+/// unordered pairs): with three floor arms a prompted repeat reads NoGain in
+/// 92% of the trials (bootstrap 95% over draws 80 to 100%), Regressed 8% and
+/// Accepted 0%; a "Yes." arm and a mild degradation (one detail blurred per
+/// utterance) read Regressed in 100%, and a subtler one in 75% (50 to 100%): at
+/// 14 items a degradation under about three standard errors cannot be told from
+/// noise. `FLOOR_Z` was chosen on that data, so the rates are in-sample.
+pub const FLOOR_Z: f64 = 3.0;
+pub const FLOOR_ARMS_MIN: usize = 3;
+
+/// The lowering-only noise floor of a relower: `FLOOR_Z` standard errors of the
+/// mean per-item difference between the recorded lowering and a repeat of it,
+/// metric by metric. Each floor arm gives one paired sample of per-item
+/// differences; their variances are pooled over the arms, so the floor rests on
+/// `arms * (n - 1)` degrees of freedom instead of the one coincidental
+/// difference of means a two-run spread is (which reads 0 whenever the two
+/// means happen to meet, and then a one-step dip regresses). Paired per item,
+/// after Koehn (2004). NaN (fail closed in [`decide`]) when there are fewer
+/// than two items or no arm (0/0), and when an arm is ragged.
+pub fn paired_floor(recorded: &[ItemScore], arms: &[Vec<ItemScore>]) -> Reading {
+    let n = recorded.len();
+    if arms.iter().any(|a| a.len() != n) {
+        return Reading { chrf: f64::NAN, meaning: f64::NAN, composite: f64::NAN };
+    }
+    let pooled = |of: &dyn Fn(&ItemScore) -> f64| {
+        let variance = |arm: &Vec<ItemScore>| {
+            let d: Vec<f64> = recorded.iter().zip(arm).map(|(r, a)| of(r) - of(a)).collect();
+            let mean = d.iter().sum::<f64>() / n as f64;
+            d.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n - 1) as f64
+        };
+        let v = arms.iter().map(variance).sum::<f64>() / arms.len() as f64;
+        FLOOR_Z * (v / n as f64).sqrt()
+    };
+    let meaning = |s: &ItemScore| s.meaning.unwrap_or(0.0);
+    Reading {
+        chrf: pooled(&|s| s.chrf),
+        meaning: pooled(&meaning),
+        composite: pooled(&|s| (s.chrf / 100.0 + meaning(s)) / 2.0),
+    }
 }
 
 /// The absolute difference of two readings, metric by metric.
@@ -2870,6 +2926,52 @@ mod tests {
     }
 
     #[test]
+    fn paired_floor_is_z_standard_errors_of_the_paired_difference() {
+        let item = |chrf: f64, meaning: f64| ItemScore { chrf, meaning: Some(meaning) };
+        let recorded = [item(60.0, 0.8), item(40.0, 0.6), item(50.0, 0.7), item(30.0, 0.5)];
+        // An arm that differs by a constant has no spread of differences: a
+        // shifted mean is the thing the floor is read against, not noise.
+        let shifted: Vec<ItemScore> = recorded.iter().map(|s| item(s.chrf - 5.0, s.meaning.unwrap() - 0.1)).collect();
+        let f = paired_floor(&recorded, &[shifted.clone(), shifted.clone(), shifted]);
+        assert!(f.chrf.abs() < 1e-9 && f.meaning.abs() < 1e-9 && f.composite.abs() < 1e-9, "{f:?}");
+        // Differences 2, -2, 2, -2 on chrF: sample variance 16/3, standard error
+        // sqrt(16/3/4), FLOOR_Z of it; arms pool, so a second equal arm changes nothing.
+        let wobble_arm = |recorded: &[ItemScore]| -> Vec<ItemScore> {
+            recorded
+                .iter()
+                .enumerate()
+                .map(|(i, s)| item(s.chrf - if i % 2 == 0 { 2.0 } else { -2.0 }, s.meaning.unwrap()))
+                .collect()
+        };
+        let wobble = wobble_arm(&recorded);
+        let want = FLOOR_Z * (16.0_f64 / 3.0 / 4.0).sqrt();
+        let one = paired_floor(&recorded, std::slice::from_ref(&wobble));
+        let two = paired_floor(&recorded, &[wobble.clone(), wobble.clone()]);
+        assert!((one.chrf - want).abs() < 1e-9 && (two.chrf - want).abs() < 1e-9, "{one:?} {two:?}");
+        assert!(one.meaning.abs() < 1e-9);
+        // Arms pool by the mean of their variances: one wobbling arm and one
+        // exact repeat give the root of half the variance.
+        let exact = recorded.to_vec();
+        let mixed = paired_floor(&recorded, &[wobble.clone(), exact]);
+        assert!((mixed.chrf - FLOOR_Z * (16.0_f64 / 3.0 / 2.0 / 4.0).sqrt()).abs() < 1e-9, "{mixed:?}");
+        // The calibrated constants, pinned apart from the formula.
+        assert_eq!((FLOOR_Z, FLOOR_ARMS_MIN), (3.0, 3));
+        // Under two items, no arms or a ragged arm there is no floor: NaN fails
+        // closed in `decide`.
+        for f in [
+            paired_floor(&recorded[..1], &[vec![item(1.0, 1.0)]]),
+            paired_floor(&recorded, &[]),
+            paired_floor(&recorded, &[vec![item(1.0, 1.0)]]),
+        ] {
+            assert!(f.composite.is_nan());
+            assert_eq!(
+                decide(&reading(50.0, 0.5, 0.5), &reading(50.0, 0.5, 0.9), &f),
+                Verdict::Rejected(Why::Regressed(Metric::Composite))
+            );
+        }
+    }
+
+    #[test]
     fn decide_panel_table() {
         let zero = reading(0.0, 0.0, 0.0);
         let base = reading(50.0, 0.5, 0.5);
@@ -2922,9 +3024,8 @@ mod tests {
         assert_eq!(net(LADDER_STEP + 6e-10), Verdict::Accepted);
         assert_eq!(net(LADDER_STEP + 2e-9), Verdict::Accepted);
         // Liveness: no language need pass its own threshold. Two languages each
-        // gaining 0.6 of a step at zero floor accept; so does one gaining two
-        // steps under a 0.02 floor (its own threshold) with the others flat; so
-        // does a gain with another language falling inside its own floor.
+        // gaining 0.6 of a step at zero floor accept; so does a gain past the
+        // noise of the sum with another language falling inside its own floor.
         let each = 0.6 * LADDER_STEP;
         assert_eq!(
             decide_panel(&[
@@ -2933,27 +3034,32 @@ mod tests {
             ]),
             Verdict::Accepted
         );
+        // The sum must also clear its own noise: the root of the floors squared
+        // (0.02 and 0.02 give 0.0283), not just a step. A repeat of the base
+        // lowering gains that much by chance.
         let big_floor = reading(0.0, 0.0, 0.02);
-        assert_eq!(
-            decide_panel(&[(base, reading(50.0, 0.5, 0.5 + 2.0 * LADDER_STEP), big_floor), (base, flat, big_floor)]),
-            Verdict::Accepted
-        );
+        let sum_of = |gain: f64| {
+            decide_panel(&[(base, reading(50.0, 0.5, 0.5 + gain), big_floor), (base, flat, big_floor)])
+        };
+        assert_eq!(sum_of(0.02), rejected(Why::NoGain), "past a step, under the noise of the sum");
+        assert_eq!(sum_of(0.028), rejected(Why::NoGain));
+        assert_eq!(sum_of(0.029), Verdict::Accepted);
         let own_floor = reading(0.0, 0.0, 0.004);
+        assert_eq!(
+            decide_panel(&[
+                (base, reading(50.0, 0.5, 0.55), reading(0.0, 0.0, 0.03)),
+                (base, reading(50.0, 0.5, 0.497), own_floor)
+            ]),
+            Verdict::Accepted,
+            "a fall inside the language's floor, net 0.047 over a noise of 0.0303"
+        );
         assert_eq!(
             decide_panel(&[
                 (base, reading(50.0, 0.5, 0.51), reading(0.0, 0.0, 0.03)),
                 (base, reading(50.0, 0.5, 0.497), own_floor)
             ]),
-            Verdict::Accepted,
-            "a fall inside the language's floor, net 0.007"
-        );
-        // The same fall with the net exactly a step rejects.
-        assert_eq!(
-            decide_panel(&[
-                (base, reading(50.0, 0.5, 0.508), reading(0.0, 0.0, 0.03)),
-                (base, reading(50.0, 0.5, 0.497), own_floor)
-            ]),
-            rejected(Why::NoGain)
+            rejected(Why::NoGain),
+            "net 0.007 is under the noise"
         );
         // The sum is over the deltas, with each language's fall counted.
         assert_eq!(
