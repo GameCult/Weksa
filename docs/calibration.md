@@ -9,7 +9,9 @@ reads the answered draws through `RunStores::read_draws` (the scoring
 read and skipped per language, the trial totals with their Accepted, NoGain and
 Regressed counts, and the mean panel noise. That is all it produces: the
 Accepted/NoGain/Regressed counts and the noise mean in the map's "Recalibration
-on the grown corpus" block are reproduced by it; the other figures there (the
+on the grown corpus" block are reproduced by it, and the prompted trials are
+also printed split by the recorded lowering `R`'s role (`prompted-r-candidate`,
+`prompted-r-base`, `prompted-r-free`, see below); the other figures there (the
 35% with R removed, the noise range, the 0.0185 gain and its 0.41 ratio, the
 bootstrap intervals, the per-item SDs, R's +0.024, the mild-arm duplicate
 counts and mean composite offsets, the Train-vocabulary overlap, the old/new
@@ -27,7 +29,17 @@ draws; the floor size is `FLOOR_ARMS_MIN` (3), the live rule's.
   3-subset of the rest of `P` as the floor. A repeat of the same lowering
   should read NoGain; Accepted is a false accept, Regressed a false reject.
   (`R` comes from the round, not from `relower`, so it may not be
-  exchangeable with a repeat; read the pairs that involve it with that in mind.)
+  exchangeable with a repeat.) The prompted line is therefore printed three
+  more times, by `R`'s role in the trial: `prompted-r-candidate` (`R` is the
+  candidate), `prompted-r-base` (`R` is the base) and `prompted-r-free` (`R` is
+  neither; it may sit in the floor). The three sum to the prompted line. Read the Accepted
+  and Regressed columns of each line: a false accept sits mostly under the
+  first and a false reject under the second, but `R`-as-candidate trials can
+  Regress too (class `old` on `growth-scene`: 5 of its 15). The third
+  is the exchangeable rate: on `growth-scene` it was 0 Accepted and 0 Regressed
+  of 80 while all 11 false accepts and 9 false rejects involved `R`. Which of
+  the two rates the live rule should be held to is undecided: the live loop
+  meets `R` as the head's establishing lowering.
 - Degraded trials, per `--degraded` arm: every base in `P` against every
   3-subset of the rest of `P`, the degraded draw as the candidate. These should
   read Regressed.

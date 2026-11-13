@@ -1885,19 +1885,51 @@ impl Counts {
             Verdict::Rejected(_) => self.nogain += 1,
         }
     }
+
+    /// The `trials=.. nogain=.. accepted=.. regressed=..` text of a calibrate line.
+    pub fn line(&self) -> String {
+        format!("trials={} nogain={} accepted={} regressed={}", self.trials, self.nogain, self.accepted, self.regressed)
+    }
+
+    fn plus(self, o: Counts) -> Counts {
+        Counts {
+            trials: self.trials + o.trials,
+            accepted: self.accepted + o.accepted,
+            nogain: self.nogain + o.nogain,
+            regressed: self.regressed + o.regressed,
+        }
+    }
 }
 
 /// What [`calibration_trials`] counted over one set of items.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Trials {
-    /// Ordered (base, candidate) pairs of prompted draws, each over every floor.
+    /// Ordered (base, candidate) pairs of prompted draws, each over every floor:
+    /// the sum of the three counts below.
     pub prompted: Counts,
+    /// The prompted trials whose candidate is the recorded lowering `R` (port 0).
+    /// `R` comes from the round, not from `relower`, so it is not exchangeable
+    /// with a repeat: every false accept of a grown-corpus calibration lived here.
+    pub r_candidate: Counts,
+    /// The prompted trials whose base is `R`.
+    pub r_base: Counts,
+    /// The prompted trials with `R` neither base nor candidate (it may sit in
+    /// the floor): the exchangeable repeats.
+    pub r_free: Counts,
     /// Per degraded arm in the order given: the arm as the candidate.
     pub degraded: Vec<Counts>,
     /// Every candidate arm as the candidate, pooled.
     pub candidate: Counts,
     /// The mean of [`panel_noise`] over every (base, floor) choice.
     pub noise: f64,
+}
+
+impl Trials {
+    /// The prompted trials by the recorded lowering `R`'s role, labelled as the
+    /// calibrate lines print them.
+    pub fn r_roles(&self) -> [(&'static str, Counts); 3] {
+        [("r-candidate", self.r_candidate), ("r-base", self.r_base), ("r-free", self.r_free)]
+    }
 }
 
 /// Every `k`-subset of `pool`, in order.
@@ -1942,7 +1974,8 @@ pub fn calibration_trials(
     };
     let pool: Vec<usize> = (0..prompted).collect();
     let without = |out: &[usize]| -> Vec<usize> { pool.iter().copied().filter(|p| !out.contains(p)).collect() };
-    let (mut prompted_counts, mut candidate_counts) = (Counts::default(), Counts::default());
+    let (mut r_candidate, mut r_base, mut r_free) = (Counts::default(), Counts::default(), Counts::default());
+    let mut candidate_counts = Counts::default();
     let mut degraded_counts = vec![Counts::default(); degraded];
     let (mut noise, mut noises) = (0.0, 0u32);
     for &b in &pool {
@@ -1958,12 +1991,16 @@ pub fn calibration_trials(
         }
         for &c in pool.iter().filter(|&&c| c != b) {
             for floors in subsets(&without(&[b, c]), FLOOR_ARMS_MIN) {
-                prompted_counts.tally(decide_panel(&rows(b, c, &floors)));
+                let side = if c == 0 { &mut r_candidate } else if b == 0 { &mut r_base } else { &mut r_free };
+                side.tally(decide_panel(&rows(b, c, &floors)));
             }
         }
     }
     Trials {
-        prompted: prompted_counts,
+        prompted: r_candidate.plus(r_base).plus(r_free),
+        r_candidate,
+        r_base,
+        r_free,
         degraded: degraded_counts,
         candidate: candidate_counts,
         noise: noise / f64::from(noises),
@@ -3066,6 +3103,9 @@ mod tests {
         draws.extend((0..3).map(|s| draw(2, 8, 0.8, 0.02, s)));
         let t = calibration_trials(&draws, 6, 2, 3);
         assert_eq!(t.prompted.trials, 120);
+        // R is port 0: 20 pairs with R as candidate, 20 as base, 20 between the other five, 4 floors each.
+        assert_eq!((t.r_candidate.trials, t.r_base.trials, t.r_free.trials), (20, 20, 80));
+        assert_eq!(t.prompted.trials, t.r_candidate.trials + t.r_base.trials + t.r_free.trials);
         assert_eq!(t.degraded.iter().map(|d| d.trials).collect::<Vec<_>>(), [60, 60]);
         assert_eq!(t.candidate.trials, 6 * 10 * 3);
         assert!(t.noise > 0.0);
@@ -3073,6 +3113,20 @@ mod tests {
         assert!(t.degraded.iter().all(|d| d.regressed == d.trials));
         // A far better draw is accepted in every trial.
         assert_eq!(t.candidate.accepted, t.candidate.trials);
+
+        // R (port 0) scores above the other prompted draws: it is Accepted as a
+        // candidate and Regressed as a base, and the trials without it read NoGain.
+        let mut r_high: Vec<_> = (0..6).map(|s| draw(2, 8, if s == 0 { 0.8 } else { 0.6 }, 0.02, s)).collect();
+        let t = calibration_trials(&r_high, 6, 0, 0);
+        let [(cl, c), (bl, b), (fl, f)] = t.r_roles();
+        assert_eq!((cl, bl, fl), ("r-candidate", "r-base", "r-free"));
+        assert_eq!((c.accepted, c.regressed), (c.trials, 0));
+        assert_eq!((b.regressed, b.accepted), (b.trials, 0));
+        assert_eq!((f.nogain, f.trials), (80, 80));
+        assert_eq!(b.line(), "trials=20 nogain=0 accepted=0 regressed=20");
+        assert_eq!(c.line(), "trials=20 nogain=0 accepted=20 regressed=0");
+        assert_eq!(f.line(), "trials=80 nogain=80 accepted=0 regressed=0");
+        r_high.clear();
 
         // Identical prompted draws: nothing to gain, nothing regressed, no noise.
         let same: Vec<_> = (0..6).map(|_| draw(2, 8, 0.6, 0.02, 1)).collect();

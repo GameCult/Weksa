@@ -543,14 +543,22 @@ mild 60, Train-guide 240; Accepted / NoGain / Regressed):
 | old (14) | 0/105/15 | 0.0844 | 60 | 60 | 40/80/120 |
 | new (21) | 10/97/13 | 0.0340 | 3 | 4 | 50/129/61 |
 
-Measured by Soul scratch scripts outside git (not reproduced by the harness;
-`calibrate` prints class totals only):
+Measured by Soul scratch scripts outside git (not reproduced by the harness,
+except the R split in the first bullet, which `calibrate` prints as
+`prompted-r-candidate`, `prompted-r-base` and `prompted-r-free` since the
+`calibrate-report-r-involvement` cut; Soul re-ran growth-scene with it and the
+printed `all` lines read r-candidate 11/9/0, r-base 0/11/9, r-free 0/80/0, as
+below, in Accepted/NoGain/Regressed):
 
 - Every one of the 11 false accepts has R as the candidate (bases
   prompted-2, p4, p6); every one of the 9 false rejects has R as the base. The
   80 trials without R read 0 Accepted and 0 Regressed in every class (95% upper
   bound 4.5%). R scores above the other prompted draws (+0.012 en-US and +0.023
   ja-JP on all items), so R is not exchangeable with a repeat.
+  Which of the two rates the live rule should be held to is undecided: the
+  live loop meets R as the head's establishing lowering, so the R-candidate
+  rate may be the real one for cycles, while the 80 R-free trials are the
+  exchangeable repeat rate; neither number stands for the other.
 - The old/new split of the false-accept lives only in the 20 trials where R is
   the candidate, from 5 bases: new 10/20 [0.27, 0.73], old 0/20 [0.00, 0.17]
   (Clopper-Pearson); by base 3 of 5 against 0 of 5 (Fisher p 0.17). The

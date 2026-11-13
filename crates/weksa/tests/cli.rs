@@ -1953,6 +1953,9 @@ fn cli_loop_calibrate_reads_answered_draws_and_refuses_unanswered_and_bad_labels
     assert!(text.starts_with("calibrate draws prompted=4 degraded=1 candidate=0 floor-arms=3 unusable=0"), "{text}");
     assert!(text.contains("calibrate class=all items en-US n=2 skipped=0"), "{text}");
     assert!(text.contains("calibrate class=all prompted trials=20 nogain=20 accepted=0 regressed=0"), "{text}");
+    for side in ["r-candidate trials=4", "r-base trials=4", "r-free trials=12"] {
+        assert!(text.contains(&format!("calibrate class=all prompted-{side} nogain=")), "{text}");
+    }
     assert!(text.contains("calibrate class=old degraded=bad trials=20 regressed=0"), "{text}");
     for leaked in ["item:daodejing", "packet:", "highest excellence", "canaryroot"] {
         assert!(!text.contains(leaked), "{text}");

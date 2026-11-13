@@ -1293,6 +1293,12 @@ fn main() -> Result<()> {
                                 c.name, t.prompted.trials, t.prompted.nogain, t.prompted.accepted, t.prompted.regressed, t.noise
                             ))
                         );
+                        for (side, k) in t.r_roles() {
+                            println!(
+                                "{}",
+                                run.labelled(&format!("calibrate class={} prompted-{side} {}", c.name, k.line()))
+                            );
+                        }
                         for (label, d) in degraded.iter().zip(&t.degraded) {
                             println!(
                                 "{}",
