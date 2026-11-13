@@ -6174,3 +6174,150 @@ fn relower_arm_prompt_holding_test_text_is_withheld() {
         .unwrap_or(0);
     assert_eq!(prompts, 0, "no prompt file is written");
 }
+
+// ---- calibrate: the accept rule replayed over answered relower draws ----
+
+/// Answers each lowering prompt with the item's own text cut by `cut(key)`
+/// tenths, and leaves the answer where an answer file goes, as the relay does.
+struct Tee {
+    dir: PathBuf,
+    texts: HashMap<String, String>,
+    cut: Box<dyn Fn(&str) -> usize>,
+}
+
+impl ModelPort for Tee {
+    fn model(&self) -> &str {
+        "fake-model"
+    }
+    fn answer(&mut self, prompt: &Prompt) -> Result<String, PortError> {
+        let key = prompt.item_keys()[0].clone();
+        let text: Vec<char> = self.texts[&key].chars().collect();
+        let keep = (text.len() * (10 - (self.cut)(&key))).div_ceil(10);
+        let answer = serde_json::json!({ "text": text[..keep].iter().collect::<String>() }).to_string();
+        std::fs::create_dir_all(&self.dir).unwrap();
+        std::fs::write(self.dir.join(format!("{}.answer", prompt.digest())), &answer).unwrap();
+        Ok(answer)
+    }
+}
+
+/// A bilingual Dao run grown to seven live Validation items per language, five
+/// of them `item:vgrow:*`, with round 1 recorded.
+fn grown_bilingual() -> Dao {
+    let mut dao = dao_panel(
+        |corpus, entities| {
+            add_languages(corpus, entities, LAOZI_JA);
+            let entities = weksa::EntityStore::open(entities).unwrap();
+            let mut store = CorpusStore::open(corpus).unwrap();
+            for k in 0..5 {
+                for (from, key, text, language) in [
+                    ("item:daodejing:2", format!("item:vgrow:{}", k + 1), format!("The sage grows item {k} by letting the thing alone for {} seasons", k * 3 + 1), "en-US"),
+                    ("item:daodejing:12", format!("item:vgrowja:{}", k + 1), format!("聖人は{}の季節を数えて物ごとに静かに任せる", "春夏秋冬".chars().cycle().skip(k).take(k + 2).collect::<String>()), "ja-JP"),
+                ] {
+                    let mut item = store.get(from).unwrap().unwrap();
+                    item.id = key.as_str().into();
+                    item.text = text;
+                    item.language = language.into();
+                    item.names = vec![];
+                    item.prior_turns = vec![];
+                    store.add(item, &entities).unwrap();
+                }
+            }
+        },
+        &["ja-JP", "en-US"],
+    );
+    let mut model = bilingual_fake();
+    for k in 0..5 {
+        for key in [format!("item:vgrow:{}", k + 1), format!("item:vgrowja:{}", k + 1)] {
+            model.answers.insert(key.clone(), citing_laozi(2));
+            model.lowered.insert(key, "placeholder".into());
+        }
+    }
+    recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    dao
+}
+
+fn corpus_texts(dao: &Dao) -> HashMap<String, String> {
+    CorpusStore::open(&dao.corpus)
+        .unwrap()
+        .all()
+        .unwrap()
+        .into_iter()
+        .map(|i| (i.id.as_str().to_string(), i.text))
+        .collect()
+}
+
+/// A draw label's answers, written through relower's own door.
+fn answer_draw(dao: &Dao, label: &str, cut: impl Fn(&str) -> usize + 'static) {
+    use weksa::model::RecordedAnswers;
+    let mut recorded = RecordedAnswers::new(dao.root.join("round-1"), "fake-model".into());
+    let mut tee = Tee { dir: dao.run.relower_dir(1, label), texts: corpus_texts(dao), cut: Box::new(cut) };
+    dao.run.relower(1, label, &mut recorded, &mut tee, &mut [], &Scorer::new(Bag)).unwrap();
+}
+
+/// A stable per-item wobble in 0..4 for draw `d`.
+fn wobble(d: usize, key: &str) -> usize {
+    (key.bytes().map(usize::from).sum::<usize>() * (d + 3) + d) % 4
+}
+
+#[test]
+fn calibrate_reads_answered_draws_by_decide_panel() {
+    use weksa::run::CalibrateOutcome;
+    let dao = grown_bilingual();
+    // The recorded lowering's answers, through a tee over the round directory.
+    let mut round1 = Tee { dir: dao.root.join("round-1"), texts: corpus_texts(&dao), cut: Box::new(|k| wobble(0, k)) };
+    let mut seed = Tee { dir: dao.run.relower_dir(1, "seed"), texts: corpus_texts(&dao), cut: Box::new(|_| 0) };
+    dao.run.relower(1, "seed", &mut round1, &mut seed, &mut [], &Scorer::new(Bag)).unwrap();
+
+    let prompted: Vec<String> = (1..=5).map(|d| format!("p{d}")).collect();
+    for (i, label) in prompted.iter().enumerate() {
+        answer_draw(&dao, label, move |k| wobble(i + 1, k));
+    }
+    answer_draw(&dao, "bad", |_| 9);
+    answer_draw(&dao, "mild", |k| 1 + wobble(7, k) % 2);
+    for (i, label) in ["c1", "c2"].iter().enumerate() {
+        answer_draw(&dao, label, move |k| wobble(i + 10, k) / 2);
+    }
+    let degraded = ["bad".to_string(), "mild".to_string()];
+    let candidate = ["c1".to_string(), "c2".to_string()];
+    let classes = [
+        ("old".to_string(), vec!["item:daodejing".to_string()]),
+        ("new".to_string(), vec!["item:vgrow".to_string()]),
+    ];
+    let before = tree(&dao.root);
+    let CalibrateOutcome::Read { unusable, classes } = dao
+        .run
+        .calibrate(1, &prompted, &degraded, &candidate, &classes, &Scorer::new(Bag))
+        .unwrap()
+    else {
+        panic!("every draw is answered")
+    };
+    let after = tree(&dao.root);
+    assert!(
+        after.keys().all(|p| before.contains_key(p) || p.starts_with("calibrate-1/")),
+        "calibrate writes only its scratch store"
+    );
+    assert_eq!(unusable, 0);
+    let got: Vec<String> = classes
+        .iter()
+        .map(|c| {
+            let t = &c.trials;
+            let items: Vec<(u32, u32)> = c.languages.iter().map(|l| (l.n, l.skipped)).collect();
+            format!(
+                "{} {items:?} prompted {}/{}/{}/{} noise {:.4} degraded {:?} candidate {}/{}/{}/{}",
+                c.name,
+                t.prompted.trials, t.prompted.nogain, t.prompted.accepted, t.prompted.regressed,
+                t.noise,
+                t.degraded.iter().map(|d| (d.trials, d.regressed)).collect::<Vec<_>>(),
+                t.candidate.trials, t.candidate.accepted, t.candidate.nogain, t.candidate.regressed,
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        [
+            "all [(7, 0), (7, 0)] prompted 120/30/24/66 noise 0.0468 degraded [(60, 60), (60, 43)] candidate 120/64/40/16",
+            "old [(2, 0), (2, 0)] prompted 120/118/0/2 noise 0.1354 degraded [(60, 60), (60, 60)] candidate 120/0/120/0",
+            "new [(5, 0), (5, 0)] prompted 120/16/24/80 noise 0.0138 degraded [(60, 60), (60, 50)] candidate 120/60/20/40",
+        ]
+    );
+}
