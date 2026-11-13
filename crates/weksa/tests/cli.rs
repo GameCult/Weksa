@@ -1545,7 +1545,7 @@ fn loop_cycle_needs_a_floor() {
     assert!(!o.status.success());
     let text = out(&o);
     assert!(
-        text.contains("the run has no noise floor: record two rounds first"),
+        text.contains("the run has no noise floor: record four rounds under the first inventory first"),
         "{text}"
     );
     for echoed in ["canaryroot", d.path().to_str().unwrap()] {
@@ -1558,8 +1558,8 @@ fn loop_cycle_needs_a_floor() {
 fn loop_cycle_asks_then_decides() {
     let d = tempfile::tempdir().unwrap();
     open_dao_run(d.path());
-    // Two rounds of refusals: a floor of 0 and a base of 0.
-    for n in 1..=2 {
+    // Four rounds of refusals: a floor of 0 and a base of 0.
+    for n in 1..=4 {
         let first = weksa(d.path(), &["loop", "round", "canaryroot"]);
         assert_eq!(first.status.code(), Some(3), "{}", out(&first));
         for entry in std::fs::read_dir(d.path().join(format!("canaryroot/round-{n}"))).unwrap() {

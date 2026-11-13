@@ -1658,7 +1658,7 @@ fn errors_echo_no_input() {
         .unwrap();
     assert_eq!(e, RunError::NoFloor);
     all.extend([format!("{e:?}"), e.to_string()]);
-    for _ in 0..2 {
+    for _ in 0..=FLOOR_ARMS_MIN {
         let mut m = fake(&degraded_answers());
         recorded(round(&mut canary_run, &mut m, &Scorer::new(Bag)).unwrap());
     }
@@ -1736,7 +1736,7 @@ fn prompts_come_only_from_context() {
 
 // ---- edit-accept cycles ----
 
-use weksa::run::{CycleOutcome, Decision, LADDER_STEP, Reading, Verdict, Why, cycle};
+use weksa::run::{CycleOutcome, Decision, FLOOR_ARMS_MIN, LADDER_STEP, Reading, Verdict, Why, cycle};
 
 const ONE_CONCEPT: &str =
     r#"{"add":[{"family":"Concept","gloss":"a general meaning the Dao names"}]}"#;
@@ -1759,8 +1759,10 @@ fn cycle_fake(edit: &str) -> FakeModel {
     model
 }
 
-fn two_rounds(dao: &mut Dao) {
-    for _ in 0..2 {
+/// Round 1, the recorded lowering, and the prompted repeats the cycle's noise
+/// floor reads: [`FLOOR_ARMS_MIN`] + 1 plain rounds under the first inventory.
+fn replicate_rounds(dao: &mut Dao) {
+    for _ in 0..=FLOOR_ARMS_MIN {
         let mut model = fake(&degraded_answers());
         recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
     }
@@ -1772,6 +1774,12 @@ fn decided(outcome: CycleOutcome) -> Decision {
         CycleOutcome::Unanswered { prompts } => panic!("unanswered: {prompts:?}"),
     }
 }
+
+/// The round number of a run's first cycle candidate: after round 1 and its
+/// [`FLOOR_ARMS_MIN`] prompted repeats.
+const FIRST_CANDIDATE: u32 = FLOOR_ARMS_MIN as u32 + 2;
+/// The rounds of [`replicate_rounds`].
+const REPLICATES: usize = FLOOR_ARMS_MIN + 1;
 
 fn run_cycle(dao: &mut Dao, model: &mut FakeModel) -> Decision {
     decided(cycle(&mut dao.run, model, &Scorer::new(Bag)).unwrap())
@@ -1805,16 +1813,18 @@ fn mint_texts(model: &FakeModel) -> Vec<&str> {
 #[test]
 fn cycle_accepts_a_gain_past_the_floor() {
     let mut dao = dao();
-    two_rounds(&mut dao);
+    replicate_rounds(&mut dao);
     let source = std::fs::read(&dao.inventory).unwrap();
     let rounds = dao.run.rounds().unwrap();
-    assert_eq!(validation(&rounds[0]), validation(&rounds[1]), "floor 0");
+    for r in &rounds {
+        assert_eq!(validation(&rounds[0]), validation(r), "floor 0");
+    }
 
     let mut model = cycle_fake(ONE_CONCEPT);
     let d = run_cycle(&mut dao, &mut model);
     assert_eq!(
         (d.k(), d.base_round(), d.candidate_round()),
-        (1, 1, Some(3))
+        (1, 1, Some(FIRST_CANDIDATE))
     );
     assert_eq!((d.base_rev(), d.candidate_rev()), (3, Some(4)));
     assert_eq!(d.verdict(), Verdict::Accepted);
@@ -1828,7 +1838,7 @@ fn cycle_accepts_a_gain_past_the_floor() {
         }
     );
     assert_eq!(d.panel()[0].base, validation(&rounds[0]));
-    let record = dao.run.rounds().unwrap().remove(2);
+    let record = dao.run.rounds().unwrap().remove(FIRST_CANDIDATE as usize - 1);
     assert_eq!(d.panel()[0].candidate, Some(validation(&record)));
     assert!(d.panel()[0].candidate.unwrap().composite - d.panel()[0].base.composite > LADDER_STEP);
 
@@ -1836,7 +1846,7 @@ fn cycle_accepts_a_gain_past_the_floor() {
     let file = dao.root.join("cycle-1/inventory.cc");
     assert_eq!(
         (record.n(), record.inventory_rev(), record.cycle()),
-        (3, 4, Some(1))
+        (FIRST_CANDIDATE, 4, Some(1))
     );
     assert_eq!(record.inventory_digest(), hex(&file));
     assert_eq!(d.candidate_inventory_digest(), Some(hex(&file).as_str()));
@@ -1876,23 +1886,23 @@ fn cycle_accepts_a_gain_past_the_floor() {
     }
 
     // `loop round` reads the head and never moves it; the next cycle's base is
-    // the establishing round 3, not the replicate recorded after it.
+    // the establishing round 5, not the replicate recorded after it.
     let mut again = fake(&good_answers());
     let r = recorded(round(&mut dao.run, &mut again, &Scorer::new(Bag)).unwrap());
-    assert_eq!((r.n(), r.inventory_rev(), r.cycle()), (4, 4, None));
+    assert_eq!((r.n(), r.inventory_rev(), r.cycle()), (FIRST_CANDIDATE + 1, 4, None));
     assert_eq!(r.inventory_digest(), hex(&file));
     let mut second = fake(&good_answers());
     second.candidate = Some((5, keyed(&good_answers())));
     second.edit = Some(Ok(ONE_CONCEPT.to_string()));
     let d2 = run_cycle(&mut dao, &mut second);
-    assert_eq!((d2.k(), d2.base_round(), d2.base_rev()), (2, 3, 4));
+    assert_eq!((d2.k(), d2.base_round(), d2.base_rev()), (2, FIRST_CANDIDATE, 4));
     assert_eq!(d2.candidate_rev(), Some(5));
-    assert_eq!(d2.candidate_round(), Some(5));
+    assert_eq!(d2.candidate_round(), Some(FIRST_CANDIDATE + 2));
     assert_eq!(d2.verdict(), Verdict::Rejected(Why::NoGain));
     assert_eq!(d2.panel()[0].floor, d.panel()[0].floor, "the floor is measured once");
     assert_eq!(head_rev(&dao.root), 4, "a rejected edit moves nothing");
     assert!(
-        mint_texts(&second)[0].contains(&feedback_line("accepted", &dao.run.rounds().unwrap()[2])),
+        mint_texts(&second)[0].contains(&feedback_line("accepted", &dao.run.rounds().unwrap()[FIRST_CANDIDATE as usize - 1])),
         "{}",
         mint_texts(&second)[0]
     );
@@ -1906,13 +1916,13 @@ fn cycle_accepts_a_gain_past_the_floor() {
 #[test]
 fn cycle_rejects_no_gain_and_keeps_the_head() {
     let mut dao = dao();
-    two_rounds(&mut dao);
+    replicate_rounds(&mut dao);
     let mut model = fake(&degraded_answers());
     model.candidate = Some((4, keyed(&degraded_answers())));
     model.edit = Some(Ok(ONE_CONCEPT.to_string()));
     let d = run_cycle(&mut dao, &mut model);
     assert_eq!(d.verdict(), Verdict::Rejected(Why::NoGain));
-    assert_eq!((d.candidate_rev(), d.candidate_round()), (Some(4), Some(3)));
+    assert_eq!((d.candidate_rev(), d.candidate_round()), (Some(4), Some(FIRST_CANDIDATE)));
     assert_eq!(d.panel()[0].candidate, Some(d.panel()[0].base));
     let c = d.panel()[0].base.composite;
     assert_eq!(
@@ -1931,7 +1941,7 @@ fn cycle_rejects_no_gain_and_keeps_the_head() {
     );
     assert_eq!(
         dao.run.rounds().unwrap().len(),
-        3,
+        FIRST_CANDIDATE as usize,
         "the candidate round is recorded"
     );
 
@@ -1959,27 +1969,57 @@ fn worst_answers() -> Vec<(usize, String)> {
 
 #[test]
 fn distinct_replicates_set_the_floor_and_a_gain_inside_it_is_no_gain() {
+    // The good lowering's two Validation items, per item, from a run of its own.
+    let good = {
+        let mut dao = dao();
+        let mut m = fake(&good_answers());
+        recorded(round(&mut dao.run, &mut m, &Scorer::new(Bag)).unwrap());
+        let root = dao.root.clone();
+        drop(dao.run);
+        stored_scores(&root).remove(0).scores
+    };
+    assert_eq!(good.len(), 2);
+
     let mut dao = dao();
-    // Replicate 1 is degraded, replicate 2 is good: the two readings differ.
-    for answers in [degraded_answers(), good_answers()] {
+    // Replicate 1 is degraded (its first Validation item is refused, which
+    // scores 0), replicates 2 to 4 are good: the two items differ by
+    // (-good[0], 0) in every pair, whatever the metric.
+    for answers in [degraded_answers(), good_answers(), good_answers(), good_answers()] {
         let mut m = fake(&answers);
         recorded(round(&mut dao.run, &mut m, &Scorer::new(Bag)).unwrap());
     }
+    let root = dao.root.clone();
     let rounds = dao.run.rounds().unwrap();
     let (a, b) = (validation(&rounds[0]), validation(&rounds[1]));
+    assert!(a.composite < b.composite - LADDER_STEP);
+    drop(dao.run);
+    let degraded = stored_scores(&root).remove(0).scores;
+    assert_eq!((degraded[0].chrf, degraded[0].meaning), (0.0, Some(0.0)));
+    assert_eq!(degraded[1], good[1]);
+    dao.run = RunStores::open(&root).unwrap();
+
+    // Two items, differences (-x, 0): mean -x/2, sample variance x^2/2, standard
+    // error sqrt(x^2/2 / 2) = x/2, three of them. The pooled variance of three
+    // equal arms is that variance.
+    let (chrf, meaning) = (good[0].chrf, good[0].meaning.unwrap());
+    let composite = (chrf / 100.0 + meaning) / 2.0;
     let want = Reading {
-        chrf: (a.chrf - b.chrf).abs(),
-        meaning: (a.meaning - b.meaning).abs(),
-        composite: (a.composite - b.composite).abs(),
+        chrf: 3.0 * chrf / 2.0,
+        meaning: 3.0 * meaning / 2.0,
+        composite: 3.0 * composite / 2.0,
     };
-    assert!(want.chrf > 0.0 && want.meaning > 0.0 && want.composite > LADDER_STEP);
+    assert!(want.composite > LADDER_STEP);
 
     // The candidate reads exactly as the good replicate: its gain over the head
-    // (round 1) is the floor, which is past a step and inside the noise.
+    // (round 1) is as wide as the difference the floor is built from, which is
+    // past a step and inside the noise.
     let mut model = cycle_fake(ONE_CONCEPT);
     let d = run_cycle(&mut dao, &mut model);
-    assert_eq!(d.panel()[0].floor, want);
-    assert_eq!(d.panel()[0].threshold, want.composite);
+    let floor = d.panel()[0].floor;
+    assert!((floor.chrf - want.chrf).abs() < 1e-9, "{floor:?} {want:?}");
+    assert!((floor.meaning - want.meaning).abs() < 1e-9, "{floor:?} {want:?}");
+    assert!((floor.composite - want.composite).abs() < 1e-9, "{floor:?} {want:?}");
+    assert_eq!(d.panel()[0].threshold, floor.composite);
     assert_eq!(d.panel()[0].candidate, Some(b));
     assert!(d.panel()[0].candidate.unwrap().composite - d.panel()[0].base.composite > LADDER_STEP);
     assert_eq!(d.verdict(), Verdict::Rejected(Why::NoGain));
@@ -1989,14 +2029,14 @@ fn distinct_replicates_set_the_floor_and_a_gain_inside_it_is_no_gain() {
 #[test]
 fn a_rejected_candidates_score_never_reaches_the_editor() {
     let mut dao = dao();
-    two_rounds(&mut dao);
+    replicate_rounds(&mut dao);
     let mut model = fake(&degraded_answers());
     model.candidate = Some((4, keyed(&worst_answers())));
     model.edit = Some(Ok(ONE_CONCEPT.to_string()));
     let d = run_cycle(&mut dao, &mut model);
     assert!(matches!(d.verdict(), Verdict::Rejected(Why::Regressed(_))));
     let rounds = dao.run.rounds().unwrap();
-    let (head, candidate) = (&rounds[0], &rounds[2]);
+    let (head, candidate) = (&rounds[0], &rounds[FIRST_CANDIDATE as usize - 1]);
     let ladder = |r: &RoundRecord| feedback_line("rejected", r);
     assert_ne!(
         ladder(head),
@@ -2010,14 +2050,14 @@ fn a_rejected_candidates_score_never_reaches_the_editor() {
     assert!(mints[1].contains(&ladder(head)), "{}", mints[1]);
     assert!(!mints[1].contains(&ladder(candidate)), "{}", mints[1]);
     let rounds = dao.run.rounds().unwrap();
-    assert!(!mints[1].contains(&ladder(&rounds[3])), "{}", mints[1]);
+    assert!(!mints[1].contains(&ladder(&rounds[FIRST_CANDIDATE as usize])), "{}", mints[1]);
 }
 
 #[test]
 fn two_accepts_make_the_latest_the_head_and_a_reject_after_them_is_told_so() {
     let mut dao = dao();
-    // Level 0 twice: a floor of 0 and a base reading of the weakest.
-    for _ in 0..2 {
+    // Level 0 in every replicate: a floor of 0 and a base reading of the weakest.
+    for _ in 0..=FLOOR_ARMS_MIN {
         let mut m = fake(&worst_answers());
         recorded(round(&mut dao.run, &mut m, &Scorer::new(Bag)).unwrap());
     }
@@ -2031,10 +2071,10 @@ fn two_accepts_make_the_latest_the_head_and_a_reject_after_them_is_told_so() {
     let d2 = step(&mut dao, 5, &good_answers());
     assert_eq!(d1.verdict(), Verdict::Accepted);
     assert_eq!(d2.verdict(), Verdict::Accepted);
-    assert_eq!((d2.base_round(), d2.base_rev()), (3, 4));
+    assert_eq!((d2.base_round(), d2.base_rev()), (FIRST_CANDIDATE, 4));
     assert_eq!(
         (d2.candidate_round(), d2.candidate_rev()),
-        (Some(4), Some(5))
+        (Some(FIRST_CANDIDATE + 1), Some(5))
     );
 
     // The head is the second accept, live and reopened.
@@ -2046,7 +2086,7 @@ fn two_accepts_make_the_latest_the_head_and_a_reject_after_them_is_told_so() {
 
     // Cycle 3 builds on cycle 2's file and round, gains nothing, and is rejected.
     let d3 = step(&mut dao, 6, &good_answers());
-    assert_eq!((d3.k(), d3.base_round(), d3.base_rev()), (3, 4, 5));
+    assert_eq!((d3.k(), d3.base_round(), d3.base_rev()), (3, FIRST_CANDIDATE + 1, 5));
     assert_eq!(
         d3.base_inventory_digest(),
         d2.candidate_inventory_digest().unwrap()
@@ -2057,15 +2097,15 @@ fn two_accepts_make_the_latest_the_head_and_a_reject_after_them_is_told_so() {
     // Cycle 4 is told by the latest decision alone: cycle 3's reject, not cycle
     // 2's accept, and the composite at the head, which the reject did not move.
     let d4 = step(&mut dao, 6, &good_answers());
-    assert_eq!((d4.k(), d4.base_round(), d4.base_rev()), (4, 4, 5));
+    assert_eq!((d4.k(), d4.base_round(), d4.base_rev()), (4, FIRST_CANDIDATE + 1, 5));
     let rounds = dao.run.rounds().unwrap();
     let mints = mint_texts(&model);
     assert_eq!(mints.len(), 4);
     assert!(mints[0].contains(&feedback_line("none", &rounds[0])));
-    assert!(mints[1].contains(&feedback_line("accepted", &rounds[2])));
-    assert!(mints[2].contains(&feedback_line("accepted", &rounds[3])));
+    assert!(mints[1].contains(&feedback_line("accepted", &rounds[FIRST_CANDIDATE as usize - 1])));
+    assert!(mints[2].contains(&feedback_line("accepted", &rounds[FIRST_CANDIDATE as usize])));
     assert!(
-        mints[3].contains(&feedback_line("rejected", &rounds[3])),
+        mints[3].contains(&feedback_line("rejected", &rounds[FIRST_CANDIDATE as usize])),
         "{}",
         mints[3]
     );
@@ -2080,7 +2120,7 @@ fn a_rejection_leaves_no_candidate_inventory_from_an_earlier_attempt() {
         ("not json", "not json", Why::EditParse),
     ] {
         let mut dao = dao();
-        two_rounds(&mut dao);
+        replicate_rounds(&mut dao);
         let scorer = Scorer::new(Bag);
         let ask = |dao: &mut Dao| {
             let mut files =
@@ -2115,7 +2155,7 @@ fn a_rejection_leaves_no_candidate_inventory_from_an_earlier_attempt() {
 fn a_failed_accept_write_leaves_neither_the_round_nor_the_decision() {
     use std::os::unix::fs::PermissionsExt;
     let mut dao = dao();
-    two_rounds(&mut dao);
+    replicate_rounds(&mut dao);
     let run_cc = std::fs::read(dao.root.join("run.cc")).unwrap();
     let mut model = cycle_fake(ONE_CONCEPT);
     // The cycle's directory exists, so everything but run.cc can still be
@@ -2134,23 +2174,23 @@ fn a_failed_accept_write_leaves_neither_the_round_nor_the_decision() {
     chmod(0o700).unwrap();
     assert_eq!(err, Some(RunError::Store));
     assert_eq!(std::fs::read(dao.root.join("run.cc")).unwrap(), run_cc);
-    assert_eq!(dao.run.rounds().unwrap().len(), 2, "no orphan round");
+    assert_eq!(dao.run.rounds().unwrap().len(), REPLICATES, "no orphan round");
     assert!(dao.run.decisions().unwrap().is_empty(), "no decision");
     let reopened = RunStores::open(&dao.root).unwrap();
-    assert_eq!(reopened.rounds().unwrap().len(), 2);
+    assert_eq!(reopened.rounds().unwrap().len(), REPLICATES);
     assert!(reopened.decisions().unwrap().is_empty());
     assert_eq!(head_rev(&dao.root), 3);
 
-    // The rerun decides cycle 1 on round 3, as if the failure had not happened.
+    // The rerun decides cycle 1 on the first candidate round, as if the failure had not happened.
     let d = run_cycle(&mut dao, &mut model);
-    assert_eq!((d.k(), d.candidate_round()), (1, Some(3)));
+    assert_eq!((d.k(), d.candidate_round()), (1, Some(FIRST_CANDIDATE)));
     assert_eq!(d.verdict(), Verdict::Accepted);
 }
 
 #[test]
 fn unanswered_cycle_writes_nothing() {
     let mut dao = dao();
-    two_rounds(&mut dao);
+    replicate_rounds(&mut dao);
     let run_cc = std::fs::read(dao.root.join("run.cc")).unwrap();
     let scorer = Scorer::new(Bag);
     let ask = |dao: &mut Dao| {
@@ -2196,9 +2236,9 @@ fn unanswered_cycle_writes_nothing() {
     assert_eq!(
         std::fs::read(dao.root.join("run.cc")).unwrap(),
         run_cc,
-        "no round 3 and no decision"
+        "no candidate round and no decision"
     );
-    assert_eq!(dao.run.rounds().unwrap().len(), 2);
+    assert_eq!(dao.run.rounds().unwrap().len(), REPLICATES);
     assert!(dao.run.decisions().unwrap().is_empty());
 
     // With the encodes answered, the candidate round asks its lowerings, listing
@@ -2215,7 +2255,7 @@ fn unanswered_cycle_writes_nothing() {
     assert!(lowering[0].1.text().contains("\n\ninventory rev:4\n"));
     assert!(!dir.join("packets.cc").exists());
     assert_eq!(std::fs::read(dao.root.join("run.cc")).unwrap(), run_cc);
-    assert_eq!(dao.run.rounds().unwrap().len(), 2);
+    assert_eq!(dao.run.rounds().unwrap().len(), REPLICATES);
     assert!(dao.run.decisions().unwrap().is_empty());
     let table = table_english();
     for (key, p) in &lowering {
@@ -2276,7 +2316,7 @@ fn run_the_editor_canary(canary_lowered: &str) {
         }
         m
     };
-    for _ in 0..2 {
+    for _ in 0..=FLOOR_ARMS_MIN {
         let mut m = with_canary(fake(&degraded_answers()));
         recorded(round(&mut dao.run, &mut m, &Scorer::new(Bag)).unwrap());
     }
@@ -2290,9 +2330,9 @@ fn run_the_editor_canary(canary_lowered: &str) {
     // A plain round with different answers changes the latest reading, not the
     // head's: the line the next cycle shows is the head round's.
     let mut other = with_canary(fake(&good_answers()));
-    let r4 = recorded(round(&mut dao.run, &mut other, &Scorer::new(Bag)).unwrap());
+    let plain = recorded(round(&mut dao.run, &mut other, &Scorer::new(Bag)).unwrap());
     let rounds = dao.run.rounds().unwrap();
-    assert_ne!(validation(&r4), validation(&rounds[0]));
+    assert_ne!(validation(&plain), validation(&rounds[0]));
     let d2 = run_cycle(&mut dao, &mut model);
     assert_eq!(d2.base_round(), 1);
 
@@ -2410,7 +2450,7 @@ fn edit_refusals_are_decisions() {
     ];
     for (name, edit, why) in cases {
         let mut dao = dao();
-        two_rounds(&mut dao);
+        replicate_rounds(&mut dao);
         let mut model = cycle_fake("");
         model.edit = Some(edit.clone());
         let d = run_cycle(&mut dao, &mut model);
@@ -2428,7 +2468,7 @@ fn edit_refusals_are_decisions() {
         assert_eq!(d.edit_answer_digest(), want.as_deref(), "{name}");
         assert_eq!(
             dao.run.rounds().unwrap().len(),
-            2,
+            REPLICATES,
             "{name}: no candidate round"
         );
         assert_eq!(model.seen.len(), 1, "{name}: no encode prompt was asked");
@@ -2478,13 +2518,54 @@ fn cycle_needs_a_floor() {
     let mut dao = dao();
     let mut model = cycle_fake(ONE_CONCEPT);
     assert_eq!(none(&mut dao, &mut model), Some(RunError::NoFloor));
-    let mut one = fake(&degraded_answers());
-    recorded(round(&mut dao.run, &mut one, &Scorer::new(Bag)).unwrap());
-    assert_eq!(none(&mut dao, &mut model), Some(RunError::NoFloor));
+    // One, two and three rounds are not yet a recorded lowering and three repeats.
+    for _ in 0..FLOOR_ARMS_MIN {
+        let mut m = fake(&degraded_answers());
+        recorded(round(&mut dao.run, &mut m, &Scorer::new(Bag)).unwrap());
+        assert_eq!(none(&mut dao, &mut model), Some(RunError::NoFloor));
+    }
     assert_eq!(
         RunError::NoFloor.to_string(),
-        "the run has no noise floor: record two rounds first"
+        "the run has no noise floor: record four rounds under the first inventory first"
     );
+
+    // Four rounds, one of them written before per-item scores existed: still no floor.
+    let mut m = fake(&degraded_answers());
+    let fourth = recorded(round(&mut dao.run, &mut m, &Scorer::new(Bag)).unwrap());
+    let rec = dao.run.record().clone();
+    let root = dao.root.clone();
+    let old = PreScoresRound {
+        n: fourth.n(),
+        inventory_rev: fourth.inventory_rev(),
+        prompt_digest: fourth.prompt_digest().into(),
+        corpus_digest: fourth.corpus_digest().into(),
+        entity_digest: fourth.entity_digest().into(),
+        model: fourth.model().into(),
+        embedder: fourth.embedder().into(),
+        chrf_version: fourth.chrf_version().into(),
+        calls: fourth.calls().to_vec(),
+        train: fourth.train().to_vec(),
+        inventory_digest: fourth.inventory_digest().into(),
+        cycle: fourth.cycle(),
+        admit_rules: vec![],
+        parse_reasons: vec![],
+        own_family: 0,
+        languages: vec![fourth.language("en-US").unwrap().clone()],
+    };
+    drop(dao.run);
+    {
+        let mut cache = CultCache::new();
+        cache.register_entry_type::<RunRecord>().unwrap();
+        cache.register_entry_type::<PreScoresRound>().unwrap();
+        cache
+            .add_generic_backing_store(SingleFileMessagePackBackingStore::new(root.join("run.cc")))
+            .unwrap();
+        cache.pull_all_backing_stores().unwrap();
+        cache.put(format!("run:{}:round:{}", rec.label, fourth.n()), &old).unwrap();
+    }
+    dao.run = RunStores::open(&root).unwrap();
+    assert_eq!(dao.run.rounds().unwrap().len(), REPLICATES);
+    assert_eq!(none(&mut dao, &mut model), Some(RunError::NoFloor));
 
     // A panel language with no live Validation item never reaches a round:
     // `create` refuses it (open_refuses_a_bad_panel).
@@ -2497,7 +2578,7 @@ fn cycle_needs_a_floor() {
 #[test]
 fn a_failed_candidate_round_writes_nothing() {
     let mut dao = dao();
-    two_rounds(&mut dao);
+    replicate_rounds(&mut dao);
     let run_cc = std::fs::read(dao.root.join("run.cc")).unwrap();
     let mut model = cycle_fake(ONE_CONCEPT);
     assert_eq!(
@@ -2505,14 +2586,14 @@ fn a_failed_candidate_round_writes_nothing() {
         Some(RunError::Embed)
     );
     assert_eq!(std::fs::read(dao.root.join("run.cc")).unwrap(), run_cc);
-    assert_eq!(dao.run.rounds().unwrap().len(), 2);
+    assert_eq!(dao.run.rounds().unwrap().len(), REPLICATES);
     assert!(dao.run.decisions().unwrap().is_empty());
     assert!(!dao.root.join("cycle-1/packets.cc").exists());
     assert_eq!(head_rev(&dao.root), 3);
 
-    // The rerun starts clean from the head and decides on round 3.
+    // The rerun starts clean from the head and decides on the first candidate round.
     let d = run_cycle(&mut dao, &mut model);
-    assert_eq!((d.k(), d.candidate_round()), (1, Some(3)));
+    assert_eq!((d.k(), d.candidate_round()), (1, Some(FIRST_CANDIDATE)));
     assert_eq!(d.verdict(), Verdict::Accepted);
 }
 
@@ -2540,7 +2621,7 @@ fn a_changed_head_is_drift() {
 
     // After an accept it is the cycle's file; the first copy is no longer read.
     let mut dao2 = self::dao();
-    two_rounds(&mut dao2);
+    replicate_rounds(&mut dao2);
     let mut model = cycle_fake(ONE_CONCEPT);
     assert_eq!(
         run_cycle(&mut dao2, &mut model).verdict(),
@@ -2855,7 +2936,7 @@ fn an_added_entry_can_be_lowered() {
     // candidate's lowering prompt lists it and the item scores: the gain path a
     // table with no row for it blocked.
     let mut dao = dao();
-    two_rounds(&mut dao);
+    replicate_rounds(&mut dao);
     let mut cited = draft_of(1);
     cited.referents[0].concept = "concept:28".parse().unwrap();
     let mut model = cycle_fake(ONE_CONCEPT);
@@ -4377,7 +4458,7 @@ fn a_refused_stance_ablation_creates_no_folder_and_wipes_no_store() {
 #[test]
 fn a_stance_ablation_refuses_a_cycle_round() {
     let mut dao = dao();
-    two_rounds(&mut dao);
+    replicate_rounds(&mut dao);
     run_cycle(&mut dao, &mut cycle_fake(ONE_CONCEPT));
     let rounds = dao.run.rounds().unwrap();
     let candidate = rounds.iter().find(|r| r.cycle().is_some()).expect("the cycle's round");
@@ -4621,9 +4702,9 @@ fn a_cited_entity_without_a_form_in_the_items_language_refuses_at_lower() {
 fn the_panel_filters_every_prompt() {
     let mut dao = bilingual(LAOZI_JA);
     let mut model = bilingual_fake();
-    // Two rounds, a cycle (the editor's prompt), a recall: every kind of prompt.
+    // The floor's rounds, a cycle (the editor's prompt), a recall: every kind of prompt.
     let mut last = None;
-    for _ in 0..2 {
+    for _ in 0..=FLOOR_ARMS_MIN {
         last = Some(recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap()));
     }
     let tags = |r: &RoundRecord| -> Vec<String> {
@@ -4730,13 +4811,15 @@ fn round_means_are_per_language() {
 #[test]
 fn floor_and_feedback_are_per_language() {
     let mut dao = bilingual(LAOZI_JA);
-    // Round 1: everything lowers perfectly in ja-JP. Round 2: one ja-JP
-    // Validation item is refused. en-US reads the same twice.
+    // Round 1: everything lowers perfectly in ja-JP. Rounds 2 to 4: one ja-JP
+    // Validation item is refused each time. en-US reads the same throughout.
     let mut first = bilingual_fake();
     recorded(round(&mut dao.run, &mut first, &Scorer::new(Bag)).unwrap());
-    let mut second = bilingual_fake();
-    second.answers.insert("item:daodejing:13".into(), "not a draft".into());
-    recorded(round(&mut dao.run, &mut second, &Scorer::new(Bag)).unwrap());
+    for _ in 0..FLOOR_ARMS_MIN {
+        let mut repeat = bilingual_fake();
+        repeat.answers.insert("item:daodejing:13".into(), "not a draft".into());
+        recorded(round(&mut dao.run, &mut repeat, &Scorer::new(Bag)).unwrap());
+    }
 
     let mut model = bilingual_fake();
     model.candidate = Some((4, bilingual_answers()));
@@ -4748,12 +4831,14 @@ fn floor_and_feedback_are_per_language() {
         ["en-US", "ja-JP"]
     );
     let (en, ja) = (&rows[0], &rows[1]);
-    assert_eq!(en.floor.composite, 0.0, "en-US read the same twice");
+    assert_eq!(en.floor.composite, 0.0, "en-US read the same every time");
     assert_eq!(en.threshold, LADDER_STEP);
-    assert_eq!(ja.floor.chrf, 50.0);
-    assert_eq!(ja.floor.meaning, 0.5);
-    assert_eq!(ja.floor.composite, 0.5);
-    assert_eq!(ja.threshold, 0.5);
+    // Differences 0 and 100 chrF over two items: variance 5000, FLOOR_Z of
+    // sqrt(5000 / 2); meaning and composite differ by 0 and 1: 3 * sqrt(0.5 / 2).
+    assert_eq!(ja.floor.chrf, 150.0);
+    assert_eq!(ja.floor.meaning, 1.5);
+    assert_eq!(ja.floor.composite, 1.5);
+    assert_eq!(ja.threshold, 1.5);
     assert_eq!(ja.base.composite, 1.0);
 
     // The editor's one held-out number is each language's head composite on
@@ -4831,13 +4916,16 @@ fn offer_by_key_is_the_panels_too() {
 #[test]
 fn a_cycle_decides_each_language_on_its_own_floor() {
     let mut dao = bilingual(LAOZI_JA);
-    // en-US reads the same twice (floor 0); ja-JP loses a Validation item in
-    // round 2 (a wide floor).
+    // en-US reads the same in every round (floor 0); ja-JP loses a Validation
+    // item in each repeat (a wide floor: its two per-item differences are 0 and
+    // the whole score, three standard errors of that).
     let mut first = bilingual_fake();
     recorded(round(&mut dao.run, &mut first, &Scorer::new(Bag)).unwrap());
-    let mut second = bilingual_fake();
-    second.answers.insert("item:daodejing:13".into(), "not a draft".into());
-    recorded(round(&mut dao.run, &mut second, &Scorer::new(Bag)).unwrap());
+    for _ in 0..FLOOR_ARMS_MIN {
+        let mut repeat = bilingual_fake();
+        repeat.answers.insert("item:daodejing:13".into(), "not a draft".into());
+        recorded(round(&mut dao.run, &mut repeat, &Scorer::new(Bag)).unwrap());
+    }
     // The candidate degrades en-US a little and leaves ja-JP as it was.
     let mut model = bilingual_fake();
     model.candidate = Some((4, {
@@ -4850,12 +4938,122 @@ fn a_cycle_decides_each_language_on_its_own_floor() {
     let (en, ja) = (&d.panel()[0], &d.panel()[1]);
     assert_eq!((en.language.as_str(), ja.language.as_str()), ("en-US", "ja-JP"));
     assert_eq!(en.floor.chrf, 0.0);
-    assert_eq!(ja.floor.chrf, 50.0);
+    assert_eq!(ja.floor.chrf, 150.0);
     // en-US fell by more than its own floor but by less than ja-JP's: the
     // verdict is the rejection that en-US's floor makes, not NoGain.
     let fall = en.base.chrf - en.candidate.unwrap().chrf;
     assert!(fall > 1.0 && fall < ja.floor.chrf, "{fall}");
     assert!(matches!(d.verdict(), Verdict::Rejected(Why::Regressed(_))), "{:?}", d.verdict());
+}
+
+/// A bilingual run whose head round loses the Validation items `head` (refused,
+/// so scored 0), then FLOOR_ARMS_MIN repeat rounds losing `repeats[i]`, then a
+/// cycle whose candidate round loses `candidate`. en-US Validation items are
+/// `item:daodejing:2` and `:3`, ja-JP's `:12` and `:13`.
+fn bilingual_cycle(head: &[&str], repeats: [&[&str]; FLOOR_ARMS_MIN], candidate: &[&str]) -> Decision {
+    let mut dao = bilingual(LAOZI_JA);
+    let losing = |lost: &[&str]| {
+        let mut answers = bilingual_answers();
+        for key in lost {
+            answers.insert(format!("item:daodejing:{}", key.trim_start_matches(':')), "not a draft".into());
+        }
+        answers
+    };
+    let fake_losing = |lost: &[&str]| {
+        let mut m = bilingual_fake();
+        m.answers = losing(lost);
+        m
+    };
+    let mut first = fake_losing(head);
+    recorded(round(&mut dao.run, &mut first, &Scorer::new(Bag)).unwrap());
+    for lost in repeats {
+        let mut repeat = fake_losing(lost);
+        recorded(round(&mut dao.run, &mut repeat, &Scorer::new(Bag)).unwrap());
+    }
+    let mut model = bilingual_fake();
+    model.candidate = Some((4, losing(candidate)));
+    model.edit = Some(Ok(ONE_CONCEPT.to_string()));
+    run_cycle(&mut dao, &mut model)
+}
+
+/// What a two-language cycle read: the sum of the composite gains, the noise of
+/// that sum (the root of the floors squared), and the other thresholds a wrong
+/// rule would use: the sum of the squares, the sum and the largest of the floors.
+struct PanelNoise {
+    net: f64,
+    noise: f64,
+    sum_of_squares: f64,
+    sum_of_floors: f64,
+    max_floor: f64,
+}
+
+fn panel_noise(d: &Decision) -> PanelNoise {
+    let rows = d.panel();
+    assert_eq!(rows.len(), 2);
+    for r in rows {
+        let c = r.candidate.unwrap();
+        assert!(c.composite > r.base.composite, "{}: no language regressed", r.language);
+        assert!(c.chrf >= r.base.chrf && c.meaning >= r.base.meaning);
+        assert!(r.floor.composite > 0.0, "{}: a floor to speak of", r.language);
+    }
+    let floors: Vec<f64> = rows.iter().map(|r| r.floor.composite).collect();
+    PanelNoise {
+        net: rows.iter().map(|r| r.candidate.unwrap().composite - r.base.composite).sum(),
+        noise: floors.iter().map(|f| f * f).sum::<f64>().sqrt(),
+        sum_of_squares: floors.iter().map(|f| f * f).sum(),
+        sum_of_floors: floors.iter().sum(),
+        max_floor: floors.iter().cloned().fold(0.0, f64::max),
+    }
+}
+
+/// The panel accepts on the sum of the languages' gains only past the noise of
+/// that sum (the root of their floors squared, never under one step), through
+/// `cycle` and the floors `floor_of` measures. The head loses every Validation
+/// item; the three repeats win some back, so en-US reads a floor of about 1.08
+/// and ja-JP 0.87 (noise 1.38, sum of squares 1.91, sum of floors 1.94). Gains
+/// are tuned by what the candidate wins back:
+/// - 1.378: inside the noise by 0.003, past every smaller rule (largest floor,
+///   step, no noise): a gain that looks real and is not;
+/// - 1.445: past the noise, inside the sum of squares and the sum of floors: a
+///   real gain, which a rule with a wider term (no root, or floors summed)
+///   would turn away.
+///
+/// The threshold is strict (`>`): the gains are real numbers off a scorer, so
+/// no fixture lands on the tie; that mutation is not pinned here, and is left
+/// to `decide_panel_table`.
+#[test]
+fn cycle_noise_term_is_pinned_through_cycle() {
+    let all = ["2", "3", "12", "13"];
+    // Round by round the repeats win back en-US item 2 and ja-JP item 12, then
+    // en-US item 3, then nothing.
+    let repeats: [&[&str]; FLOOR_ARMS_MIN] = [&["3", "13"], &["2", "12", "13"], &all];
+
+    // En-US wins back both items, ja-JP one.
+    let d = bilingual_cycle(&all, repeats, &["12"]);
+    let p = panel_noise(&d);
+    assert!(p.net > LADDER_STEP && p.net > p.max_floor, "{}", p.net);
+    assert!(p.net < p.noise && p.noise - p.net < 0.01, "just inside: {} {}", p.net, p.noise);
+    assert_eq!(d.verdict(), Verdict::Rejected(Why::NoGain));
+
+    // En-US wins back one item, ja-JP both.
+    let d = bilingual_cycle(&all, repeats, &["3"]);
+    let p = panel_noise(&d);
+    assert!(p.net > p.noise && p.net - p.noise > 0.05, "just past: {} {}", p.net, p.noise);
+    assert!(p.net < p.sum_of_squares && p.net < p.sum_of_floors, "{}", p.net);
+    assert_eq!(d.verdict(), Verdict::Accepted);
+
+    // A gain inside the noise of a milder fixture: one repeat in three reads
+    // every item back in the head's place, the others lose what the head did.
+    let d = bilingual_cycle(&["2", "13"], [&[], &["2", "13"], &["2", "13"]], &[]);
+    let p = panel_noise(&d);
+    assert!(p.net > LADDER_STEP && p.net < p.noise, "{} {}", p.net, p.noise);
+    assert_eq!(d.verdict(), Verdict::Rejected(Why::NoGain));
+
+    // The same candidate over repeats that agree with the head has no noise to
+    // clear, and its gain is accepted.
+    let d = bilingual_cycle(&["2", "13"], [&["2", "13"]; FLOOR_ARMS_MIN], &[]);
+    assert!(d.panel().iter().all(|r| r.floor.composite == 0.0));
+    assert_eq!(d.verdict(), Verdict::Accepted);
 }
 
 #[test]
@@ -5527,7 +5725,7 @@ fn the_lowering_step_of_a_round_stops_on_a_withheld_prompt() {
 #[test]
 fn the_cycle_editor_stops_on_a_withheld_prompt() {
     let mut dao = dao();
-    two_rounds(&mut dao);
+    replicate_rounds(&mut dao);
     let mut model = cycle_fake(ONE_CONCEPT);
     model.edit = Some(Err(PortError::Withheld));
     let r = cycle(&mut dao.run, &mut model, &Scorer::new(Bag));
@@ -5550,7 +5748,7 @@ fn the_cycles_candidate_round_stops_on_a_withheld_lowering_prompt() {
     // The edit is answered and the candidate round encodes at rev 4; every lowering
     // prompt is then refused. No decision is recorded and no packets are left.
     let mut dao = dao();
-    two_rounds(&mut dao);
+    replicate_rounds(&mut dao);
     let mut model = cycle_fake(ONE_CONCEPT);
     model.raw_lowering = Some(Err(PortError::Withheld));
     let r = cycle(&mut dao.run, &mut model, &Scorer::new(Bag));
@@ -5835,7 +6033,7 @@ fn relower_decides_over_the_whole_panel_not_its_first_language() {
 fn relower_refuses_a_cycle_round_and_a_missing_recorded_answer() {
     use weksa::model::RecordedAnswers;
     let mut dao = dao();
-    two_rounds(&mut dao);
+    replicate_rounds(&mut dao);
     run_cycle(&mut dao, &mut cycle_fake(ONE_CONCEPT));
     let candidate = dao.run.rounds().unwrap().into_iter().find(|r| r.cycle().is_some()).unwrap().n();
     let mut arm = Lowerer::new(reader);

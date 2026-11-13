@@ -496,7 +496,8 @@ pub enum RunError {
     Store,
     /// The embedder failed.
     Embed,
-    /// Rounds 1 and 2 are not two plain replicates under the run's first inventory.
+    /// Rounds 1 to [`FLOOR_ARMS_MIN`] + 1 are not all plain replicates under the run's first
+    /// inventory, or hold no per-item scores.
     NoFloor,
     /// A round has no Validation reading.
     NoValidation,
@@ -536,7 +537,7 @@ impl fmt::Display for RunError {
                 "the round holds no answer to a lowering prompt rebuilt now: the prompt digest drifted or the head inventory moved since the round",
             ),
             RunError::Embed => f.write_str("the embedder failed"),
-            RunError::NoFloor => f.write_str("the run has no noise floor: record two rounds first"),
+            RunError::NoFloor => f.write_str("the run has no noise floor: record four rounds under the first inventory first"),
             RunError::NoValidation => f.write_str("a reading has no validation item"),
             RunError::Ontology => f.write_str(
                 "an ontology entry of a panel language does not read against the run's inventory",
@@ -2498,32 +2499,48 @@ pub enum CycleOutcome {
     Decided(Decision),
 }
 
-/// The spread of each panel language's Validation reading between rounds 1 and
-/// 2: two independent encodings under the run's first inventory and one spec,
-/// measured once per run, in panel order.
+/// The cycle's noise floor, per panel language in panel order: [`paired_floor`]
+/// of round 1 (the recorded lowering, the head's establishing round) against
+/// rounds 2 to [`FLOOR_ARMS_MIN`] + 1 (the prompted repeats), each round's
+/// private per-item Validation scores. A replicate is a round with no cycle
+/// under the run's first inventory; the floor is measured once per run. A
+/// replicate that is missing, or holds no scores for a language, is
+/// [`RunError::NoFloor`].
 fn floor_of(
     rounds: &[RoundRecord],
     record: &RunRecord,
 ) -> Result<Vec<(String, Reading)>, RunError> {
-    let replicate = |n: u32, tag: &str| {
-        let round = rounds
+    let replicate = |n: u32| {
+        rounds
             .iter()
             .find(|r| {
                 r.n == n && r.cycle.is_none() && r.inventory_digest == record.inventory_digest
             })
-            .ok_or(RunError::NoFloor)?;
-        let language = round.language(tag).ok_or(RunError::NoValidation)?;
-        Reading::of(&language.validation_mean).ok_or(RunError::NoValidation)
+            .ok_or(RunError::NoFloor)
     };
+    let replicates = (1..=FLOOR_ARMS_MIN as u32 + 1)
+        .map(replicate)
+        .collect::<Result<Vec<_>, _>>()?;
     record
         .panel
         .iter()
         .map(|tag| {
-            let (a, b) = (replicate(1, tag)?, replicate(2, tag)?);
-            Ok((
-                tag.clone(),
-                spread(&a, &b),
-            ))
+            let language = replicates[0].language(tag).ok_or(RunError::NoValidation)?;
+            Reading::of(&language.validation_mean).ok_or(RunError::NoValidation)?;
+            let scores = |round: &RoundRecord| {
+                round
+                    .validation_scores
+                    .iter()
+                    .find(|s| &s.language == tag)
+                    .map(|s| s.scores.clone())
+                    .ok_or(RunError::NoFloor)
+            };
+            let recorded = scores(replicates[0])?;
+            let arms = replicates[1..]
+                .iter()
+                .map(|r| scores(r))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((tag.clone(), paired_floor(&recorded, &arms)))
         })
         .collect()
 }
@@ -2570,15 +2587,6 @@ pub fn paired_floor(recorded: &[ItemScore], arms: &[Vec<ItemScore>]) -> Reading 
         chrf: pooled(&|s| s.chrf),
         meaning: pooled(&meaning),
         composite: pooled(&|s| composite_of(s.chrf, meaning(s))),
-    }
-}
-
-/// The absolute difference of two readings, metric by metric.
-fn spread(a: &Reading, b: &Reading) -> Reading {
-    Reading {
-        chrf: (a.chrf - b.chrf).abs(),
-        meaning: (a.meaning - b.meaning).abs(),
-        composite: (a.composite - b.composite).abs(),
     }
 }
 
@@ -3280,7 +3288,12 @@ mod tests {
         }
     }
 
-    fn replicate(n: u32, digest: &str, chrf: f64, meaning: f64) -> RoundRecord {
+    /// A round under `digest` holding per-item Validation scores for each language
+    /// given; its means are those scores' means.
+    fn replicate(n: u32, digest: &str, scored: &[(&str, &[ItemScore])]) -> RoundRecord {
+        let mean = |of: &dyn Fn(&ItemScore) -> f64, scores: &[ItemScore]| {
+            scores.iter().map(of).sum::<f64>() / scores.len() as f64
+        };
         RoundRecord {
             n,
             inventory_rev: 1,
@@ -3297,19 +3310,28 @@ mod tests {
             admit_rules: vec![],
             parse_reasons: vec![],
             own_family: 0,
-            languages: vec![LanguageRound {
-                language: "en-US".into(),
-                train_mean: SplitMean::default(),
-                train_scored: 0,
-                validation_mean: SplitMean {
-                    count: 2,
-                    chrf: Some(chrf),
-                    meaning: Some(meaning),
-                },
-                validation_scored: 2,
-                validation_refused: RefusalCounts::default(),
-            }],
-            validation_scores: vec![],
+            languages: scored
+                .iter()
+                .map(|(language, scores)| LanguageRound {
+                    language: language.to_string(),
+                    train_mean: SplitMean::default(),
+                    train_scored: 0,
+                    validation_mean: SplitMean {
+                        count: scores.len(),
+                        chrf: Some(mean(&|s| s.chrf, scores)),
+                        meaning: Some(mean(&|s| s.meaning.unwrap_or(0.0), scores)),
+                    },
+                    validation_scored: scores.len() as u32,
+                    validation_refused: RefusalCounts::default(),
+                })
+                .collect(),
+            validation_scores: scored
+                .iter()
+                .map(|(language, scores)| LanguageScores {
+                    language: language.to_string(),
+                    scores: scores.to_vec(),
+                })
+                .collect(),
         }
     }
 
@@ -3336,42 +3358,103 @@ mod tests {
         }
     }
 
-    /// The floor is the spread of each field of the two replicates, the composite
-    /// as the spread of the composites: with chrF up and meaning down it is not
-    /// a function of the other two spreads' magnitudes.
+    /// The floor is the paired floor of round 1 against rounds 2 to 4, per
+    /// language, from their per-item scores: a number worked by hand here, so a
+    /// floor that pairs against the last round, reads a fifth round or counts
+    /// a non-replicate cannot pass.
     #[test]
-    fn the_floor_is_the_spread_of_each_field_of_the_two_replicates() {
+    fn the_floor_is_paired_over_four_replicates() {
+        let item = |chrf: f64, meaning: f64| ItemScore { chrf, meaning: Some(meaning) };
+        let shifted = |base: &[ItemScore], by: [f64; 4]| -> Vec<ItemScore> {
+            base.iter().zip(by).map(|(s, d)| item(s.chrf + d, s.meaning.unwrap())).collect()
+        };
+        let one = [item(60.0, 0.5), item(40.0, 0.5), item(50.0, 0.5), item(30.0, 0.5)];
+        // The repeats differ from round 1 by (2,-2,2,-2), (-2,2,-2,2) and (3,0,-3,0):
+        // chrF difference variances 16/3, 16/3 and 6, pooled 50/9 over n = 4.
+        let two = shifted(&one, [2.0, -2.0, 2.0, -2.0]);
+        let three = shifted(&one, [-2.0, 2.0, -2.0, 2.0]);
+        let four = shifted(&one, [3.0, 0.0, -3.0, 0.0]);
+        let ja = [item(10.0, 0.9), item(20.0, 0.1), item(30.0, 0.9), item(40.0, 0.1)];
+        let en = |n: u32, s: &[ItemScore]| replicate(n, "d1", &[("en-US", s)]);
+        let rounds = [en(1, &one), en(2, &two), en(3, &three), en(4, &four)];
         let record = record_of("d1");
-        let rounds = [replicate(1, "d1", 60.0, 0.5), replicate(2, "d1", 50.0, 0.7)];
+
         let floors = floor_of(&rounds, &record).unwrap();
         assert_eq!(floors.len(), 1);
-        let floor = floors[0].1;
-        // composites 0.55 and 0.6.
-        assert_eq!(floor.chrf, 10.0);
-        assert!((floor.meaning - 0.2).abs() < 1e-12);
-        assert!(
-            (floor.composite - 0.05).abs() < 1e-12,
-            "{}",
-            floor.composite
-        );
+        assert_eq!(floors[0].0, "en-US");
+        let want = FLOOR_Z * (50.0_f64 / 9.0 / 4.0).sqrt();
+        assert!((floors[0].1.chrf - want).abs() < 1e-9, "{:?}", floors[0].1);
+        assert!(floors[0].1.meaning.abs() < 1e-9);
+        // Composite moves by chrF / 200: variances scale by 1 / 200^2.
+        assert!((floors[0].1.composite - want / 200.0).abs() < 1e-9);
 
-        // The order of the replicates does not matter, and a third round, or a
-        // round under another inventory or from a cycle, is not a replicate.
-        let mut other = replicate(2, "d2", 0.0, 0.0);
-        let mut cycle = replicate(2, "d1", 0.0, 0.0);
+        // The order of the slice does not matter. A fifth round, a round under
+        // another inventory and a cycle's round are not replicates.
+        let loud: Vec<ItemScore> = (0..4).map(|i| item(f64::from(i) * 25.0, 1.0)).collect();
+        let mut cycle = en(3, &loud);
         cycle.cycle = Some(1);
-        other.n = 2;
-        let rounds = [
-            replicate(3, "d1", 0.0, 0.0),
-            other,
+        let rounds_noisy = [
+            en(5, &loud),
+            replicate(2, "d2", &[("en-US", &loud)]),
             cycle,
-            replicate(2, "d1", 50.0, 0.7),
-            replicate(1, "d1", 60.0, 0.5),
+            en(4, &four),
+            en(2, &two),
+            en(3, &three),
+            en(1, &one),
         ];
-        assert_eq!(floor_of(&rounds, &record).unwrap(), floors);
+        assert_eq!(floor_of(&rounds_noisy, &record).unwrap(), floors);
+
+        // Any of rounds 1 to 4 missing, from a cycle, under another digest or
+        // without a scores entry for the language is no floor.
+        for gone in 0..4 {
+            let kept: Vec<RoundRecord> =
+                rounds.iter().enumerate().filter(|(i, _)| *i != gone).map(|(_, r)| r.clone()).collect();
+            assert_eq!(floor_of(&kept, &record).err(), Some(RunError::NoFloor), "{gone}");
+            let mut stripped = rounds.to_vec();
+            stripped[gone].validation_scores.clear();
+            assert_eq!(floor_of(&stripped, &record).err(), Some(RunError::NoFloor), "{gone}");
+            let mut other = rounds.to_vec();
+            other[gone].inventory_digest = "d2".into();
+            assert_eq!(floor_of(&other, &record).err(), Some(RunError::NoFloor), "{gone}");
+            let mut cycled = rounds.to_vec();
+            cycled[gone].cycle = Some(1);
+            assert_eq!(floor_of(&cycled, &record).err(), Some(RunError::NoFloor), "{gone}");
+        }
+        assert_eq!(floor_of(&rounds[..3], &record).err(), Some(RunError::NoFloor));
+        // Round 1 with no Validation reading at all is NoValidation.
+        let mut empty = rounds.to_vec();
+        empty[0].languages.clear();
+        assert_eq!(floor_of(&empty, &record).err(), Some(RunError::NoValidation));
+
+        // Two languages are floored apart; a ragged one is NaN (the verdict fails
+        // closed) without spoiling the other, and a language missing from one
+        // replicate's scores is no floor.
+        let mut both = record_of("d1");
+        both.panel = vec!["en-US".into(), "ja-JP".into()];
+        let two_languages = |n: u32, e: &[ItemScore], j: &[ItemScore]| {
+            replicate(n, "d1", &[("en-US", e), ("ja-JP", j)])
+        };
+        let mut rounds2 = [
+            two_languages(1, &one, &ja),
+            two_languages(2, &two, &ja),
+            two_languages(3, &three, &ja),
+            two_languages(4, &four, &ja),
+        ];
+        let floors2 = floor_of(&rounds2, &both).unwrap();
+        assert_eq!(floors2[0].1, floors[0].1);
+        assert_eq!(floors2[1], ("ja-JP".to_string(), Reading { chrf: 0.0, meaning: 0.0, composite: 0.0 }));
+        rounds2[2].validation_scores[1].scores.pop();
+        let ragged = floor_of(&rounds2, &both).unwrap();
+        assert_eq!(ragged[0].1, floors[0].1);
+        assert!(ragged[1].1.composite.is_nan());
+        rounds2[2].validation_scores.pop();
+        assert_eq!(floor_of(&rounds2, &both).err(), Some(RunError::NoFloor));
+
+        // The text names the count of rounds the constant gives.
+        assert_eq!(FLOOR_ARMS_MIN + 1, 4);
         assert_eq!(
-            floor_of(&rounds[..3], &record).err(),
-            Some(RunError::NoFloor)
+            RunError::NoFloor.to_string(),
+            "the run has no noise floor: record four rounds under the first inventory first"
         );
     }
 
@@ -3546,7 +3629,8 @@ mod tests {
             )
             .unwrap();
             let mut model = fake();
-            for _ in 0..2 {
+            let replicates = FLOOR_ARMS_MIN + 1;
+            for _ in 0..replicates {
                 let out = round(&mut run, &mut model, &Scorer::new(Bag)).unwrap();
                 assert!(matches!(out, RoundOutcome::Recorded(_)));
             }
@@ -3564,7 +3648,7 @@ mod tests {
             let decisions = reloaded.get_all::<Decision>().unwrap().len();
             assert_eq!(
                 (rounds, decisions),
-                if fail_at == 1 { (2, 0) } else { (3, 1) },
+                if fail_at == 1 { (replicates, 0) } else { (replicates + 1, 1) },
                 "write {fail_at} refused"
             );
             assert_eq!(out.is_ok(), fail_at == 2);
