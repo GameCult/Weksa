@@ -508,7 +508,7 @@ findings shaped the wording.
   will be re-annotated; the speaker-state store changes then (a run pins its
   digest), the corpus does not.
 
-`weksa loop calibrate` (`docs/calibration.md`) reproduces from `run.rs`'s own
+For `growth-base`, `weksa loop calibrate` (`docs/calibration.md`) reproduces from `run.rs`'s own
 scoring and accept rule the counts per class, the trial totals and the mean
 noise of this block: prompted 116 NoGain, 4 Accepted, 0 Regressed of 120;
 control-yes 60 of 60 Regressed, mild-1 19 of 60, mild-2 0 of 60; the
@@ -523,6 +523,51 @@ mean composite offsets, the Train-vocabulary overlap, the old/new class
 composites, the ten parse-refused item ids) were
 computed by scratch scripts outside git (Soul finding `evidence-outside-git`)
 and are not reproduced by the harness.
+
+Recalibration on the relabelled scenes (`runs/growth-scene`, main d8afc4a; same
+panel, 35 live items per language, 0 refused, 5 prompted draws including the
+recorded one R, 2 mild, 4 Train-guide). It is not a replacement for the
+`growth-base` block above and no delta against it is drawn: the item set, the
+packets and the scenes changed, and encode was redrawn (the 98 encode prompts
+are byte-identical to growth-base, no encode answer is; the refusals fell from
+10 to 0 on the redraw, not through the scenes, which reach only the lowering
+prompts). Soul `cut-calibrate-harness.s3` re-derived all 33 counts and 3 noise
+terms below from the per-item answers without calling `calibrate`; they match.
+
+Measured, and reproduced by `weksa loop calibrate` (trials: prompted 120, each
+mild 60, Train-guide 240; Accepted / NoGain / Regressed):
+
+| class | prompted | noise | mild-1 Regressed | mild-2 Regressed | Train-guide |
+|---|---|---|---|---|---|
+| all (35 per language) | 11/100/9 | 0.0392 | 51 | 58 | 85/35/120 |
+| old (14) | 0/105/15 | 0.0844 | 60 | 60 | 40/80/120 |
+| new (21) | 10/97/13 | 0.0340 | 3 | 4 | 50/129/61 |
+
+Measured by Soul scratch scripts outside git (not reproduced by the harness;
+`calibrate` prints class totals only):
+
+- Every one of the 11 false accepts has R as the candidate (bases
+  prompted-2, p4, p6); every one of the 9 false rejects has R as the base. The
+  80 trials without R read 0 Accepted and 0 Regressed in every class (95% upper
+  bound 4.5%). R scores above the other prompted draws (+0.012 en-US and +0.023
+  ja-JP on all items), so R is not exchangeable with a repeat.
+- The old/new split of the false-accept lives only in the 20 trials where R is
+  the candidate, from 5 bases: new 10/20 [0.27, 0.73], old 0/20 [0.00, 0.17]
+  (Clopper-Pearson); by base 3 of 5 against 0 of 5 (Fisher p 0.17). The
+  10/120 against 0/120 comparison treats dependent trials as independent. The
+  claim that the new items drive the prompted false-accept is not supported;
+  the old items' larger noise term (2.4 times) raises their threshold, which
+  alone can produce the gap.
+- Mild arms: they overlap 8 of 35 answers (en-US) and 9 (ja-JP) over the limit
+  of 7. They do not degrade the new items (composite -0.004 en-US
+  [-0.021, +0.012], +0.013 ja-JP); the Regressed counts come from the old
+  en-US items (-0.072). The rule's sensitivity on the new items is unmeasured.
+- Train-guide pools unlike arms. h1 and h2 Regress in 120 of 120 trials; h3 and
+  h4 gain (Accepted 45 and 40 of 60); on the new items h3 is Accepted 50 of 60
+  and h4 0 of 60. The 35% pooled figure is not a power.
+
+Extrapolated only: the rule's power at 35 items against any real gain beyond
+h3 and h4, and any false-accept bound on repeat draws (5 draws, one of them R).
 
 ### Smallest measurable distil slice (`distil-incontext`, not built)
 
