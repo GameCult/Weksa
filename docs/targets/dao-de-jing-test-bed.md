@@ -23,9 +23,10 @@ plus a separately recorded chosen gloss per lowering).
   `corpus add ... --language en-US --source public-domain` per item, then `packet dao <store>`.
 - Source: Project Gutenberg eBook 216, "The Tao Teh King, or the Tao and its
   Characteristics", Laozi, tr. James Legge (Sacred Books of the East 39, 1891).
-  Gutenberg's licence (1.E.2) lets a work derived from texts not protected by US
-  copyright be used with no fee provided every Project Gutenberg reference is
-  removed from the work. The items hold only Legge's words, one numbered section
+  Gutenberg's licence (1.C) does not claim a right to prevent derivative works of
+  a work not protected by US copyright, for a user in the US, provided every
+  Project Gutenberg reference is removed (see
+  `docs/research/2026-11-13-gutenberg-terms.md`). The items hold only Legge's words, one numbered section
   or sentence each; no Gutenberg header, licence text or trademark is stored,
   and the eBook file itself is not committed. `edition_url` names the page the
   text was retrieved from, as a citation of provenance and not as part of any
