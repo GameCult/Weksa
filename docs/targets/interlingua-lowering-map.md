@@ -363,12 +363,22 @@ byte-identical to the round's, by `weksa loop relower ROOT --round N --arm ARM
 door (`RunStores::answer_files`, the Test-text guard); a tuned model is a script
 that reads `<digest>.prompt` and writes `<digest>.answer` in
 `<ROOT>/relower-<N>-<ARM>`, not a new adapter. The recorded reading is the
-round's own lowering. The floor is the spread of the recorded lowering and a
-second prompted arm (lowering-only noise, no encoder noise). The verdict is
-`decide_panel` over (recorded, arm, floor): Accepted means the arm helped,
-Rejected(NoGain) means it is non-inferior (the bar for replacing the prompted
-lowerer in cut 13), Rejected(Regressed) means it is worse. Training pairs are
-Train only, at a frozen revision; the export is 12b.
+round's own lowering, read over the same items as the arm. An item the round
+refused before admission (no packet) or at the lowering prompt has no prompt to
+ask: it is skipped, so the readings exclude it, and it is counted as `skipped=`
+on the line; `n` is the items read, so `recorded` can differ from the round's
+own Validation reading, which scores those items 0. An arm answer that is not a
+usable lowering scores 0 and counts in `unusable=`; the same for the floor arm,
+counted after `floor ... unusable=`. The floor is the spread of the recorded
+lowering and a second prompted arm (lowering-only noise, no encoder noise). The
+verdict is `decide_panel` over (recorded, arm, floor): Accepted means the arm
+helped, Rejected(Regressed) means it is worse, Rejected(NoGain) means it did
+not clearly help. The rule is calibration-pending: a one-pair floor is noisy
+(a simulated prompted repeat reads NoGain only about 7-15% of the time, Regressed
+44-60%, Accepted 33-41%), so NoGain is not yet evidence of non-inferiority and
+is not yet the bar for cut 13; the calibration arms (a prompted repeat, a
+control) decide what the floor must be before the verdict is read as a ruling.
+Training pairs are Train only, at a frozen revision; the export is 12b.
 
 ## Lowerer first cut (`golf-loop-lowerer-cut`)
 
