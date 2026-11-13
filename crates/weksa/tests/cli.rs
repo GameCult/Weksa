@@ -1820,7 +1820,7 @@ fn cli_loop_relower_exits_3_until_answered_and_refuses_bad_labels() {
     let second = relower(&["--arm", "tuned"]);
     assert!(second.status.success(), "{}", out(&second));
     let text = out(&second);
-    assert!(text.starts_with("relower en-US n=2 unusable=0 recorded "), "{text}");
+    assert!(text.starts_with("relower en-US n=2 skipped=0 unusable=0 recorded "), "{text}");
     assert!(text.contains("arm=tuned lowerer=tuned-x"), "{text}");
     assert!(text.contains(" lowering="), "{text}");
     assert!(!text.contains("verdict") && !text.contains("floor"), "{text}");

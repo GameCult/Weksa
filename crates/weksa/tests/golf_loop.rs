@@ -5503,6 +5503,96 @@ fn relower_floor_is_the_spread_of_recorded_and_the_floor_arm() {
     assert!((f.composite - (l.recorded.composite - a.composite).abs()).abs() < 1e-9);
     assert!(l.line().contains(&format!("| floor chrf={:.2}", f.chrf)), "{}", l.line());
     assert_eq!(l.unusable, 0, "unusable counts the arm, not the floor");
+    assert_eq!(l.floor_unusable, 1, "the floor arm's refusal is counted apart");
+    assert!(l.line().contains(" unusable=0 recorded "), "{}", l.line());
+    assert!(l.line().ends_with(" unusable=1"), "the floor's refusal is on the line: {}", l.line());
+    // Without a floor arm there is none to count.
+    assert_eq!(as_arm[0].floor_unusable, 0);
+}
+
+#[test]
+fn relower_skips_and_counts_an_item_the_round_refused_before_admission() {
+    // Validation item 3 is not an encodable draft in the round: it has no packet.
+    let (dao, _) = recorded_dao(|answers| {
+        answers.insert("item:daodejing:3".into(), "not a draft".into());
+    });
+    let (mut rec, mut arm) = (Lowerer::new(blind), Lowerer::new(blind));
+    let (langs, _) = relowered(relower(&dao, &mut rec, &mut arm, None));
+    let l = &langs[0];
+    assert_eq!((l.n, l.skipped, l.unusable), (2, 1, 0), "{}", l.line());
+    assert!(l.line().starts_with("relower en-US n=2 skipped=1 unusable=0 "), "{}", l.line());
+    assert_eq!(l.recorded, l.arm, "both readings are over the same two items");
+    assert!(arm.seen.iter().all(|(_, key, _)| key != "item:daodejing:3"), "nothing is asked for it");
+}
+
+#[test]
+fn relower_skips_and_counts_an_item_whose_lowering_prompt_the_round_refused() {
+    // ja-JP item 12 cites an entity with no ja form: the round admitted it and refused it
+    // at Lower. Item 13 cites none and lowers.
+    let mut dao = bilingual(None);
+    let mut model = bilingual_fake();
+    model.answers.insert("item:daodejing:12".into(), citing_laozi(2));
+    model.answers.insert("item:daodejing:13".into(), json(&draft_of(3)));
+    let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    assert_eq!(r.language("ja-JP").unwrap().validation_refused.lower, 1);
+    let (mut rec, mut arm) = (Lowerer::new(bi_blind), Lowerer::new(bi_blind));
+    let (langs, _) = relowered(relower(&dao, &mut rec, &mut arm, None));
+    let ja = langs.iter().find(|l| l.language == "ja-JP").unwrap();
+    assert_eq!((ja.n, ja.skipped), (1, 1), "{}", ja.line());
+    assert_eq!(ja.recorded, ja.arm);
+    let en = langs.iter().find(|l| l.language == "en-US").unwrap();
+    assert_eq!((en.n, en.skipped), (2, 0), "{}", en.line());
+    assert!(arm.seen.iter().all(|(_, key, _)| key != "item:daodejing:12"));
+}
+
+/// The ja-JP item's own text, else the English one: `f` for en-US.
+fn bi(key: &str, text: &str, f: fn(&str, &str) -> String) -> String {
+    match JA_TEXTS.iter().find(|(k, ..)| *k == key) {
+        Some((_, ja, _)) => ja.to_string(),
+        None => f(key, text),
+    }
+}
+
+fn bi_blind(key: &str, text: &str) -> String {
+    bi(key, text, blind)
+}
+
+fn bi_reader(key: &str, text: &str) -> String {
+    bi(key, text, reader)
+}
+
+/// Fine in English, nonsense in ja-JP.
+fn bi_ja_lost(key: &str, text: &str) -> String {
+    match JA_TEXTS.iter().any(|(k, ..)| *k == key) {
+        true => "zzzz".into(),
+        false => blind(key, text),
+    }
+}
+
+#[test]
+fn relower_decides_over_the_whole_panel_not_its_first_language() {
+    use weksa::run::decide_panel;
+    let mut dao = bilingual(LAOZI_JA);
+    recorded(round(&mut dao.run, &mut bilingual_fake(), &Scorer::new(Bag)).unwrap());
+    // en-US gains (the arm drops the stance the recorded lowering repeats); ja-JP is lost.
+    let (langs, verdict) = relowered(relower(
+        &dao,
+        &mut Lowerer::new(bi_reader),
+        &mut Lowerer::new(bi_ja_lost),
+        Some(&mut Lowerer::new(bi_reader)),
+    ));
+    assert_eq!(
+        langs.iter().map(|l| (l.language.as_str(), l.n)).collect::<Vec<_>>(),
+        [("en-US", 2), ("ja-JP", 2)],
+        "panel order, Validation only"
+    );
+    assert!(langs[0].arm.composite > langs[0].recorded.composite, "en-US gains");
+    assert!(langs[1].arm.composite < langs[1].recorded.composite, "ja-JP is lost");
+    let panel: Vec<_> = langs.iter().map(|l| (l.recorded, l.arm, l.floor.unwrap())).collect();
+    assert_eq!(verdict, Some(decide_panel(&panel)));
+    assert!(matches!(verdict, Some(Verdict::Rejected(Why::Regressed(_)))), "{verdict:?}");
+    // The first language alone would have accepted.
+    assert_eq!(decide_panel(&panel[..1]), Verdict::Accepted);
 }
 
 #[test]

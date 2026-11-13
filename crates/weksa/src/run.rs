@@ -1383,7 +1383,8 @@ impl RunStores {
 
     /// The lowering prompt of `packet` for `item`: admitted into `store`,
     /// assembled and lowered. The one builder for the round's prompt, which
-    /// ablation and relower must reproduce byte for byte.
+    /// ablation and relower must reproduce byte for byte. `None` when the
+    /// lowering prompt itself is refused, as it was for the round.
     fn lowering_prompt(
         &self,
         store: &mut PacketStore,
@@ -1391,7 +1392,7 @@ impl RunStores {
         item: &CorpusItem,
         inventory: &crate::Inventory,
         ontology: &crate::Ontology,
-    ) -> Result<Prompt, RunError> {
+    ) -> Result<Option<Prompt>, RunError> {
         let packet_item = packet.provenance.corpus_item.clone();
         let view = store
             .admit(packet, &self.inventory, &self.corpus, &self.entities)
@@ -1399,8 +1400,7 @@ impl RunStores {
         let view = self
             .assembled(view, &self.inventory)
             .map_err(|_| RunError::Store)?;
-        Prompt::lower(&view, &packet_item, &item.language, inventory, &self.entities, ontology)
-            .map_err(|_| RunError::Store)
+        Ok(Prompt::lower(&view, &packet_item, &item.language, inventory, &self.entities, ontology).ok())
     }
 
     /// `<root>/ablation-<n>`, where a stance ablation's prompts, answers and
@@ -1455,7 +1455,8 @@ impl RunStores {
             let mut rows = Vec::new();
             for (i, (item, packet)) in held.iter().enumerate() {
                 let mut prompt_of = |slot: usize, packet: Packet| -> Result<Prompt, RunError> {
-                    self.lowering_prompt(&mut stores[slot], packet, item, &inventory, &ontology)
+                    self.lowering_prompt(&mut stores[slot], packet, item, &inventory, &ontology)?
+                        .ok_or(RunError::Store)
                 };
                 let base = prompt_of(0, packet.clone())?;
                 let mut variants: [Option<Prompt>; 2] = [None, None];
@@ -1574,10 +1575,20 @@ impl RunStores {
 #[derive(Clone, Debug, PartialEq)]
 pub struct RelowerReading {
     pub language: String,
-    /// Live Validation items of the language in the round.
+    /// Live Validation items of the language read: those with a round packet
+    /// whose lowering prompt the round could build. Every reading below is over
+    /// these items, so recorded, arm and floor stay comparable.
     pub n: u32,
+    /// Live Validation items of the language not read: refused by the round
+    /// before admission (no packet) or at the lowering prompt. They are in no
+    /// reading, so `recorded` can differ from the round's own Validation
+    /// reading, which scores them 0.
+    pub skipped: u32,
     /// Arm answers that were not a usable lowering; each scored 0.
     pub unusable: u32,
+    /// Floor-arm answers that were not a usable lowering; each scored 0, which
+    /// widens `floor`. Zero without a floor arm.
+    pub floor_unusable: u32,
     /// The round's own lowering, read against the items.
     pub recorded: Reading,
     pub arm: Reading,
@@ -1593,11 +1604,14 @@ impl RelowerReading {
         let floor = self
             .floor
             .as_ref()
-            .map_or(String::new(), |f| format!(" | floor {}", show(f)));
+            .map_or(String::new(), |f| {
+                format!(" | floor {} unusable={}", show(f), self.floor_unusable)
+            });
         format!(
-            "relower {} n={} unusable={} recorded {} | arm {}{floor}",
+            "relower {} n={} skipped={} unusable={} recorded {} | arm {}{floor}",
             self.language,
             self.n,
+            self.skipped,
             self.unusable,
             show(&self.recorded),
             show(&self.arm),
@@ -1661,8 +1675,13 @@ impl RunStores {
         for (_, _, items) in &held {
             let mut language_rows = Vec::new();
             for (item, packet) in items {
-                let prompt =
-                    self.lowering_prompt(&mut scratch, packet.clone(), item, &inventory, &ontology)?;
+                // An item the round could not lower has no prompt to ask; it is skipped
+                // and counted, not scored.
+                let Some(prompt) =
+                    self.lowering_prompt(&mut scratch, packet.clone(), item, &inventory, &ontology)?
+                else {
+                    continue;
+                };
                 let text = |a: Asked| match a {
                     Asked::Text(t) => Some(t),
                     _ => None,
@@ -1730,9 +1749,10 @@ impl RunStores {
             .ok_or(RunError::NoValidation)
         };
         let mut languages = Vec::new();
+        let live = self.corpus.all().map_err(store)?;
         for ((language, _, _), language_rows) in held.iter().zip(&rows) {
             let (mut rec, mut arm_scores, mut floor_scores) = (Vec::new(), Vec::new(), Vec::new());
-            let mut unusable = 0u32;
+            let (mut unusable, mut floor_unusable) = (0u32, 0u32);
             for (_, r, a, f) in language_rows {
                 rec.push(next(r)?);
                 arm_scores.push(next(a)?);
@@ -1741,13 +1761,24 @@ impl RunStores {
                 }
                 if floor.is_some() {
                     floor_scores.push(next(f)?);
+                    if f.is_none() {
+                        floor_unusable += 1;
+                    }
                 }
             }
             let recorded_reading = reading_of(&rec)?;
             languages.push(RelowerReading {
                 language: language.clone(),
                 n: language_rows.len() as u32,
+                skipped: live
+                    .iter()
+                    .filter(|i| {
+                        &i.language == language && SplitScheme::V1.live(i) == Some(Split::Validation)
+                    })
+                    .count() as u32
+                    - language_rows.len() as u32,
                 unusable,
+                floor_unusable,
                 recorded: recorded_reading,
                 arm: reading_of(&arm_scores)?,
                 floor: if floor.is_some() {
