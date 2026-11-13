@@ -2889,8 +2889,9 @@ fn the_lowerer_sees_no_item_text() {
 }
 
 /// The promise `lower-prompt-no-item-text`: no lowering prompt holds the
-/// item's speaker id. A referent citing the speaker must not put that entity
-/// id (nor its forms) into the prompt; another cited entity still prints.
+/// item's speaker id. A referent citing the speaker holds the fixed token
+/// instead and its forms print under the token (forms are shared by every
+/// item); another cited entity still prints under its own id.
 #[test]
 fn the_lowerer_never_sees_the_items_speaker() {
     use weksa::entity::{Entity, EntityOrigin, LanguageForms};
@@ -2947,11 +2948,10 @@ fn the_lowerer_never_sees_the_items_speaker() {
     assert_eq!(with_other.len(), 1, "one lowering prompt cites the other entity");
     let text = with_other[0];
     assert!(text.contains("entity:othercite"), "{text}");
-    for banned in ["entity:spkcanary", "ZEBRAQUILL"] {
-        assert!(!text.contains(banned), "{banned} in {text}");
-    }
+    assert!(!text.contains("entity:spkcanary"), "{text}");
+    assert!(text.contains(r#""entity:speaker":["ZEBRAQUILL"]"#), "{text}");
     for (_, t) in model.seen.iter().filter(|(_, t)| t.starts_with(LOWER_INSTRUCTIONS)) {
-        assert!(!t.contains("entity:spkcanary") && !t.contains("ZEBRAQUILL"));
+        assert!(!t.contains("entity:spkcanary"));
     }
 }
 
@@ -4752,9 +4752,10 @@ fn each_item_lowers_in_its_own_language() {
         } else {
             en += 1;
             assert!(text.contains("\n\nlanguage: en-US\n\n"), "{text}");
-            // Laozi speaks the en-US items: the lowerer is not told his name.
-            assert!(text.contains("\n\nentities: {}\n\n"), "{text}");
-            assert!(!text.contains("entity:laozi") && !text.contains("Laozi") && !text.contains("老子"), "{text}");
+            // Laozi speaks the en-US items: the lowerer gets his forms under the
+            // speaker token, never his id, and no ja-JP form.
+            assert!(text.contains("\n\nentities: {\"entity:speaker\":[\"Laozi\"]}\n\n"), "{text}");
+            assert!(!text.contains("entity:laozi") && !text.contains("老子"), "{text}");
         }
     }
     assert_eq!((ja, en), (3, 3));

@@ -184,6 +184,9 @@ pub enum LowerError {
     EntityRead { entity: EntityId, why: String },
     /// A lowering prompt was asked of a view whose scene was never read.
     SceneUnread,
+    /// A referent cites the entity whose id is the lowering prompt's speaker
+    /// token ([`crate::context::SPEAKER_TOKEN`]), which would read as the speaker.
+    SpeakerTokenTaken,
 }
 
 impl fmt::Display for LowerError {
@@ -206,6 +209,7 @@ impl fmt::Display for LowerError {
             LowerError::AskerNotAddressee { .. } => "request agent is not the addressee",
             LowerError::EntityRead { .. } => "entity port failed to read",
             LowerError::SceneUnread => "the view's scene was never read",
+            LowerError::SpeakerTokenTaken => "a referent cites the entity id the speaker token uses",
         })
     }
 }
