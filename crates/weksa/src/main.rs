@@ -15,7 +15,7 @@ use weksa::packet::{FeatValue, FeatureValue, Grade};
 use weksa::packet::proof_packet;
 use weksa::model::{ModelPort, RecordedAnswers};
 use weksa::run::{
-    AblationOutcome, CycleOutcome, LowererReach, OntologyMintOutcome, RecallOutcome, RelowerOutcome, RoundOutcome, RunPaths, RunStores, cycle, round,
+    AblationOutcome, CalibrateOutcome, CycleOutcome, FLOOR_ARMS_MIN, LowererReach, OntologyMintOutcome, RecallOutcome, RelowerOutcome, RoundOutcome, RunPaths, RunStores, cycle, round,
 };
 use weksa::score::ScoreInput;
 use weksa::{
@@ -171,6 +171,31 @@ enum LoopCommand {
         lowerer: String,
         #[arg(long)]
         floor: Vec<String>,
+        #[arg(long, default_value = "http://127.0.0.1:11434")]
+        ollama_url: String,
+    },
+    /// Replay the accept rule over answered relower draws of round ROUND, to
+    /// measure how often it accepts, rejects or regresses what it should. Reads
+    /// the recorded lowering and each draw (--prompted: repeats of it, at least
+    /// four; --degraded: arms that should regress; --candidate: arms to rate),
+    /// answered through `weksa loop relower ROOT --round N --arm LABEL`, and
+    /// prints counts over all Validation items and over each --class
+    /// NAME=PREFIX[,PREFIX...] (items whose key starts with a prefix). Writes
+    /// no prompts; exits 1 naming the draws still unanswered. Procedure:
+    /// docs/calibration.md. A diagnostic, never a gate; records nothing; Test
+    /// and Train are never touched. Labels match [a-z0-9-]{1,32} and differ.
+    Calibrate {
+        root: PathBuf,
+        #[arg(long)]
+        round: u32,
+        #[arg(long)]
+        prompted: Vec<String>,
+        #[arg(long)]
+        degraded: Vec<String>,
+        #[arg(long)]
+        candidate: Vec<String>,
+        #[arg(long)]
+        class: Vec<String>,
         #[arg(long, default_value = "http://127.0.0.1:11434")]
         ollama_url: String,
     },
@@ -660,6 +685,12 @@ impl AddArgs {
     }
 }
 
+/// A draw or arm label: [a-z0-9-]{1,32}.
+fn is_label(l: &str) -> bool {
+    (1..=32).contains(&l.len())
+        && l.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
 /// The split of an item as `Train`, `Validation`, `Test` or `excluded`.
 fn split_text(item: &CorpusItem) -> String {
     SplitScheme::V1
@@ -1146,12 +1177,8 @@ fn main() -> Result<()> {
             floor,
             ollama_url,
         }) => {
-            let label = |l: &str| {
-                (1..=32).contains(&l.len())
-                    && l.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-            };
-            if !label(&arm)
-                || floor.iter().any(|f| !label(f) || *f == arm)
+            if !is_label(&arm)
+                || floor.iter().any(|f| !is_label(f) || *f == arm)
                 || floor.iter().enumerate().any(|(i, f)| floor[..i].contains(f))
             {
                 anyhow::bail!("arm and floor labels must match [a-z0-9-]{{1,32}} and differ");
@@ -1193,6 +1220,95 @@ fn main() -> Result<()> {
                     }
                     if let Some(v) = verdict {
                         println!("verdict {v:?}");
+                    }
+                }
+            }
+        }
+        Command::Loop(LoopCommand::Calibrate {
+            root,
+            round,
+            prompted,
+            degraded,
+            candidate,
+            class,
+            ollama_url,
+        }) => {
+            let labels: Vec<&String> = prompted.iter().chain(&degraded).chain(&candidate).collect();
+            if labels.iter().any(|l| !is_label(l))
+                || labels.iter().enumerate().any(|(i, l)| labels[..i].contains(l))
+            {
+                anyhow::bail!("draw labels must match [a-z0-9-]{{1,32}} and differ");
+            }
+            if prompted.len() < FLOOR_ARMS_MIN + 1 {
+                anyhow::bail!("at least {} --prompted labels are needed", FLOOR_ARMS_MIN + 1);
+            }
+            let mut classes: Vec<(String, Vec<String>)> = Vec::new();
+            for c in &class {
+                let Some((name, prefixes)) = c.split_once('=') else {
+                    anyhow::bail!("--class is NAME=PREFIX[,PREFIX...]");
+                };
+                if !is_label(name)
+                    || name == "all"
+                    || classes.iter().any(|(n, _)| n == name)
+                    || prefixes.split(',').any(str::is_empty)
+                {
+                    anyhow::bail!("--class is NAME=PREFIX[,PREFIX...] with a new label NAME other than all");
+                }
+                classes.push((name.to_string(), prefixes.split(',').map(String::from).collect()));
+            }
+            let run = RunStores::open(&root)?;
+            let scorer = Scorer::new(OllamaEmbedder::new(&ollama_url, &run.record().embedder));
+            match run.calibrate(round, &prompted, &degraded, &candidate, &classes, &scorer)? {
+                CalibrateOutcome::Unanswered(missing) => {
+                    for (label, n) in &missing {
+                        println!("unanswered {label} {n}");
+                    }
+                    eprintln!(
+                        "answer it through weksa loop relower ROOT --round N --arm LABEL first"
+                    );
+                    std::process::exit(1);
+                }
+                CalibrateOutcome::Read { unusable, classes } => {
+                    println!(
+                        "{}",
+                        run.labelled(&format!(
+                            "calibrate draws prompted={} degraded={} candidate={} floor-arms={FLOOR_ARMS_MIN} unusable={unusable}",
+                            prompted.len(),
+                            degraded.len(),
+                            candidate.len(),
+                        ))
+                    );
+                    for c in classes {
+                        let items: String = c
+                            .languages
+                            .iter()
+                            .map(|l| format!(" {} n={} skipped={}", l.language, l.n, l.skipped))
+                            .collect();
+                        let t = &c.trials;
+                        println!("{}", run.labelled(&format!("calibrate class={} items{items}", c.name)));
+                        println!(
+                            "{}",
+                            run.labelled(&format!(
+                                "calibrate class={} prompted trials={} nogain={} accepted={} regressed={} noise={:.4}",
+                                c.name, t.prompted.trials, t.prompted.nogain, t.prompted.accepted, t.prompted.regressed, t.noise
+                            ))
+                        );
+                        for (label, d) in degraded.iter().zip(&t.degraded) {
+                            println!(
+                                "{}",
+                                run.labelled(&format!(
+                                    "calibrate class={} degraded={label} trials={} regressed={}",
+                                    c.name, d.trials, d.regressed
+                                ))
+                            );
+                        }
+                        println!(
+                            "{}",
+                            run.labelled(&format!(
+                                "calibrate class={} candidate trials={} accepted={} nogain={} regressed={}",
+                                c.name, t.candidate.trials, t.candidate.accepted, t.candidate.nogain, t.candidate.regressed
+                            ))
+                        );
                     }
                 }
             }

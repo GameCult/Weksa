@@ -44,7 +44,7 @@ use crate::encode::{
     EditDraft, LoweringDraft, MAX_EDIT_CHANGES, OntologyDraft, PacketDraft, encoder_id,
 };
 use crate::form::{is_attestation, is_language_tag, is_slug};
-use crate::model::{AnswerFiles, ModelPort, PortError};
+use crate::model::{AnswerFiles, ModelPort, PortError, RecordedAnswers};
 use crate::packet::{Packet, Stance};
 use crate::score::{CHRF_VERSION, chrf, Embedder, ItemScore, ScoreInput, Scorer, SplitMean, aggregate, validation_items};
 use crate::split::{Split, SplitScheme, fnv1a64, fnv1a64_of, hex16};
@@ -1675,27 +1675,90 @@ impl RunStores {
         floors: &mut [&mut dyn ModelPort],
         scorer: &Scorer<E>,
     ) -> Result<RelowerOutcome, RunError> {
-        let store = |_| RunError::Store;
         check_embedder(self, scorer)?;
-        let held = self.held_splits(n, &[Split::Validation])?;
-        let inventory = self.inventory.inventory().map_err(store)?;
-        let ontology = self.ontology.ontology().map_err(store)?;
-
-        let dir = self.relower_dir(n, arm_label);
-        std::fs::create_dir_all(&dir).map_err(|e| RunError::Io(e.kind()))?;
-        for suffix in ["cc", "cc.lock"] {
-            let _ = std::fs::remove_file(dir.join(format!("base.{suffix}")));
-        }
-        let mut scratch = PacketStore::open(&dir.join("base.cc")).map_err(store)?;
-
         if (1..FLOOR_ARMS_MIN).contains(&floors.len()) {
             return Err(RunError::FloorArms);
         }
-        // Per language, per item: the item text, then the recorded and arm
-        // lowerings and one per floor arm (`None` when unusable).
-        type Row = (String, Option<String>, Option<String>, Vec<Option<String>>);
-        let mut waiting: Vec<String> = Vec::new();
-        let mut floor_waiting = false;
+        let dir = self.relower_dir(n, arm_label);
+        // Ports in the order the prompts are asked: recorded, floors, arm.
+        let floor_count = floors.len();
+        let mut ports: Vec<&mut dyn ModelPort> = vec![recorded];
+        for f in floors.iter_mut() {
+            let f: &mut dyn ModelPort = &mut **f;
+            ports.push(f);
+        }
+        ports.push(arm);
+        let drawn = self.read_draws(n, &dir.join("base.cc"), &mut ports, scorer)?;
+        let arm_at = floor_count + 1;
+        if drawn.waiting[1..arm_at].iter().any(|w| !w.is_empty()) {
+            return Err(RunError::FloorUnanswered);
+        }
+        if !drawn.waiting[arm_at].is_empty() {
+            return Ok(RelowerOutcome::Unanswered { prompts: drawn.waiting[arm_at].clone() });
+        }
+        let mut languages = Vec::new();
+        for l in &drawn.languages {
+            let of_port = |p: usize| -> Vec<ItemScore> { l.items.iter().map(|(_, s)| s[p].clone()).collect() };
+            let rec = of_port(0);
+            let floor_scores: Vec<Vec<ItemScore>> = (1..arm_at).map(of_port).collect();
+            languages.push(RelowerReading {
+                language: l.language.clone(),
+                n: l.items.len() as u32,
+                skipped: l.skipped,
+                unusable: l.unusable[arm_at],
+                floor_unusable: l.unusable[1..arm_at].iter().sum(),
+                recorded: reading_of(&rec)?,
+                arm: reading_of(&of_port(arm_at))?,
+                floor: if floor_count == 0 { None } else { Some(paired_floor(&rec, &floor_scores)) },
+            });
+        }
+        let verdict = if floor_count > 0 {
+            let panel: Vec<(Reading, Reading, Reading)> = languages
+                .iter()
+                .filter_map(|l| Some((l.recorded, l.arm, l.floor?)))
+                .collect();
+            Some(decide_panel(&panel))
+        } else {
+            None
+        };
+        Ok(RelowerOutcome::Read { languages, verdict })
+    }
+
+    /// Asks every port, in the order given, each live Validation item's
+    /// byte-identical lowering prompt of round `n` and scores the answers against
+    /// the items in one [`Scorer::score`] call: the one owner of per-item
+    /// scoring for [`relower`](Self::relower) and
+    /// [`calibrate`](Self::calibrate). An answer that is not a usable lowering
+    /// scores 0. Port 0 is the recorded lowering, which must be answered
+    /// (`Unrecorded` at once); any other port that is not is listed in
+    /// `waiting`, and nothing is scored. `scratch` is the packet store the
+    /// prompts are built in, removed and reopened here; its directory is
+    /// created here, after the round is found.
+    fn read_draws<E: Embedder>(
+        &self,
+        n: u32,
+        scratch: &Path,
+        ports: &mut [&mut dyn ModelPort],
+        scorer: &Scorer<E>,
+    ) -> Result<Drawn, RunError> {
+        let store = |_| RunError::Store;
+        let held = self.held_splits(n, &[Split::Validation])?;
+        let inventory = self.inventory.inventory().map_err(store)?;
+        let ontology = self.ontology.ontology().map_err(store)?;
+        if let Some(dir) = scratch.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| RunError::Io(e.kind()))?;
+        }
+        for suffix in ["", ".lock"] {
+            let mut name = scratch.as_os_str().to_owned();
+            name.push(suffix);
+            let _ = std::fs::remove_file(PathBuf::from(name));
+        }
+        let mut scratch = PacketStore::open(scratch).map_err(store)?;
+
+        // Per language, per item: the item id and text, then each port's lowering
+        // (`None` when unusable or unanswered).
+        let mut waiting: Vec<Vec<String>> = vec![Vec::new(); ports.len()];
+        type Row = (String, String, Vec<Option<String>>);
         let mut rows: Vec<Vec<Row>> = Vec::new();
         for (_, _, items) in &held {
             let mut language_rows = Vec::new();
@@ -1707,49 +1770,33 @@ impl RunStores {
                 else {
                     continue;
                 };
-                let text = |a: Asked| match a {
-                    Asked::Text(t) => Some(t),
-                    _ => None,
-                };
-                let recorded_text = match asked(recorded, &prompt)? {
-                    Asked::Waiting => return Err(RunError::Unrecorded),
-                    other => text(other),
-                };
-                let mut floor_texts = Vec::new();
-                for f in floors.iter_mut() {
-                    floor_texts.push(match asked(&mut **f, &prompt)? {
+                let mut texts = Vec::new();
+                for (p, port) in ports.iter_mut().enumerate() {
+                    texts.push(match asked(&mut **port, &prompt)? {
+                        Asked::Text(t) => Some(t),
+                        Asked::Unusable => None,
+                        Asked::Waiting if p == 0 => return Err(RunError::Unrecorded),
                         Asked::Waiting => {
-                            floor_waiting = true;
+                            let d = prompt.digest();
+                            if !waiting[p].contains(&d) {
+                                waiting[p].push(d);
+                            }
                             None
                         }
-                        other => text(other),
                     });
                 }
-                let arm_text = match asked(arm, &prompt)? {
-                    Asked::Waiting => {
-                        let d = prompt.digest();
-                        if !waiting.contains(&d) {
-                            waiting.push(d);
-                        }
-                        None
-                    }
-                    other => text(other),
-                };
-                language_rows.push((item.text.clone(), recorded_text, arm_text, floor_texts));
+                language_rows.push((item.id.as_str().to_string(), item.text.clone(), texts));
             }
             rows.push(language_rows);
         }
-        if floor_waiting {
-            return Err(RunError::FloorUnanswered);
-        }
-        if !waiting.is_empty() {
-            return Ok(RelowerOutcome::Unanswered { prompts: waiting });
+        if waiting.iter().any(|w| !w.is_empty()) {
+            return Ok(Drawn { languages: Vec::new(), waiting });
         }
 
         // One score call: each usable lowering against its item, in row order.
         let mut inputs: Vec<ScoreInput> = Vec::new();
-        for (reference, recorded, arm, floor_texts) in rows.iter().flatten() {
-            for output in [recorded, arm].into_iter().chain(floor_texts).flatten() {
+        for (_, reference, texts) in rows.iter().flatten() {
+            for output in texts.iter().flatten() {
                 inputs.push(ScoreInput { reference, output });
             }
         }
@@ -1759,67 +1806,272 @@ impl RunStores {
             scorer.score(&inputs).map_err(|_| RunError::Embed)?
         }
         .into_iter();
-        let mut next = |t: &Option<String>| -> Result<ItemScore, RunError> {
-            match t {
-                Some(_) => scores.next().ok_or(RunError::Store),
-                None => Ok(ItemScore { chrf: 0.0, meaning: Some(0.0) }),
-            }
-        };
-        let reading_of = |scored: &[ItemScore]| {
-            Reading::of(&SplitMean {
-                count: scored.len(),
-                chrf: mean(scored.iter().map(|s| s.chrf)),
-                meaning: mean(scored.iter().filter_map(|s| s.meaning)),
-            })
-            .ok_or(RunError::NoValidation)
-        };
-        let mut languages = Vec::new();
         let live = self.corpus.all().map_err(store)?;
-        for ((language, _, _), language_rows) in held.iter().zip(&rows) {
-            let (mut rec, mut arm_scores) = (Vec::new(), Vec::new());
-            let mut floor_scores: Vec<Vec<ItemScore>> = vec![Vec::new(); floors.len()];
-            let (mut unusable, mut floor_unusable) = (0u32, 0u32);
-            for (_, r, a, f) in language_rows {
-                rec.push(next(r)?);
-                arm_scores.push(next(a)?);
-                if a.is_none() {
-                    unusable += 1;
+        let mut languages = Vec::new();
+        for ((language, _, _), language_rows) in held.iter().zip(rows) {
+            let mut unusable = vec![0u32; ports.len()];
+            let mut items = Vec::new();
+            for (id, _, texts) in language_rows {
+                let mut item_scores = Vec::new();
+                for (p, t) in texts.iter().enumerate() {
+                    item_scores.push(match t {
+                        Some(_) => scores.next().ok_or(RunError::Store)?,
+                        None => {
+                            unusable[p] += 1;
+                            ItemScore { chrf: 0.0, meaning: Some(0.0) }
+                        }
+                    });
                 }
-                for (scores, t) in floor_scores.iter_mut().zip(f) {
-                    scores.push(next(t)?);
-                    if t.is_none() {
-                        floor_unusable += 1;
-                    }
-                }
+                items.push((id, item_scores));
             }
-            let recorded_reading = reading_of(&rec)?;
-            languages.push(RelowerReading {
+            let live_validation = live
+                .iter()
+                .filter(|i| &i.language == language && SplitScheme::V1.live(i) == Some(Split::Validation))
+                .count() as u32;
+            languages.push(DrawnLanguage {
                 language: language.clone(),
-                n: language_rows.len() as u32,
-                skipped: live
-                    .iter()
-                    .filter(|i| {
-                        &i.language == language && SplitScheme::V1.live(i) == Some(Split::Validation)
-                    })
-                    .count() as u32
-                    - language_rows.len() as u32,
+                skipped: live_validation - items.len() as u32,
+                items,
                 unusable,
-                floor_unusable,
-                recorded: recorded_reading,
-                arm: reading_of(&arm_scores)?,
-                floor: if floors.is_empty() { None } else { Some(paired_floor(&rec, &floor_scores)) },
             });
         }
-        let verdict = if !floors.is_empty() {
-            let panel: Vec<(Reading, Reading, Reading)> = languages
-                .iter()
-                .filter_map(|l| Some((l.recorded, l.arm, l.floor?)))
-                .collect();
-            Some(decide_panel(&panel))
-        } else {
-            None
+        Ok(Drawn { languages, waiting })
+    }
+}
+
+/// One panel language of [`RunStores::read_draws`].
+struct DrawnLanguage {
+    language: String,
+    /// Live Validation items of the language with no lowering prompt.
+    skipped: u32,
+    /// Per read item in key order: its id and one score per port.
+    items: Vec<(String, Vec<ItemScore>)>,
+    /// Per port, answers that were not a usable lowering.
+    unusable: Vec<u32>,
+}
+
+struct Drawn {
+    /// Per panel language in panel order; empty while any port is waiting.
+    languages: Vec<DrawnLanguage>,
+    /// Per port, the digests of the prompts it holds no answer to.
+    waiting: Vec<Vec<String>>,
+}
+
+/// A reading over per-item scores; `NoValidation` without items.
+fn reading_of(scored: &[ItemScore]) -> Result<Reading, RunError> {
+    Reading::of(&SplitMean {
+        count: scored.len(),
+        chrf: mean(scored.iter().map(|s| s.chrf)),
+        meaning: mean(scored.iter().filter_map(|s| s.meaning)),
+    })
+    .ok_or(RunError::NoValidation)
+}
+
+/// How trials of one kind read: counts, not rates.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Counts {
+    pub trials: u32,
+    pub accepted: u32,
+    pub nogain: u32,
+    pub regressed: u32,
+}
+
+impl Counts {
+    fn tally(&mut self, v: Verdict) {
+        self.trials += 1;
+        match v {
+            Verdict::Accepted => self.accepted += 1,
+            Verdict::Rejected(Why::Regressed(_)) => self.regressed += 1,
+            Verdict::Rejected(_) => self.nogain += 1,
+        }
+    }
+}
+
+/// What [`calibration_trials`] counted over one set of items.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Trials {
+    /// Ordered (base, candidate) pairs of prompted draws, each over every floor.
+    pub prompted: Counts,
+    /// Per degraded arm in the order given: the arm as the candidate.
+    pub degraded: Vec<Counts>,
+    /// Every candidate arm as the candidate, pooled.
+    pub candidate: Counts,
+    /// The mean of [`panel_noise`] over every (base, floor) choice.
+    pub noise: f64,
+}
+
+/// Every `k`-subset of `pool`, in order.
+fn subsets(pool: &[usize], k: usize) -> Vec<Vec<usize>> {
+    if k == 0 {
+        return vec![Vec::new()];
+    }
+    let mut out = Vec::new();
+    for (i, &first) in pool.iter().enumerate() {
+        for mut rest in subsets(&pool[i + 1..], k - 1) {
+            rest.insert(0, first);
+            out.push(rest);
+        }
+    }
+    out
+}
+
+/// The accept rule replayed over draws that are all lowerings of one round, as
+/// the live loop would meet them: [`decide_panel`] over (base, candidate,
+/// [`paired_floor`] of the base against `FLOOR_ARMS_MIN` other prompted draws),
+/// one row per language. `draws` is `[port][language][item]`; ports
+/// `0..prompted` are prompted draws (the recorded lowering first), then
+/// `degraded` and `candidate` ports follow. A language with no items reads
+/// NaN, which fails closed.
+pub fn calibration_trials(
+    draws: &[Vec<Vec<ItemScore>>],
+    prompted: usize,
+    degraded: usize,
+    candidate: usize,
+) -> Trials {
+    let languages = draws.first().map_or(0, Vec::len);
+    let rows = |b: usize, c: usize, floors: &[usize]| -> Vec<(Reading, Reading, Reading)> {
+        let read = |scores: &[ItemScore]| {
+            reading_of(scores).unwrap_or(Reading { chrf: f64::NAN, meaning: f64::NAN, composite: f64::NAN })
         };
-        Ok(RelowerOutcome::Read { languages, verdict })
+        (0..languages)
+            .map(|l| {
+                let arms: Vec<Vec<ItemScore>> = floors.iter().map(|&f| draws[f][l].clone()).collect();
+                (read(&draws[b][l]), read(&draws[c][l]), paired_floor(&draws[b][l], &arms))
+            })
+            .collect()
+    };
+    let pool: Vec<usize> = (0..prompted).collect();
+    let without = |out: &[usize]| -> Vec<usize> { pool.iter().copied().filter(|p| !out.contains(p)).collect() };
+    let (mut prompted_counts, mut candidate_counts) = (Counts::default(), Counts::default());
+    let mut degraded_counts = vec![Counts::default(); degraded];
+    let (mut noise, mut noises) = (0.0, 0u32);
+    for &b in &pool {
+        for floors in subsets(&without(&[b]), FLOOR_ARMS_MIN) {
+            for (d, counts) in degraded_counts.iter_mut().enumerate() {
+                counts.tally(decide_panel(&rows(b, prompted + d, &floors)));
+            }
+            for c in prompted + degraded..prompted + degraded + candidate {
+                candidate_counts.tally(decide_panel(&rows(b, c, &floors)));
+            }
+            noise += panel_noise(&rows(b, b, &floors));
+            noises += 1;
+        }
+        for &c in pool.iter().filter(|&&c| c != b) {
+            for floors in subsets(&without(&[b, c]), FLOOR_ARMS_MIN) {
+                prompted_counts.tally(decide_panel(&rows(b, c, &floors)));
+            }
+        }
+    }
+    Trials {
+        prompted: prompted_counts,
+        degraded: degraded_counts,
+        candidate: candidate_counts,
+        noise: noise / f64::from(noises),
+    }
+}
+
+/// One panel language of a class: items read and live Validation items of the
+/// class not read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClassLanguage {
+    pub language: String,
+    pub n: u32,
+    pub skipped: u32,
+}
+
+/// The trials over one class of items.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClassTrials {
+    pub name: String,
+    pub languages: Vec<ClassLanguage>,
+    pub trials: Trials,
+}
+
+#[derive(Debug)]
+pub enum CalibrateOutcome {
+    /// Draw labels with the number of prompts each has no answer to.
+    Unanswered(Vec<(String, u32)>),
+    /// `unusable` over every prompted, degraded and candidate draw; `all` first,
+    /// then the classes in the order given.
+    Read { unusable: u32, classes: Vec<ClassTrials> },
+}
+
+impl RunStores {
+    /// Replays the accept rule over answered relower draws: reads every draw of
+    /// round `n` (the recorded lowering and the `relower-<n>-<label>`
+    /// directories, through [`RecordedAnswers`] only, so nothing is written
+    /// there) with [`read_draws`](Self::read_draws), and counts
+    /// [`calibration_trials`] over all items and over each class, a class being
+    /// the items whose key starts with any of its prefixes. See
+    /// `docs/calibration.md`. Records nothing; the scratch packet store is
+    /// `<root>/calibrate-<n>/base.cc`.
+    pub fn calibrate<E: Embedder>(
+        &self,
+        n: u32,
+        prompted: &[String],
+        degraded: &[String],
+        candidate: &[String],
+        classes: &[(String, Vec<String>)],
+        scorer: &Scorer<E>,
+    ) -> Result<CalibrateOutcome, RunError> {
+        check_embedder(self, scorer)?;
+        let labels: Vec<&String> = prompted.iter().chain(degraded).chain(candidate).collect();
+        let mut recorded =
+            RecordedAnswers::new(self.root.join(format!("round-{n}")), self.record.model.clone());
+        let mut draws: Vec<RecordedAnswers> = labels
+            .iter()
+            .map(|l| RecordedAnswers::new(self.relower_dir(n, l), self.record.model.clone()))
+            .collect();
+        let mut ports: Vec<&mut dyn ModelPort> = vec![&mut recorded];
+        for d in draws.iter_mut() {
+            ports.push(d);
+        }
+        let dir = self.root.join(format!("calibrate-{n}"));
+        let drawn = self.read_draws(n, &dir.join("base.cc"), &mut ports, scorer)?;
+        let missing: Vec<(String, u32)> = labels
+            .iter()
+            .zip(&drawn.waiting[1..])
+            .filter(|(_, w)| !w.is_empty())
+            .map(|(l, w)| ((*l).clone(), w.len() as u32))
+            .collect();
+        if !missing.is_empty() {
+            return Ok(CalibrateOutcome::Unanswered(missing));
+        }
+        let live = self.corpus.all().map_err(|_| RunError::Store)?;
+        let everything = [("all".to_string(), vec![String::new()])];
+        let mut out = Vec::new();
+        for (name, prefixes) in everything.iter().chain(classes) {
+            let keep = |id: &str| prefixes.iter().any(|p| id.starts_with(p.as_str()));
+            let mut by_port: Vec<Vec<Vec<ItemScore>>> = vec![Vec::new(); ports.len()];
+            let mut languages = Vec::new();
+            for l in &drawn.languages {
+                let items: Vec<&Vec<ItemScore>> =
+                    l.items.iter().filter(|(id, _)| keep(id)).map(|(_, s)| s).collect();
+                for (p, port) in by_port.iter_mut().enumerate() {
+                    port.push(items.iter().map(|s| s[p].clone()).collect());
+                }
+                let in_class = live
+                    .iter()
+                    .filter(|i| {
+                        i.language == l.language
+                            && SplitScheme::V1.live(i) == Some(Split::Validation)
+                            && keep(i.id.as_str())
+                    })
+                    .count() as u32;
+                languages.push(ClassLanguage {
+                    language: l.language.clone(),
+                    n: items.len() as u32,
+                    skipped: in_class - items.len() as u32,
+                });
+            }
+            out.push(ClassTrials {
+                name: name.clone(),
+                languages,
+                trials: calibration_trials(&by_port, prompted.len() + 1, degraded.len(), candidate.len()),
+            });
+        }
+        let unusable = drawn.languages.iter().map(|l| l.unusable[1..].iter().sum::<u32>()).sum();
+        Ok(CalibrateOutcome::Read { unusable, classes: out })
     }
 }
 
@@ -2258,8 +2510,11 @@ fn nano(x: f64) -> i64 {
 /// otherwise read as unchanged); a metric that falls by more than its
 /// tolerance (the floor, at least one step) regresses that metric; the
 /// composite falling by more than max(its floor, one [`LADDER_STEP`])
-/// regresses the composite. Means count a refused Validation item as 0, so
-/// refusing a weak item cannot raise a reading. Differences are compared in
+/// regresses the composite. Regression compares the readings it is given
+/// and counts nothing itself: a round's reading counts a refused item as 0
+/// ([`round`], `score_round`), so refusing a weak item cannot
+/// raise it, while a relower or calibrate reading is over the items that have a
+/// lowering prompt only and counts the rest in `skipped`, not as 0. Differences are compared in
 /// billionths ([`nano`]), so a fall of exactly the tolerance is a tie.
 fn regression(base: &Reading, candidate: &Reading, floor: &Reading) -> Option<Metric> {
     let finite = |r: &Reading| r.chrf.is_finite() && r.meaning.is_finite() && r.composite.is_finite();
@@ -2327,14 +2582,19 @@ pub fn decide_panel(rows: &[(Reading, Reading, Reading)]) -> Verdict {
         .iter()
         .map(|(base, candidate, _)| nano(candidate.composite - base.composite))
         .sum();
-    // The noise of a sum of independent languages' differences: the root of the
-    // sum of their floors squared.
-    let noise = rows.iter().map(|(_, _, floor)| floor.composite.powi(2)).sum::<f64>().sqrt();
-    if net > nano(noise.max(LADDER_STEP)) {
+    if net > nano(panel_noise(rows).max(LADDER_STEP)) {
         Verdict::Accepted
     } else {
         Verdict::Rejected(Why::NoGain)
     }
+}
+
+/// The noise of a sum of independent languages' differences: the root of the
+/// sum of their composite floors squared, over one `(base, candidate, floor)`
+/// row per language. A one-language panel's noise is its floor. The one owner
+/// of the term, for [`decide_panel`] and the calibration.
+pub fn panel_noise(rows: &[(Reading, Reading, Reading)]) -> f64 {
+    rows.iter().map(|(_, _, floor)| floor.composite.powi(2)).sum::<f64>().sqrt()
 }
 
 /// One panel language's row of a cycle: the head's Validation reading, the
@@ -2570,7 +2830,7 @@ pub const FLOOR_ARMS_MIN: usize = 3;
 /// than two items or no arm (0/0), and when an arm is ragged.
 pub fn paired_floor(recorded: &[ItemScore], arms: &[Vec<ItemScore>]) -> Reading {
     let n = recorded.len();
-    if arms.iter().any(|a| a.len() != n) {
+    if n < 2 || arms.iter().any(|a| a.len() != n) {
         return Reading { chrf: f64::NAN, meaning: f64::NAN, composite: f64::NAN };
     }
     let pooled = |of: &dyn Fn(&ItemScore) -> f64| {
@@ -2779,6 +3039,52 @@ fn discard_inventory(dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scored(chrf: f64, meaning: f64) -> ItemScore {
+        ItemScore { chrf, meaning: Some(meaning) }
+    }
+
+    /// A draw over `[language][item]`: `base` plus a per-draw, per-item wobble.
+    fn draw(languages: usize, items: usize, base: f64, wobble: f64, seed: usize) -> Vec<Vec<ItemScore>> {
+        (0..languages)
+            .map(|l| {
+                (0..items)
+                    .map(|i| {
+                        let w = wobble * (((i * 7 + seed * 3 + l) % 5) as f64 - 2.0) / 2.0;
+                        scored((100.0 * (base + w)).clamp(0.0, 100.0), (base + w).clamp(0.0, 1.0))
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn calibration_trials_count_every_choice_and_read_the_fixed_cases() {
+        // Six prompted draws, two degraded, three candidates, two languages of 8 items.
+        let mut draws: Vec<_> = (0..6).map(|s| draw(2, 8, 0.6, 0.02, s)).collect();
+        draws.extend((0..2).map(|_| draw(2, 8, 0.0, 0.0, 0)));
+        draws.extend((0..3).map(|s| draw(2, 8, 0.8, 0.02, s)));
+        let t = calibration_trials(&draws, 6, 2, 3);
+        assert_eq!(t.prompted.trials, 120);
+        assert_eq!(t.degraded.iter().map(|d| d.trials).collect::<Vec<_>>(), [60, 60]);
+        assert_eq!(t.candidate.trials, 6 * 10 * 3);
+        assert!(t.noise > 0.0);
+        // An all-zero draw regresses against any base, in every trial.
+        assert!(t.degraded.iter().all(|d| d.regressed == d.trials));
+        // A far better draw is accepted in every trial.
+        assert_eq!(t.candidate.accepted, t.candidate.trials);
+
+        // Identical prompted draws: nothing to gain, nothing regressed, no noise.
+        let same: Vec<_> = (0..6).map(|_| draw(2, 8, 0.6, 0.02, 1)).collect();
+        let t = calibration_trials(&same, 6, 0, 0);
+        assert_eq!((t.prompted.trials, t.prompted.nogain), (120, 120));
+        assert_eq!(t.noise, 0.0);
+
+        // A class of one item has no floor: every trial fails closed.
+        let one: Vec<_> = (0..6).map(|s| draw(2, 1, 0.6, 0.02, s)).collect();
+        let t = calibration_trials(&one, 6, 0, 0);
+        assert_eq!((t.prompted.trials, t.prompted.regressed), (120, 120));
+    }
 
     /// The twin of the `RoundRecord` literal in its compile_fail doctest: the
     /// same fields, compiling here because the fields are private to this module.
