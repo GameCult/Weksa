@@ -4946,57 +4946,112 @@ fn a_cycle_decides_each_language_on_its_own_floor() {
     assert!(matches!(d.verdict(), Verdict::Rejected(Why::Regressed(_))), "{:?}", d.verdict());
 }
 
-/// A bilingual run whose head round loses one Validation item per language
-/// (en-US item 2, ja-JP item 13), then FLOOR_ARMS_MIN more rounds: the first `good_repeats`
-/// lose nothing, the rest lose what the head did. The candidate of the
-/// returned cycle loses nothing.
-fn bilingual_cycle(good_repeats: usize) -> Decision {
+/// A bilingual run whose head round loses the Validation items `head` (refused,
+/// so scored 0), then FLOOR_ARMS_MIN repeat rounds losing `repeats[i]`, then a
+/// cycle whose candidate round loses `candidate`. en-US Validation items are
+/// `item:daodejing:2` and `:3`, ja-JP's `:12` and `:13`.
+fn bilingual_cycle(head: &[&str], repeats: [&[&str]; FLOOR_ARMS_MIN], candidate: &[&str]) -> Decision {
     let mut dao = bilingual(LAOZI_JA);
-    let lossy = || {
-        let mut m = bilingual_fake();
-        for key in ["item:daodejing:2", "item:daodejing:13"] {
-            m.answers.insert(key.into(), "not a draft".into());
+    let losing = |lost: &[&str]| {
+        let mut answers = bilingual_answers();
+        for key in lost {
+            answers.insert(format!("item:daodejing:{}", key.trim_start_matches(':')), "not a draft".into());
         }
+        answers
+    };
+    let fake_losing = |lost: &[&str]| {
+        let mut m = bilingual_fake();
+        m.answers = losing(lost);
         m
     };
-    let mut head = lossy();
-    recorded(round(&mut dao.run, &mut head, &Scorer::new(Bag)).unwrap());
-    for i in 0..FLOOR_ARMS_MIN {
-        let mut repeat = if i < good_repeats { bilingual_fake() } else { lossy() };
+    let mut first = fake_losing(head);
+    recorded(round(&mut dao.run, &mut first, &Scorer::new(Bag)).unwrap());
+    for lost in repeats {
+        let mut repeat = fake_losing(lost);
         recorded(round(&mut dao.run, &mut repeat, &Scorer::new(Bag)).unwrap());
     }
     let mut model = bilingual_fake();
-    model.candidate = Some((4, bilingual_answers()));
+    model.candidate = Some((4, losing(candidate)));
     model.edit = Some(Ok(ONE_CONCEPT.to_string()));
     run_cycle(&mut dao, &mut model)
 }
 
-/// The panel accepts on the sum of the languages' gains only past the noise of
-/// that sum (the root of their floors squared), through `cycle` and the floors
-/// `floor_of` measures. Each language's gain here is inside its own floor and
-/// the sum is past one step but inside the combined noise: a gain that looks
-/// real language by language and is not.
-#[test]
-fn cycle_noise_term_is_pinned_through_cycle() {
-    // One repeat in three reads the lost items back: a floor in both languages.
-    let d = bilingual_cycle(1);
+/// What a two-language cycle read: the sum of the composite gains, the noise of
+/// that sum (the root of the floors squared), and the other thresholds a wrong
+/// rule would use: the sum of the squares, the sum and the largest of the floors.
+struct PanelNoise {
+    net: f64,
+    noise: f64,
+    sum_of_squares: f64,
+    sum_of_floors: f64,
+    max_floor: f64,
+}
+
+fn panel_noise(d: &Decision) -> PanelNoise {
     let rows = d.panel();
     assert_eq!(rows.len(), 2);
-    let delta = |r: &weksa::run::PanelReading| r.candidate.unwrap().composite - r.base.composite;
-    let sum: f64 = rows.iter().map(delta).sum();
-    let noise = rows.iter().map(|r| r.floor.composite.powi(2)).sum::<f64>().sqrt();
     for r in rows {
+        let c = r.candidate.unwrap();
+        assert!(c.composite > r.base.composite, "{}: no language regressed", r.language);
+        assert!(c.chrf >= r.base.chrf && c.meaning >= r.base.meaning);
         assert!(r.floor.composite > 0.0, "{}: a floor to speak of", r.language);
-        assert!(delta(r) > 0.0, "{}: no language regressed", r.language);
-        assert!(r.candidate.unwrap().chrf >= r.base.chrf && r.candidate.unwrap().meaning >= r.base.meaning);
     }
-    assert!(sum > LADDER_STEP, "the sum clears a step: {sum}");
-    assert!(sum < noise, "and is inside the noise of the sum: {sum} {noise}");
+    let floors: Vec<f64> = rows.iter().map(|r| r.floor.composite).collect();
+    PanelNoise {
+        net: rows.iter().map(|r| r.candidate.unwrap().composite - r.base.composite).sum(),
+        noise: floors.iter().map(|f| f * f).sum::<f64>().sqrt(),
+        sum_of_squares: floors.iter().map(|f| f * f).sum(),
+        sum_of_floors: floors.iter().sum(),
+        max_floor: floors.iter().cloned().fold(0.0, f64::max),
+    }
+}
+
+/// The panel accepts on the sum of the languages' gains only past the noise of
+/// that sum (the root of their floors squared, never under one step), through
+/// `cycle` and the floors `floor_of` measures. The head loses every Validation
+/// item; the three repeats win some back, so en-US reads a floor of about 1.08
+/// and ja-JP 0.87 (noise 1.38, sum of squares 1.91, sum of floors 1.94). Gains
+/// are tuned by what the candidate wins back:
+/// - 1.378: inside the noise by 0.003, past every smaller rule (largest floor,
+///   step, no noise): a gain that looks real and is not;
+/// - 1.445: past the noise, inside the sum of squares and the sum of floors: a
+///   real gain, which a rule with a wider term (no root, or floors summed)
+///   would turn away.
+///
+/// The threshold is strict (`>`): the gains are real numbers off a scorer, so
+/// no fixture lands on the tie; that mutation is not pinned here, and is left
+/// to `decide_panel_table`.
+#[test]
+fn cycle_noise_term_is_pinned_through_cycle() {
+    let all = ["2", "3", "12", "13"];
+    // Round by round the repeats win back en-US item 2 and ja-JP item 12, then
+    // en-US item 3, then nothing.
+    let repeats: [&[&str]; FLOOR_ARMS_MIN] = [&["3", "13"], &["2", "12", "13"], &all];
+
+    // En-US wins back both items, ja-JP one.
+    let d = bilingual_cycle(&all, repeats, &["12"]);
+    let p = panel_noise(&d);
+    assert!(p.net > LADDER_STEP && p.net > p.max_floor, "{}", p.net);
+    assert!(p.net < p.noise && p.noise - p.net < 0.01, "just inside: {} {}", p.net, p.noise);
     assert_eq!(d.verdict(), Verdict::Rejected(Why::NoGain));
 
-    // The same candidate over replicates that agree with the head has no noise to
+    // En-US wins back one item, ja-JP both.
+    let d = bilingual_cycle(&all, repeats, &["3"]);
+    let p = panel_noise(&d);
+    assert!(p.net > p.noise && p.net - p.noise > 0.05, "just past: {} {}", p.net, p.noise);
+    assert!(p.net < p.sum_of_squares && p.net < p.sum_of_floors, "{}", p.net);
+    assert_eq!(d.verdict(), Verdict::Accepted);
+
+    // A gain inside the noise of a milder fixture: one repeat in three reads
+    // every item back in the head's place, the others lose what the head did.
+    let d = bilingual_cycle(&["2", "13"], [&[], &["2", "13"], &["2", "13"]], &[]);
+    let p = panel_noise(&d);
+    assert!(p.net > LADDER_STEP && p.net < p.noise, "{} {}", p.net, p.noise);
+    assert_eq!(d.verdict(), Verdict::Rejected(Why::NoGain));
+
+    // The same candidate over repeats that agree with the head has no noise to
     // clear, and its gain is accepted.
-    let d = bilingual_cycle(0);
+    let d = bilingual_cycle(&["2", "13"], [&["2", "13"]; FLOOR_ARMS_MIN], &[]);
     assert!(d.panel().iter().all(|r| r.floor.composite == 0.0));
     assert_eq!(d.verdict(), Verdict::Accepted);
 }
