@@ -427,8 +427,8 @@ never a Test sentence or `weksa corpus dump` output.
 Costs and hazards, all real: (a) the corpus digest changes, so a run record
 pins a new corpus and every calibration number above is redone on it (eight
 prompted draws of 35 items per language, about 2.5 times the 14-item cost);
-(b) the inventory was drafted with Validation informing it (ja inventory revs
-5 and 6), so fresh Validation items also measure inventory coverage, and some
+(b) the inventory was drafted with Validation informing it (ja inventory rev
+5), so fresh Validation items also measure inventory coverage, and some
 will refuse at encode (counted 0) until concepts are added, which is a result,
 not a defect; (c) the writer and the lowerers are one model family, so a
 lowerer may be favoured by its own prose (self-preference, Panickssery et al.
