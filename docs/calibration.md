@@ -5,10 +5,16 @@ Validation corpus: how often it accepts, rejects as no gain, or regresses a
 candidate that should be none of those. It does not reimplement the rule. It
 reads the answered draws through `RunStores::read_draws` (the scoring
 `weksa loop relower` uses), decides every trial with `decide_panel` over
-`paired_floor` (`crates/weksa/src/run.rs`), and prints counts. The numbers in
-`docs/targets/interlingua-lowering-map.md` ("Recalibration on the grown
-corpus") come from it. It is a diagnostic: it records nothing, writes no
-prompts, and never touches Test or Train.
+`paired_floor` (`crates/weksa/src/run.rs`), and prints, per class, the items
+read and skipped per language, the trial totals with their Accepted, NoGain and
+Regressed counts, and the mean panel noise. That is all it produces: the
+Accepted/NoGain/Regressed counts and the noise mean in the map's "Recalibration
+on the grown corpus" block are reproduced by it; the other figures there (the
+35% with R removed, the noise range, the 0.0185 gain and its 0.41 ratio, the
+bootstrap intervals, the per-item SDs, R's +0.024 and the mild-arm duplicate
+counts) were computed by scratch scripts that are not in the repo. It is a
+diagnostic: it records nothing, writes no prompts, and never touches Test or
+Train.
 
 ## What it counts
 
@@ -74,10 +80,14 @@ draw's answers. Only `mild` reads `round-N/*.answer`.
   tense, polarity, modality or hedge, a referent, a quantity or a predicate's
   concept (replace it with a near but different word). Keep language, register,
   length and fluency; the result must read as a natural utterance and must not
-  mention the change. A second mild draw blurs a different detail than the first
-  and is written without reading the first's answers. The wording of the
-  distil-base original is lost, and the dispatch used for growth-base is not on
-  disk, so this is the wording from now on.
+  mention the change. Pick the detail that is not the most salient one. A
+  second mild draw blurs a different detail than the first and is written
+  without reading the first's answers. The wording of the distil-base original
+  is lost, and the dispatch used for growth-base is not on disk, so this is the
+  wording from now on. Warning: on growth-base two mild arms briefed this way
+  came out identical in 27 of 60 items, so independently briefed mild arms
+  are not independent degradations; read a mild draw's regress count with that
+  in mind.
 - Train-guide: before answering, read the Train sentences of the corpus in the
   batch's language as a register guide and let it steer word choice; the guide
   gives phrasing only and each answer must still say exactly what its own packet
