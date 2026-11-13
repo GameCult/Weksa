@@ -1,6 +1,7 @@
 schema_version: weksa.persona_lowering_fixture_batch.v0
 fixture_id: brokkr-edda-voice
 speaker_id: brokkr
+# The data/cultural-ontology files cited below were deleted from main (cut delete-cultural-ontology); see git history.
 cultural_stack_ref: data/cultural-ontology/persona-stacks/brokkr.yaml
 target_register:
   language: en-US
