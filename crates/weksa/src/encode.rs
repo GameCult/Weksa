@@ -1062,4 +1062,25 @@ mod tests {
         assert_eq!(&item.text[n.start as usize..n.end as usize], "Zo\u{eb}");
         assert_eq!(n.start, 6);
     }
+
+    #[test]
+    fn a_stray_close_bracket_and_a_scattered_duplicate_answer_are_refused() {
+        // A text holding only `]]` is not a marked line.
+        let close = WORK.replace("Quiet, both of you.", "Quiet ]] both of you.");
+        assert_eq!(
+            import(&close, &[marked(3, "Quiet ]] both of you.")]).unwrap_err(),
+            ImportRefusal::Markup { line: 3 }
+        );
+        // The answer's order does not matter, and a duplicate need not be adjacent.
+        let (_, items) = import(WORK, &[marked(3, "Quiet, both of you."), marked(1, "Tamsin, bring the lantern.")]).unwrap();
+        assert_eq!(items.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["item:lantern-wager:1", "item:lantern-wager:3"]);
+        assert_eq!(
+            import(
+                WORK,
+                &[marked(1, "Tamsin, bring the lantern."), marked(3, "Quiet, both of you."), marked(1, "Tamsin, bring the lantern.")]
+            )
+            .unwrap_err(),
+            ImportRefusal::LineMarkedTwice { line: 1 }
+        );
+    }
 }
