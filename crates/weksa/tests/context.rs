@@ -851,6 +851,40 @@ mod lowering {
         assert!(text.contains("\n\nentities: {\"entity:nibu\":[\"NIBUCANARY\"]}\n\n"), "{text}");
     }
 
+    /// Every referent citing the speaker is stripped, not the first.
+    #[test]
+    fn a_speaker_cited_on_two_referents_prints_on_neither() {
+        let cast = InventoryStore::open(&data("interlingua/inventory.cc")).unwrap();
+        let cast_entities = EntityStore::open(&data("entity/entity.cc")).unwrap();
+        let mut packet = proof_packet();
+        let speaker = EntityId::parse("entity:nibu").unwrap();
+        packet.referents[0].entity = Some(speaker.clone());
+        assert_eq!(packet.referents.iter().filter(|r| r.entity.as_ref() == Some(&speaker)).count(), 2);
+        let view = admitted(packet, &cast, "corpus/corpus.cc", &cast_entities);
+        let item = CorpusItemId::parse("item:nibu:1").unwrap();
+        let held = Held(vec![nibu(&[("en-US", &["NIBUCANARY"])])]);
+        let prompt = Prompt::lower(&view, &item, &speaker, "en-US", &cast.inventory().unwrap(), &held, &weksa::Ontology::empty()).unwrap();
+        let text = prompt.text();
+        assert!(!text.contains("entity:nibu") && !text.contains("NIBUCANARY"), "{text}");
+        assert!(text.contains("\n\nentities: {}\n\n"), "{text}");
+    }
+
+    /// The speaker is matched by whole id: a cited entity whose id the
+    /// speaker's id is a prefix of is another entity and still prints.
+    #[test]
+    fn an_entity_sharing_a_prefix_with_the_speaker_is_kept() {
+        let cast = InventoryStore::open(&data("interlingua/inventory.cc")).unwrap();
+        let cast_entities = EntityStore::open(&data("entity/entity.cc")).unwrap();
+        let view = admitted(proof_packet(), &cast, "corpus/corpus.cc", &cast_entities);
+        let item = CorpusItemId::parse("item:nibu:1").unwrap();
+        let held = Held(vec![nibu(&[("en-US", &["NIBUCANARY"])])]);
+        let speaker = EntityId::parse("entity:nib").unwrap();
+        let prompt = Prompt::lower(&view, &item, &speaker, "en-US", &cast.inventory().unwrap(), &held, &weksa::Ontology::empty()).unwrap();
+        let text = prompt.text();
+        assert!(text.contains(r#""entity":"entity:nibu""#), "{text}");
+        assert!(text.contains("NIBUCANARY"), "{text}");
+    }
+
     fn feature(inv: &Inventory, gloss: &str) -> weksa::InvId {
         inv.entries().find(|e| e.gloss == gloss).unwrap().id
     }
