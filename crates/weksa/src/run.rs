@@ -255,8 +255,9 @@ pub struct LanguageScores {
 }
 
 /// One scored round. It holds no text and no Test reading: per-item rows for
-/// Train only, Validation only as means and refusal counts by stage. Only
-/// `run::round` builds one.
+/// Train only; Validation as means and refusal counts by stage, and as
+/// per-item scores (numbers only, private to this module). Only `run::round`
+/// builds one.
 ///
 /// ```
 /// fn f(r: &weksa::run::RoundRecord) -> u32 { r.n() }
