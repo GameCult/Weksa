@@ -2887,6 +2887,73 @@ fn the_lowerer_sees_no_item_text() {
     assert_eq!(keys(true), keys(false));
 }
 
+/// The promise `lower-prompt-no-item-text`: no lowering prompt holds the
+/// item's speaker id. A referent citing the speaker must not put that entity
+/// id (nor its forms) into the prompt; another cited entity still prints.
+#[test]
+fn the_lowerer_never_sees_the_items_speaker() {
+    use weksa::entity::{Entity, EntityOrigin, LanguageForms};
+    use weksa::packet::EntityId;
+    let speaker = EntityId::parse("entity:spkcanary").unwrap();
+    let other = EntityId::parse("entity:othercite").unwrap();
+    let mut dao = dao_over(|corpus, entities| {
+        let mut entity_store = weksa::EntityStore::open(entities).unwrap();
+        for (id, form) in [("entity:spkcanary", "ZEBRAQUILL"), ("entity:othercite", "OTTERBLOOM")] {
+            entity_store
+                .put(Entity {
+                    id: EntityId::parse(id).unwrap(),
+                    forms: vec![LanguageForms {
+                        language: "en-US".into(),
+                        forms: vec![form.into()],
+                        pronunciation: None,
+                    }],
+                    origin: EntityOrigin::Cast {
+                        persona: "canary".into(),
+                        fixture: "f.yaml".into(),
+                    },
+                })
+                .unwrap();
+        }
+        let mut store = weksa::CorpusStore::open(corpus).unwrap();
+        let mut item = store.get("item:daodejing:1").unwrap().unwrap();
+        item.id = "item:spk:1".into();
+        item.text = "A held-apart sentence about OTTERBLOOM.".into();
+        item.speaker = EntityId::parse("entity:spkcanary").unwrap();
+        // The other entity is named on the item; the speaker is the speaker.
+        item.names = vec![weksa::corpus::NameSpan {
+            entity: EntityId::parse("entity:othercite").unwrap(),
+            start: 28,
+            end: 38,
+        }];
+        item.prior_turns = vec![];
+        store.add(item, &entity_store).unwrap();
+    });
+    let mut d = draft_of(1);
+    d.referents[0].entity = Some(speaker.clone());
+    d.referents[1].entity = Some(other.clone());
+    let mut model = fake(&good_answers());
+    model.answers.insert("item:spk:1".into(), json(&d));
+    model.lowered.insert("item:spk:1".into(), "CANARYLOWERED".into());
+    let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    let row = r.train().iter().find(|row| row.item == "item:spk:1").unwrap();
+    assert_ne!(row.outcome, Outcome::Refused(Stage::Lower), "a speaker with a form must not refuse either");
+    let with_other: Vec<&String> = model
+        .seen
+        .iter()
+        .filter(|(_, t)| t.starts_with(LOWER_INSTRUCTIONS) && t.contains("OTTERBLOOM"))
+        .map(|(_, t)| t)
+        .collect();
+    assert_eq!(with_other.len(), 1, "one lowering prompt cites the other entity");
+    let text = with_other[0];
+    assert!(text.contains("entity:othercite"), "{text}");
+    for banned in ["entity:spkcanary", "ZEBRAQUILL"] {
+        assert!(!text.contains(banned), "{banned} in {text}");
+    }
+    for (_, t) in model.seen.iter().filter(|(_, t)| t.starts_with(LOWER_INSTRUCTIONS)) {
+        assert!(!t.contains("entity:spkcanary") && !t.contains("ZEBRAQUILL"));
+    }
+}
+
 #[test]
 fn lowering_refusals_count_at_lower() {
     let run = |raw: Result<String, PortError>| {
