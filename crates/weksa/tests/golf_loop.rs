@@ -5256,6 +5256,10 @@ fn the_lowering_step_of_a_round_stops_on_a_withheld_prompt() {
     model.raw_lowering = Some(Err(PortError::Withheld));
     let r = round(&mut dao.run, &mut model, &Scorer::new(Bag));
     assert!(matches!(r, Err(RunError::Withheld)), "{:?}", r.map(|_| ()));
+    assert!(
+        !dao.root.join("round-1/packets.cc").exists(),
+        "the refused attempt's packets are discarded"
+    );
 }
 
 #[test]
