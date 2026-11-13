@@ -1,6 +1,6 @@
-//! The original corpus (`data/original`), in en-US and ja-JP: per language, 28
+//! The original corpus (`data/original`), in en-US and ja-JP: per language, 49
 //! passages written for the non-memorised golf-loop target (Train and
-//! Validation, all model-written) and 8 public-domain Test sentences, each with
+//! Validation, all model-written: 28, then 21 more Validation items grown blind) and 8 public-domain Test sentences, each with
 //! its full provenance. Test is only read at a checkpoint: no round or recall
 //! prompt over this store holds it. The ja-JP passages are written in Japanese,
 //! not translated; the ja-JP Test sentences are Aozora Bunko excerpts.
@@ -32,7 +32,7 @@ fn stores() -> (CorpusStore, EntityStore) {
 fn every_original_item_records_its_author_and_the_public_domain_ones_their_provenance() {
     let (corpus, entities) = stores();
     let items = corpus.all().unwrap();
-    assert_eq!(items.len(), 72);
+    assert_eq!(items.len(), 114);
     let (mut model, mut public) = ([0; 2], [0; 2]);
     for item in &items {
         let lang = PANEL.iter().position(|l| *l == item.language).unwrap();
@@ -43,7 +43,8 @@ fn every_original_item_records_its_author_and_the_public_domain_ones_their_prove
                 model[lang] += 1;
                 assert!(
                     item.id
-                        .starts_with(["item:original:", "item:original-ja:"][lang]),
+                        .starts_with(["item:original:", "item:original-ja:"][lang])
+                        || item.id.starts_with(["item:vgrow:", "item:vgrow-ja:"][lang]),
                     "{}",
                     item.id
                 );
@@ -116,7 +117,7 @@ fn every_original_item_records_its_author_and_the_public_domain_ones_their_prove
             item.id
         );
     }
-    assert_eq!((model, public), ([28, 28], [8, 8]));
+    assert_eq!((model, public), ([49, 49], [8, 8]));
 }
 
 #[test]
@@ -140,7 +141,7 @@ fn the_original_items_spread_over_train_and_validation_and_test_is_public_domain
         };
         assert_eq!(
             (of(Split::Train), of(Split::Validation), of(Split::Test)),
-            (14, 14, 8),
+            (14, 35, 8),
             "{lang}"
         );
     }
@@ -164,6 +165,85 @@ fn the_original_items_spread_over_train_and_validation_and_test_is_public_domain
         );
     }
 }
+
+/// The 42 Validation items grown after the 56: written blind, one new group
+/// each, every group bucketed Validation by its name alone, none sharing text
+/// with a Test item in either direction.
+#[test]
+fn grown_items_hold_no_test_text_and_every_group_buckets_validation() {
+    let (corpus, _) = stores();
+    let all = corpus.all().unwrap();
+    let mut grown: Vec<_> = all
+        .iter()
+        .filter(|i| i.id.starts_with("item:vgrow"))
+        .collect();
+    grown.sort_by(|a, b| a.id.cmp(&b.id));
+    assert_eq!(grown.len(), 42);
+    let test: Vec<_> = all
+        .iter()
+        .filter(|i| SplitScheme::V1.live(i) == Some(Split::Test))
+        .collect();
+    assert_eq!(test.len(), 16);
+    let mut groups = std::collections::BTreeSet::new();
+    for item in &grown {
+        match &item.source {
+            Source::ModelWritten {
+                family, generator, ..
+            } => {
+                assert_eq!(*family, ModelFamily::Anthropic, "{}", item.id);
+                assert!(
+                    generator
+                        .as_deref()
+                        .is_some_and(|g| g.contains("claude-sonnet-5-5")),
+                    "{}",
+                    item.id
+                );
+            }
+            other => panic!("{}: {other:?}", item.id),
+        }
+        assert_eq!(item.speaker.as_str(), "entity:keeper", "{}", item.id);
+        assert_eq!(
+            SplitScheme::V1.live(item),
+            Some(Split::Validation),
+            "{}",
+            item.id
+        );
+        assert!(groups.insert(item.group.clone()), "{}", item.group);
+        assert!(
+            all.iter()
+                .filter(|o| o.id != item.id)
+                .all(|o| o.group != item.group),
+            "{} shares its group",
+            item.group
+        );
+        for t in &test {
+            assert!(
+                !leaks(std::slice::from_ref(&item.text), t),
+                "{} holds Test text",
+                item.id
+            );
+            // The reverse: the Test item contains the new text.
+            assert!(
+                !t.text.contains(&item.text),
+                "{} is inside Test text",
+                item.id
+            );
+        }
+    }
+    let lines: Vec<String> = grown
+        .iter()
+        .map(|i| format!("{}\n{}\n{}\n{:?}", i.id, i.text, i.group, i.source))
+        .collect();
+    let parts: Vec<&[u8]> = lines.iter().map(|l| l.as_bytes()).collect();
+    assert_eq!(
+        weksa::split::fnv1a64_of(&parts),
+        DIGEST_OF_THE_42,
+        "a grown item changed"
+    );
+}
+
+/// Taken over the 42 grown items at admission, 2026-11-13.
+const DIGEST_OF_THE_42: u64 = 15237292705431734093;
 
 /// The 28 model-written items are byte-for-byte what they were before Test
 /// was added: id, text, group and source, folded in key order.
@@ -460,10 +540,10 @@ fn the_recall_probe_covers_every_live_original_item_and_names_no_work() {
     };
     assert_eq!(reading.languages.len(), 2);
     for r in &reading.languages {
-        assert_eq!((r.n, r.answered), (28, 28), "{}", r.language);
+        assert_eq!((r.n, r.answered), (49, 49), "{}", r.language);
         assert!(r.chrf < 25.0, "{} {}", r.language, r.chrf);
     }
-    assert_eq!(model.0.len(), 56);
+    assert_eq!(model.0.len(), 98);
     // No item outside Train and Validation is shown to the model.
     let all = CorpusStore::open(&c).unwrap().all().unwrap();
     for item in &all {
@@ -544,14 +624,14 @@ fn original_round(family: ModelFamily) -> (weksa::run::RunStores, weksa::run::Ro
 fn own_family_counts_and_labels() {
     // The original corpus is Anthropic-written items, all offered.
     let (run, r) = original_round(ModelFamily::Anthropic);
-    assert_eq!(r.own_family(), 56);
+    assert_eq!(r.own_family(), 98);
     assert_eq!(
         r.parse_reasons().iter().map(|c| c.count).sum::<u32>(),
-        56,
+        98,
         "every item was refused at Parse and says why"
     );
     let line = run.round_line(&r);
-    assert!(line.contains(" own-family 56"), "{line}");
+    assert!(line.contains(" own-family 98"), "{line}");
 
     // A different answerer family, or none recorded, labels nothing.
     for family in [ModelFamily::OpenAi, ModelFamily::Unrecorded] {
@@ -664,6 +744,20 @@ impl weksa::model::ModelPort for Record {
     }
 }
 
+/// A Test item's text, or any run of five of its words (twelve characters of a
+/// text written without spaces), in a prompt.
+fn leaks(prompts: &[String], item: &weksa::corpus::CorpusItem) -> bool {
+    let w: Vec<&str> = item.text.split_whitespace().collect();
+    let c: Vec<char> = item.text.chars().collect();
+    prompts.iter().any(|t| {
+        t.contains(&item.text)
+            || w.windows(5).any(|k| t.contains(&k.join(" ")))
+            || (w.len() == 1
+                && c.windows(12)
+                    .any(|k| t.contains(&k.iter().collect::<String>())))
+    })
+}
+
 /// The public-domain Test items are held out: no prompt of round 1 over
 /// `data/original`, no recall prompt, and no round record names one.
 #[test]
@@ -717,9 +811,9 @@ fn no_test_item_is_offered_to_a_round_or_recall_or_recorded() {
     let RoundOutcome::Recorded(r) = round(&mut run, &mut model, &scorer).unwrap() else {
         panic!("answered");
     };
-    // The check bites: the round did show live items, 56 of them, and the
+    // The check bites: the round did show live items, 98 of them, and the
     // probe sees a shown Train item of each language.
-    assert!(model.0.len() >= 56, "{}", model.0.len());
+    assert!(model.0.len() >= 98, "{}", model.0.len());
     for lang in PANEL {
         assert!(
             items
@@ -740,7 +834,7 @@ fn no_test_item_is_offered_to_a_round_or_recall_or_recorded() {
         panic!("answered");
     };
     for rr in &reading.languages {
-        assert_eq!((rr.n, rr.answered), (28, 28), "{}", rr.language);
+        assert_eq!((rr.n, rr.answered), (49, 49), "{}", rr.language);
     }
     for item in &held {
         assert!(!leaks(&recall.0, item), "recall prompt held {}", item.id);
@@ -783,7 +877,7 @@ fn ja_test_text_carries_no_aozora_markup() {
         .into_iter()
         .filter(|i| i.language == "ja-JP")
         .collect();
-    assert_eq!(ja.len(), 36);
+    assert_eq!(ja.len(), 57);
     for item in &ja {
         for bad in ["《", "》", "｜", "［＃", "※"] {
             assert!(!item.text.contains(bad), "{} holds {bad}", item.id);
@@ -810,7 +904,7 @@ fn every_cited_speaker_has_a_form_in_its_items_language() {
 }
 
 /// The panel [en-US, ja-JP] over `data/original`: both languages are read, each
-/// with 14 Validation items, and no Test item is in any call.
+/// with 35 Validation items, and no Test item is in any call.
 #[test]
 fn a_panel_round_reads_both_languages() {
     let (run, r) = original_round(ModelFamily::Unrecorded);
@@ -821,7 +915,7 @@ fn a_panel_round_reads_both_languages() {
         let refused = &l.validation_refused;
         assert_eq!(
             refused.parse + refused.admit + refused.lower,
-            14,
+            35,
             "{}",
             l.language
         );
@@ -941,24 +1035,46 @@ fn committed_scenes_cover_original_groups() {
         .filter(|i| matches!(SplitScheme::V1.live(i), Some(Split::Train | Split::Validation)))
         .map(|i| i.group)
         .collect();
-    assert_eq!(live.len(), 56);
+    assert_eq!(live.len(), 98);
     let held: BTreeSet<String> = scenes.iter().map(|s| s.group.clone()).collect();
     assert_eq!(held, live, "a scene for each live Train or Validation group, none other");
     // Revisions append: a group's later revisions re-derived its relation.
     assert!(scenes.iter().all(|s| s.n <= 2));
+    const S7: &str = "claude-sonnet-5-5 (Weksa Hands, model-annotated original scenes)";
+    const GROWTH: &str = "claude-sonnet-5-5 (Weksa Hands, model-annotated validation-growth scenes; annotator is not the writer)";
+    let grown: BTreeSet<String> = CorpusStore::open(&data.join("corpus.cc"))
+        .unwrap()
+        .all()
+        .unwrap()
+        .into_iter()
+        .filter(|i| i.id.starts_with("item:vgrow"))
+        .map(|i| i.group)
+        .collect();
+    assert_eq!(grown.len(), 42);
+    let mut by_growth = BTreeSet::new();
     for s in &scenes {
         match &s.annotator {
             Annotator::Model { family, generator } => {
                 assert_eq!(*family, ModelFamily::Anthropic, "{}", s.group);
-                assert_eq!(
-                    generator, "claude-sonnet-5-5 (Weksa Hands, model-annotated original scenes)",
-                    "{}",
-                    s.group
-                );
+                assert!(generator == S7 || generator == GROWTH, "{}", s.group);
+                if generator == GROWTH {
+                    by_growth.insert(s.group.clone());
+                    // One relation, keeper to unnamed, the three Scene features.
+                    assert_eq!(s.n, 1, "{}", s.group);
+                    assert_eq!(s.relations.len(), 1, "{}", s.group);
+                    let rel = &s.relations[0];
+                    assert_eq!(rel.from.as_str(), "entity:keeper", "{}", s.group);
+                    assert_eq!(rel.to, weksa::speaker::Party::Unnamed, "{}", s.group);
+                    assert_eq!(rel.features.len(), 3, "{}", s.group);
+                }
             }
             other => panic!("{} is {other:?}", s.group),
         }
     }
+    assert_eq!(
+        by_growth, grown,
+        "the growth scenes are exactly the vgrow groups"
+    );
 }
 
 /// The sweep both seed-pair tests share: over a grid of grades per feature (each

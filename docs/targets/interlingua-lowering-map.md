@@ -406,37 +406,44 @@ of 1120 trials, NoGain 71%, Regressed 0%: a net gain of 0.079 against a mean
 noise term of 0.079. At 14 items per language the rule is therefore a low-power
 filter for a gain of this size; by 1/sqrt(n), about 35 or more items per
 language would bring the noise term near 0.05 (an extrapolation, not measured).
-### Validation growth plan (`validation-growth`, not built)
+### Validation growth (`validation-growth`, built; recalibration not run)
 
-Power needs about 35 or more Validation items per language (14 now). The
-corpus is `data/original`: model-written original prose for Train and
-Validation (written to be non-memorised; public domain text was rejected for
-them), eight public-domain sentences per language for Test with full
-provenance. The split is derived from an item's group alone
-(`SplitScheme::V1`: FNV-1a of `weksa-split-v1:<group>` mod 100, under 40 Train,
-under 80 Validation, else Test; a model-written item in a Test group is in no
-split), and every item so far is its own group (`original-<noun>`). Growth is
-therefore: about 21 new model-written items per language, each its own new
-group, the group name chosen before the text is written (the bucket is then a
-property of the name, not of the text), keeping names whose bucket is
-Validation, with source `ModelWritten` (family, generator, prompt digest),
-a speaker and a Scene as the existing items have, and the inventory and
-ontology beds unchanged for the measure. No Test text is read by the writer:
-the writer's prompt holds a noun list, the register note and the language,
-never a Test sentence or `weksa corpus dump` output.
-Costs and hazards, all real: (a) the corpus digest changes, so a run record
-pins a new corpus and every calibration number above is redone on it (eight
-prompted draws of 35 items per language, about 2.5 times the 14-item cost);
-(b) the inventory was drafted with Validation informing it (ja inventory rev
-5), so fresh Validation items also measure inventory coverage, and some
-will refuse at encode (counted 0) until concepts are added, which is a result,
-not a defect; (c) the writer and the lowerers are one model family, so a
-lowerer may be favoured by its own prose (self-preference, Panickssery et al.
-2024); a cross-family writer for the new Validation items removes that
-(question `validation-growth-writer`).
-Not built here because the writer fork is open, the scenes and entities for
-~42 items are a real authoring cut, and the digest change invalidates the
-runs in flight.
+Power needs about 35 or more Validation items per language. `data/original`
+now holds 35 per language (it held 14; Train 14 and Test 8 are unchanged):
+42 model-written items, `item:vgrow:1..21` (en-US) and `item:vgrow-ja:1..21`
+(ja-JP), live Train+Validation 56 to 98. The slug is new on purpose: the
+`item:original:` prefix filter of `DIGEST_OF_THE_28` still selects the first 28
+and passes; `DIGEST_OF_THE_42` freezes the new prose.
+
+The split is derived from an item's group alone (`SplitScheme::V1`: FNV-1a of
+`weksa-split-v1:<group>` mod 100, under 40 Train, under 80 Validation, else
+Test). The names were chosen before any text existed: 90 candidate nouns per
+language, dropped by script when the group already existed or the noun
+occurred in a Test text, then the first 24 whose bucket fell in 40..=79 (the
+bucket came from `SplitScheme::V1` itself, cross-checked on the 72 existing
+items). Each language was written by three blind writer agents (8 nouns each,
+a brief of language, register note, noun and speech act, no Test text and no
+existing item), 24 texts per language written, the first 21 in name order
+admitted through `weksa corpus add`; each group is its own group. The scenes
+are `weksa scene put` documents (keeper to `unnamed`, inventory rev 4),
+annotated by a separate agent; a second annotator measured agreement only and
+is not committed.
+
+The writer is Claude (family Anthropic recorded): no cross-family generator was
+reachable from the body that ran this cut. The self-preference effect (a Claude
+lowerer favouring Claude prose, Panickssery et al. 2024) is therefore not
+measured. The writers' blindness is by brief content, not sandbox.
+
+Expect encode refusals: the existing 56 were written onto the Dao r3 concepts
+and the inventory was drafted from them, while the new items were written free
+of the inventory (question `validation-growth-vocabulary` stays open). Some new
+packets will be refused at encode (inventory coverage) and score 0 as the means
+do; they stay in the corpus. That is a result about inventory generalization,
+not a defect.
+
+Every calibration number above (92/0/8 prompted rates, the 29% power, the 0.079
+noise term) is for the 14-item corpus; the corpus digest changed, and the
+numbers are redone on the grown corpus in a separate recalibration step.
 
 ### Smallest measurable distil slice (`distil-incontext`, not built)
 
