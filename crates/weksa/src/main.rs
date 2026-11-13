@@ -1299,14 +1299,8 @@ fn main() -> Result<()> {
                                 run.labelled(&format!("calibrate class={} prompted-{side} {}", c.name, k.line()))
                             );
                         }
-                        for (label, d) in degraded.iter().zip(&t.degraded) {
-                            println!(
-                                "{}",
-                                run.labelled(&format!(
-                                    "calibrate class={} degraded={label} trials={} regressed={}",
-                                    c.name, d.trials, d.regressed
-                                ))
-                            );
+                        for line in c.degraded_lines(&degraded) {
+                            println!("{}", run.labelled(&format!("calibrate class={} {line}", c.name)));
                         }
                         println!(
                             "{}",
@@ -1315,6 +1309,12 @@ fn main() -> Result<()> {
                                 c.name, t.candidate.trials, t.candidate.accepted, t.candidate.nogain, t.candidate.regressed
                             ))
                         );
+                        for (label, k) in candidate.iter().zip(&t.candidate_arms) {
+                            println!(
+                                "{}",
+                                run.labelled(&format!("calibrate class={} candidate={label} {}", c.name, k.line()))
+                            );
+                        }
                     }
                 }
             }

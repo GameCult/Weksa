@@ -1914,7 +1914,7 @@ fn cli_loop_calibrate_reads_answered_draws_and_refuses_unanswered_and_bad_labels
         .collect();
     assert_eq!(digests.len(), 2);
     // `P1` and `a_b` are answered too, so only the label check can refuse them.
-    for label in ["p1", "p2", "p3", "p4", "bad", "P1", "a_b"] {
+    for label in ["p1", "p2", "p3", "p4", "bad", "cand1", "cand2", "P1", "a_b"] {
         std::fs::create_dir_all(root.join(format!("relower-1-{label}"))).unwrap();
         for digest in &digests {
             std::fs::write(root.join(format!("relower-1-{label}/{digest}.answer")), said).unwrap();
@@ -1947,16 +1947,26 @@ fn cli_loop_calibrate_reads_answered_draws_and_refuses_unanswered_and_bad_labels
         assert!(!out(&o).contains("unanswered"), "{args:?} must be refused for itself: {}", out(&o));
     }
 
-    let o = calibrate(&[&four[..], &["--degraded", "bad", "--class", "old=item:daodejing"]].concat());
+    let o = calibrate(
+        &[&four[..], &["--degraded", "bad", "--candidate", "cand1", "--candidate", "cand2", "--class", "old=item:daodejing"]].concat(),
+    );
     assert!(o.status.success(), "{}", out(&o));
     let text = out(&o);
-    assert!(text.starts_with("calibrate draws prompted=4 degraded=1 candidate=0 floor-arms=3 unusable=0"), "{text}");
+    assert!(text.starts_with("calibrate draws prompted=4 degraded=1 candidate=2 floor-arms=3 unusable=0"), "{text}");
     assert!(text.contains("calibrate class=all items en-US n=2 skipped=0"), "{text}");
     assert!(text.contains("calibrate class=all prompted trials=20 nogain=20 accepted=0 regressed=0"), "{text}");
     for side in ["r-candidate trials=4", "r-base trials=4", "r-free trials=12"] {
         assert!(text.contains(&format!("calibrate class=all prompted-{side} nogain=")), "{text}");
     }
-    assert!(text.contains("calibrate class=old degraded=bad trials=20 regressed=0"), "{text}");
+    assert!(text.contains("calibrate class=old degraded=bad trials=20 regressed=0 offset en-US=+0.0000"), "{text}");
+    // The class=all lines in print order: prompted, its three R roles, degraded, pooled candidate, each candidate arm.
+    let all: Vec<&str> = text.lines().filter(|l| l.contains("calibrate class=all ")).collect();
+    let kinds = ["items", "prompted trials", "prompted-r-candidate", "prompted-r-base", "prompted-r-free", "degraded=bad", "candidate trials", "candidate=cand1", "candidate=cand2"];
+    assert_eq!(all.len(), kinds.len(), "{text}");
+    for (line, kind) in all.iter().zip(kinds) {
+        assert!(line.contains(&format!("class=all {kind}")), "{kind}: {line}");
+    }
+    assert!(all[7].contains("candidate=cand1 trials=20 nogain=20 accepted=0 regressed=0"), "{}", all[7]);
     for leaked in ["item:daodejing", "packet:", "highest excellence", "canaryroot"] {
         assert!(!text.contains(leaked), "{text}");
     }

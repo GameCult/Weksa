@@ -11,10 +11,12 @@ Regressed counts, and the mean panel noise. That is all it produces: the
 Accepted/NoGain/Regressed counts and the noise mean in the map's "Recalibration
 on the grown corpus" block are reproduced by it, and the prompted trials are
 also printed split by the recorded lowering `R`'s role (`prompted-r-candidate`,
-`prompted-r-base`, `prompted-r-free`, see below); the other figures there (the
+`prompted-r-base`, `prompted-r-free`, see below), the candidate counts per arm
+and the mild arms' composite offsets from the prompted mean (see below); the
+other figures there (the
 35% with R removed, the noise range, the 0.0185 gain and its 0.41 ratio, the
 bootstrap intervals, the per-item SDs, R's +0.024, the mild-arm duplicate
-counts and mean composite offsets, the Train-vocabulary overlap, the old/new
+counts, the Train-vocabulary overlap, the old/new
 class composites and the ten parse-refused item ids) were computed by scratch scripts that are not in the repo. It is a
 diagnostic: it records nothing, writes no prompts, and never touches Test or
 Train.
@@ -44,7 +46,14 @@ draws; the floor size is `FLOOR_ARMS_MIN` (3), the live rule's.
   3-subset of the rest of `P`, the degraded draw as the candidate. These should
   read Regressed.
 - Candidate trials, pooled over the `--candidate` arms: the same, tallied
-  Accepted, NoGain, Regressed. This is the rule's power against that arm.
+  Accepted, NoGain, Regressed. This is the rule's power against that arm. The
+  pooled line is followed by one `candidate=LABEL` line per arm: arms of one
+  kind can differ completely (Train-guide h1 and h2 Regressed in every trial
+  while h3 and h4 gained), and then the pooled figure is not a power.
+- Mild offset: each `degraded=LABEL` line ends with `offset LANGUAGE=+x.xxxx`, the
+  arm's composite minus the mean composite of the prompted draws (`R` included),
+  per language over the items read. A degraded arm that is barely below the
+  prompted mean is a weak probe of the rule's sensitivity.
 - Noise: the mean `panel_noise` over every (base, floor) choice.
 
 With six prompted draws including `R` that is 120 prompted trials, 60 per

@@ -548,7 +548,11 @@ except the R split in the first bullet, which `calibrate` prints as
 `prompted-r-candidate`, `prompted-r-base` and `prompted-r-free` since the
 `calibrate-report-r-involvement` cut; Soul re-ran growth-scene with it and the
 printed `all` lines read r-candidate 11/9/0, r-base 0/11/9, r-free 0/80/0, as
-below, in Accepted/NoGain/Regressed):
+below, in Accepted/NoGain/Regressed; likewise the per-arm Train-guide counts
+(`candidate=h1..h4`) and the mild arms' composite offsets from the prompted
+mean, R included (`offset`), which `calibrate` prints since
+`calibrate-arm-counts-and-mild-offsets` and which reproduce the figures below,
+Soul re-run on growth-scene):
 
 - Every one of the 11 false accepts has R as the candidate (bases
   prompted-2, p4, p6); every one of the 9 false rejects has R as the base. The
@@ -568,7 +572,7 @@ below, in Accepted/NoGain/Regressed):
   alone can produce the gap.
 - Mild arms: they overlap 8 of 35 answers (en-US) and 9 (ja-JP) over the limit
   of 7. They do not degrade the new items (composite -0.004 en-US
-  [-0.021, +0.012], +0.013 ja-JP); the Regressed counts come from the old
+  [-0.021, +0.012], +0.013 ja-JP for mild-1, +0.005 for mild-2); the Regressed counts come from the old
   en-US items (-0.072). The rule's sensitivity on the new items is unmeasured.
 - Train-guide pools unlike arms. h1 and h2 Regress in 120 of 120 trials; h3 and
   h4 gain (Accepted 45 and 40 of 60); on the new items h3 is Accepted 50 of 60

@@ -1918,8 +1918,15 @@ pub struct Trials {
     pub r_free: Counts,
     /// Per degraded arm in the order given: the arm as the candidate.
     pub degraded: Vec<Counts>,
-    /// Every candidate arm as the candidate, pooled.
+    /// Every candidate arm as the candidate, pooled: the sum of `candidate_arms`.
     pub candidate: Counts,
+    /// Per candidate arm in the order given: the arm as the candidate. Arms of
+    /// one kind can pool unlike draws, so the pooled count is not a power.
+    pub candidate_arms: Vec<Counts>,
+    /// Per degraded arm in the order given, per language: the arm's composite
+    /// minus the mean composite of the prompted draws (the recorded lowering
+    /// included), over the items read. NaN where a language has no items.
+    pub degraded_offset: Vec<Vec<f64>>,
     /// The mean of [`panel_noise`] over every (base, floor) choice.
     pub noise: f64,
 }
@@ -1975,7 +1982,7 @@ pub fn calibration_trials(
     let pool: Vec<usize> = (0..prompted).collect();
     let without = |out: &[usize]| -> Vec<usize> { pool.iter().copied().filter(|p| !out.contains(p)).collect() };
     let (mut r_candidate, mut r_base, mut r_free) = (Counts::default(), Counts::default(), Counts::default());
-    let mut candidate_counts = Counts::default();
+    let mut candidate_arms = vec![Counts::default(); candidate];
     let mut degraded_counts = vec![Counts::default(); degraded];
     let (mut noise, mut noises) = (0.0, 0u32);
     for &b in &pool {
@@ -1984,7 +1991,7 @@ pub fn calibration_trials(
                 counts.tally(decide_panel(&rows(b, prompted + d, &floors)));
             }
             for c in prompted + degraded..prompted + degraded + candidate {
-                candidate_counts.tally(decide_panel(&rows(b, c, &floors)));
+                candidate_arms[c - prompted - degraded].tally(decide_panel(&rows(b, c, &floors)));
             }
             noise += panel_noise(&rows(b, b, &floors));
             noises += 1;
@@ -2002,7 +2009,20 @@ pub fn calibration_trials(
         r_base,
         r_free,
         degraded: degraded_counts,
-        candidate: candidate_counts,
+        candidate: candidate_arms.iter().fold(Counts::default(), |a, &k| a.plus(k)),
+        candidate_arms,
+        degraded_offset: (0..degraded)
+            .map(|d| {
+                (0..languages)
+                    .map(|l| {
+                        let composite = |p: usize| {
+                            reading_of(&draws[p][l]).map_or(f64::NAN, |r| r.composite)
+                        };
+                        composite(prompted + d) - pool.iter().map(|&p| composite(p)).sum::<f64>() / prompted as f64
+                    })
+                    .collect()
+            })
+            .collect(),
         noise: noise / f64::from(noises),
     }
 }
@@ -2022,6 +2042,25 @@ pub struct ClassTrials {
     pub name: String,
     pub languages: Vec<ClassLanguage>,
     pub trials: Trials,
+}
+
+impl ClassTrials {
+    /// The text after `calibrate class=NAME ` of each degraded arm's line, one
+    /// per `labels` entry: its Regressed count and its composite offset from the
+    /// prompted mean in each language of the class.
+    pub fn degraded_lines(&self, labels: &[String]) -> Vec<String> {
+        let t = &self.trials;
+        labels
+            .iter()
+            .zip(&t.degraded)
+            .zip(&t.degraded_offset)
+            .map(|((label, d), offsets)| {
+                let offsets: String =
+                    self.languages.iter().zip(offsets).map(|(l, o)| format!(" offset {}={o:+.4}", l.language)).collect();
+                format!("degraded={label} trials={} regressed={}{offsets}", d.trials, d.regressed)
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug)]
@@ -3095,6 +3134,47 @@ mod tests {
             .collect()
     }
 
+    /// A wobble-free draw whose items all score `bases[language]` (chrF as a percentage, meaning as a fraction).
+    fn flat(bases: [f64; 2], items: usize) -> Vec<Vec<ItemScore>> {
+        bases.iter().map(|&b| (0..items).map(|_| scored(100.0 * b, b)).collect()).collect()
+    }
+
+    #[test]
+    fn arm_reports_attribute_each_arm_and_language() {
+        // R (port 0) is above the five other prompted draws; the two languages differ everywhere.
+        let mut draws = vec![flat([0.8, 0.7], 8)];
+        draws.extend((0..5).map(|_| flat([0.6, 0.6], 8)));
+        // Degraded arms: composites differ per arm and per language.
+        draws.push(flat([0.5, 0.2], 8));
+        draws.push(flat([0.1, 0.4], 8));
+        // Candidate arms: far above, level with the prompted, far below.
+        draws.push(flat([0.95, 0.95], 8));
+        draws.push(flat([0.6, 0.6], 8));
+        draws.push(flat([0.05, 0.05], 8));
+        let t = calibration_trials(&draws, 6, 2, 3);
+        // Offsets: arm minus the mean over all six prompted ports (R included): en 0.6333, ja 0.6167.
+        let want = [[0.5 - 3.8 / 6.0, 0.2 - 3.7 / 6.0], [0.1 - 3.8 / 6.0, 0.4 - 3.7 / 6.0]];
+        for (got, want) in t.degraded_offset.iter().flatten().zip(want.iter().flatten()) {
+            assert!((got - want).abs() < 1e-9, "{:?} against {want:?}", t.degraded_offset);
+        }
+        // Each arm keeps its own counts: the high arm gains, the level one gains nothing, the low one regresses.
+        let [high, level, low] = [t.candidate_arms[0], t.candidate_arms[1], t.candidate_arms[2]];
+        assert_eq!((high.trials, level.trials, low.trials), (60, 60, 60));
+        assert_eq!(high.accepted, 60);
+        assert_eq!(level.accepted, 0);
+        assert_eq!(low.regressed, 60);
+        assert_eq!(t.candidate, high.plus(level).plus(low));
+        // The printed lines keep each arm with its label and each offset with its language.
+        let class = ClassTrials {
+            name: "all".into(),
+            languages: ["en-US", "ja-JP"].map(|l| ClassLanguage { language: l.into(), n: 8, skipped: 0 }).into(),
+            trials: t,
+        };
+        let lines = class.degraded_lines(&["mild-1".to_string(), "mild-2".to_string()]);
+        assert_eq!(lines[0], "degraded=mild-1 trials=60 regressed=60 offset en-US=-0.1333 offset ja-JP=-0.4167");
+        assert_eq!(lines[1], "degraded=mild-2 trials=60 regressed=60 offset en-US=-0.5333 offset ja-JP=-0.2167");
+    }
+
     #[test]
     fn calibration_trials_count_every_choice_and_read_the_fixed_cases() {
         // Six prompted draws, two degraded, three candidates, two languages of 8 items.
@@ -3114,6 +3194,13 @@ mod tests {
         // A far better draw is accepted in every trial.
         assert_eq!(t.candidate.accepted, t.candidate.trials);
 
+        // Per-arm candidate counts sum to the pooled ones; a degraded draw of
+        // all zeros sits below the prompted mean (0.6 chrF and meaning) in both languages.
+        assert_eq!(t.candidate_arms.len(), 3);
+        assert_eq!(t.candidate_arms.iter().map(|k| k.trials).sum::<u32>(), t.candidate.trials);
+        assert_eq!(t.candidate_arms.iter().fold(Counts::default(), |a, &k| a.plus(k)), t.candidate);
+        assert_eq!((t.degraded_offset.len(), t.degraded_offset[0].len()), (2, 2));
+        assert!(t.degraded_offset.iter().flatten().all(|o| (*o + 0.6).abs() < 0.05), "{:?}", t.degraded_offset);
         // R (port 0) scores above the other prompted draws: it is Accepted as a
         // candidate and Regressed as a base, and the trials without it read NoGain.
         let mut r_high: Vec<_> = (0..6).map(|s| draw(2, 8, if s == 0 { 0.8 } else { 0.6 }, 0.02, s)).collect();
