@@ -355,6 +355,31 @@ checkpoint the test-split composite is within the noise floor of validation.
 The test split is read only at checkpoints. Self then records the freeze, and
 the training set is the whole corpus re-encoded under the frozen revision.
 
+## Distil measure (`distil-slice`)
+
+A lowerer is compared on round n's Validation packets with the prompts
+byte-identical to the round's, by `weksa loop relower ROOT --round N --arm ARM
+--lowerer LABEL [--floor ARM2]`. Every arm is answered through the one prompt
+door (`RunStores::answer_files`, the Test-text guard); a tuned model is a script
+that reads `<digest>.prompt` and writes `<digest>.answer` in
+`<ROOT>/relower-<N>-<ARM>`, not a new adapter. The recorded reading is the
+round's own lowering, read over the same items as the arm. An item the round
+refused before admission (no packet) or at the lowering prompt has no prompt to
+ask: it is skipped, so the readings exclude it, and it is counted as `skipped=`
+on the line; `n` is the items read, so `recorded` can differ from the round's
+own Validation reading, which scores those items 0. An arm answer that is not a
+usable lowering scores 0 and counts in `unusable=`; the same for the floor arm,
+counted after `floor ... unusable=`. The floor is the spread of the recorded
+lowering and a second prompted arm (lowering-only noise, no encoder noise). The
+verdict is `decide_panel` over (recorded, arm, floor): Accepted is the rule's
+name for a gain past the floor, Rejected(Regressed) for a loss past it,
+Rejected(NoGain) for neither. None is yet a finding about the arm. The rule is calibration-pending: a one-pair floor is noisy
+(a simulated prompted repeat reads NoGain only about 7-15% of the time, Regressed
+44-60%, Accepted 33-41%), so NoGain is not yet evidence of non-inferiority and
+is not yet the bar for cut 13; the calibration arms (a prompted repeat, a
+control) decide what the floor must be before the verdict is read as a ruling.
+Training pairs are Train only, at a frozen revision; the export is 12b.
+
 ## Lowerer first cut (`golf-loop-lowerer-cut`)
 
 Authority map for the smallest lowerer, written before its code (Imagination
@@ -436,5 +461,5 @@ One line per cut; specs exist for the cuts about to run (2d and 4, siblings on `
 9. `ja-panel`: ja-JP into the loop's panel, in two cuts on `e9cbd9b`. 9a `ja-panel-loop` (spec r1): language is the item's and the panel the run's: `Prompt::lower` takes the item's language and prints it on a language line (no prompt names English), entity forms are read in that language, `RunRecord` pins the panel (`weksa loop open --panel`), offers, mint and recall read only panel items, round means, floors and readings are per panel language, the accept rule runs `decide` per language, the recall split works on unspaced scripts, and `weksa corpus add` has no default language. 9b `ja-panel-corpus` (spec r1, after 9a): the ja-JP slice of `data/original`, model-written Japanese Train and Validation passages and eight Aozora Bunko public-domain Test sentences with full provenance, and their entities. Cut 5 is not a prerequisite: neither language lowers with ontology entries until cut 5 gives both theirs.
 10. `conlang-lexicon`: the first conlang's lexicon placed at concept embeddings, its morphology data, its ontology entries and the gloss reader. Waits on 3, 5 and question `first-conlang`.
 11. `convergence-freeze`: the convergence test, `Checkpoint`'s one door (built from the convergence window over the persisted round records), the freeze, the re-encode into training pairs. Waits on 7, 9 and 10.
-12. `distil`: fine-tune a lowerer on the frozen training set. Waits on 11 and a host question asked then.
+12. `distil`, three cuts. 12a `distil-slice` (relower and the prompted baseline; spec r1). 12b `distil-export`: Train-only prompt/completion JSONL at a frozen revision, Test-text guarded (follow-up `distil-export-at-freeze`); waits on 11. 12c `distil-train`: waits on 12b and the host question (follow-up `distil-host-question-owed`).
 13. `live-lowering`: agents emit packets with stance; Weksa reads speaker state from persona state (follow-up `persona-state-speech-community`) and lowers for the reader. Waits on 11.

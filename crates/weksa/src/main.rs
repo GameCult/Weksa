@@ -13,9 +13,9 @@ use weksa::entity::{Entity, EntityOrigin, LanguageForms, Pronunciation};
 use weksa::inventory::{proof_revision, seed, speaker_scene_revision};
 use weksa::packet::{FeatValue, FeatureValue, Grade};
 use weksa::packet::proof_packet;
-use weksa::model::RecordedAnswers;
+use weksa::model::{ModelPort, RecordedAnswers};
 use weksa::run::{
-    AblationOutcome, CycleOutcome, LowererReach, OntologyMintOutcome, RecallOutcome, RoundOutcome, RunPaths, RunStores, cycle, round,
+    AblationOutcome, CycleOutcome, LowererReach, OntologyMintOutcome, RecallOutcome, RelowerOutcome, RoundOutcome, RunPaths, RunStores, cycle, round,
 };
 use weksa::score::ScoreInput;
 use weksa::{
@@ -150,6 +150,26 @@ enum LoopCommand {
         root: PathBuf,
         #[arg(long)]
         round: u32,
+        #[arg(long, default_value = "http://127.0.0.1:11434")]
+        ollama_url: String,
+    },
+    /// Re-lower round ROUND's Validation packets through arm ARM, score them
+    /// against the items, and, with --floor ARM, decide against that second arm
+    /// by the panel accept rule. Prompts and answers live in
+    /// `<ROOT>/relower-<ROUND>-<ARM>`; the command exits 3 until the arm is
+    /// answered. --lowerer names the arm's model in the printed line. A
+    /// diagnostic, never a gate; records nothing; Test and Train are never
+    /// touched. Labels match [a-z0-9-]{1,32} and differ.
+    Relower {
+        root: PathBuf,
+        #[arg(long)]
+        round: u32,
+        #[arg(long)]
+        arm: String,
+        #[arg(long)]
+        lowerer: String,
+        #[arg(long)]
+        floor: Option<String>,
         #[arg(long, default_value = "http://127.0.0.1:11434")]
         ollama_url: String,
     },
@@ -1111,6 +1131,59 @@ fn main() -> Result<()> {
                             _ => "validation",
                         };
                         println!("{language} {name} {}", reading.line());
+                    }
+                }
+            }
+        }
+        Command::Loop(LoopCommand::Relower {
+            root,
+            round,
+            arm,
+            lowerer,
+            floor,
+            ollama_url,
+        }) => {
+            let label = |l: &str| {
+                (1..=32).contains(&l.len())
+                    && l.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            };
+            if !label(&arm) || floor.as_deref().is_some_and(|f| !label(f) || f == arm) {
+                anyhow::bail!("arm and floor labels must match [a-z0-9-]{{1,32}} and differ");
+            }
+            let run = RunStores::open(&root)?;
+            let mut recorded = RecordedAnswers::new(
+                root.join(format!("round-{round}")),
+                run.record().model.clone(),
+            );
+            let mut files = run.answer_files(run.relower_dir(round, &arm))?;
+            let mut floor_port = floor.as_deref().map(|f| {
+                RecordedAnswers::new(run.relower_dir(round, f), run.record().model.clone())
+            });
+            let scorer = Scorer::new(OllamaEmbedder::new(&ollama_url, &run.record().embedder));
+            match run.relower(
+                round,
+                &arm,
+                &mut recorded,
+                &mut files,
+                floor_port.as_mut().map(|p| p as &mut dyn ModelPort),
+                &scorer,
+            )? {
+                RelowerOutcome::Unanswered { prompts } => {
+                    for digest in &prompts {
+                        println!("unanswered {digest}");
+                    }
+                    println!("unanswered {} prompts", prompts.len());
+                    std::process::exit(3);
+                }
+                RelowerOutcome::Read { languages, verdict } => {
+                    for l in languages {
+                        println!(
+                            "{}",
+                            run.labelled(&format!("{} arm={arm} lowerer={lowerer}", l.line()))
+                        );
+                    }
+                    if let Some(v) = verdict {
+                        println!("verdict {v:?}");
                     }
                 }
             }

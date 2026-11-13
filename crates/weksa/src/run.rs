@@ -495,6 +495,9 @@ pub enum RunError {
     Ontology,
     /// A scene does not read against the run's inventory.
     SpeakerState,
+    /// The floor arm of a relower holds no answer to a prompt; it is a
+    /// reference, never written to, and must be answered whole first.
+    FloorUnanswered,
 }
 
 impl fmt::Display for RunError {
@@ -522,6 +525,9 @@ impl fmt::Display for RunError {
             ),
             RunError::SpeakerState => {
                 f.write_str("a scene does not read against the run's inventory")
+            }
+            RunError::FloorUnanswered => {
+                f.write_str("the floor arm holds no answer to a lowering prompt; answer it whole first")
             }
             RunError::Panel => f.write_str(
                 "the panel is empty, repeats or misspells a language, or names one with no live Train or Validation item",
@@ -1337,6 +1343,66 @@ type HeldSplit = (String, Split, Vec<(CorpusItem, Packet)>);
 type Lowered = (String, String, String, [Option<String>; 2]);
 
 impl RunStores {
+    /// The live items of each panel language in each listed split with their
+    /// round-`n` packets, per language then split, sorted by item key. A round
+    /// that is absent or a cycle's is `Malformed("round")`. Test is never held.
+    fn held_splits(&self, n: u32, splits: &[Split]) -> Result<Vec<HeldSplit>, RunError> {
+        let store = |_| RunError::Store;
+        self.rounds()
+            .map_err(store)?
+            .into_iter()
+            .find(|r| r.n() == n && r.cycle().is_none())
+            .ok_or(RunError::Malformed("round"))?;
+        let round_packets = PacketStore::open(&self.root.join(format!("round-{n}")).join("packets.cc"))
+            .map_err(store)?
+            .all()
+            .map_err(store)?;
+        let mut held: Vec<HeldSplit> = Vec::new();
+        for tag in &self.record.panel {
+            for split in splits {
+                held.push((tag.clone(), *split, Vec::new()));
+            }
+        }
+        for packet in round_packets {
+            let item = self
+                .corpus
+                .get(packet.provenance.corpus_item.as_str())
+                .map_err(store)?
+                .ok_or(RunError::Store)?;
+            for (language, split, items) in &mut held {
+                if *language == item.language && SplitScheme::V1.live(&item) == Some(*split) {
+                    items.push((item.clone(), packet.clone()));
+                }
+            }
+        }
+        for (_, _, items) in &mut held {
+            items.sort_by(|a, b| a.0.id.as_str().cmp(b.0.id.as_str()));
+        }
+        Ok(held)
+    }
+
+    /// The lowering prompt of `packet` for `item`: admitted into `store`,
+    /// assembled and lowered. The one builder for the round's prompt, which
+    /// ablation and relower must reproduce byte for byte. `None` when the
+    /// lowering prompt itself is refused, as it was for the round.
+    fn lowering_prompt(
+        &self,
+        store: &mut PacketStore,
+        packet: Packet,
+        item: &CorpusItem,
+        inventory: &crate::Inventory,
+        ontology: &crate::Ontology,
+    ) -> Result<Option<Prompt>, RunError> {
+        let packet_item = packet.provenance.corpus_item.clone();
+        let view = store
+            .admit(packet, &self.inventory, &self.corpus, &self.entities)
+            .map_err(|_| RunError::Store)?;
+        let view = self
+            .assembled(view, &self.inventory)
+            .map_err(|_| RunError::Store)?;
+        Ok(Prompt::lower(&view, &packet_item, &item.language, inventory, &self.entities, ontology).ok())
+    }
+
     /// `<root>/ablation-<n>`, where a stance ablation's prompts, answers and
     /// variant packet stores live.
     pub fn ablation_dir(&self, n: u32) -> PathBuf {
@@ -1362,11 +1428,8 @@ impl RunStores {
     ) -> Result<AblationOutcome, RunError> {
         let store = |_| RunError::Store;
         check_drift(self, model, scorer)?;
-        self.rounds()
-            .map_err(store)?
-            .into_iter()
-            .find(|r| r.n() == n && r.cycle().is_none())
-            .ok_or(RunError::Malformed("round"))?;
+        // A refused round writes nothing: the round is read before any folder is made.
+        let mut splits = self.held_splits(n, &[Split::Train, Split::Validation])?;
         let inventory = self.inventory.inventory().map_err(store)?;
         let ontology = self.ontology.ontology().map_err(store)?;
 
@@ -1383,56 +1446,17 @@ impl RunStores {
             PacketStore::open(&dir.join("permute.cc")).map_err(store)?,
         ];
 
-        // Live Train and Validation packets, in item key order within a split.
-        let round_packets = PacketStore::open(&self.root.join(format!("round-{n}")).join("packets.cc"))
-            .map_err(store)?
-            .all()
-            .map_err(store)?;
-        let mut splits: Vec<HeldSplit> = Vec::new();
-        for tag in &self.record.panel {
-            for split in [Split::Train, Split::Validation] {
-                splits.push((tag.clone(), split, Vec::new()));
-            }
-        }
-        for packet in round_packets {
-            let item = self
-                .corpus
-                .get(packet.provenance.corpus_item.as_str())
-                .map_err(store)?
-                .ok_or(RunError::Store)?;
-            for (language, split, held) in &mut splits {
-                if *language == item.language && SplitScheme::V1.live(&item) == Some(*split) {
-                    held.push((item.clone(), packet.clone()));
-                }
-            }
-        }
-
         let mut waiting: Vec<String> = Vec::new();
         let mut readings = Vec::new();
         // Texts per split: (item text, recorded, replay, [drop, permute]).
         let mut texts: Vec<Vec<Lowered>> = Vec::new();
         let mut unusable = vec![0u32; splits.len()];
         for (at, (_, _, held)) in splits.iter_mut().enumerate() {
-            held.sort_by(|a, b| a.0.id.as_str().cmp(b.0.id.as_str()));
             let mut rows = Vec::new();
             for (i, (item, packet)) in held.iter().enumerate() {
-                let packet_item = packet.provenance.corpus_item.clone();
                 let mut prompt_of = |slot: usize, packet: Packet| -> Result<Prompt, RunError> {
-                    let view = stores[slot]
-                        .admit(packet, &self.inventory, &self.corpus, &self.entities)
-                        .map_err(|_| RunError::Store)?;
-                    let view = self
-                        .assembled(view, &self.inventory)
-                        .map_err(|_| RunError::Store)?;
-                    Prompt::lower(
-                        &view,
-                        &packet_item,
-                        &item.language,
-                        &inventory,
-                        &self.entities,
-                        &ontology,
-                    )
-                        .map_err(|_| RunError::Store)
+                    self.lowering_prompt(&mut stores[slot], packet, item, &inventory, &ontology)?
+                        .ok_or(RunError::Store)
                 };
                 let base = prompt_of(0, packet.clone())?;
                 let mut variants: [Option<Prompt>; 2] = [None, None];
@@ -1547,6 +1571,236 @@ impl RunStores {
     }
 }
 
+/// One panel language's relower reading: Validation items only.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RelowerReading {
+    pub language: String,
+    /// Live Validation items of the language read: those with a round packet
+    /// whose lowering prompt the round could build. Every reading below is over
+    /// these items, so recorded, arm and floor stay comparable.
+    pub n: u32,
+    /// Live Validation items of the language not read: refused by the round
+    /// before admission (no packet) or at the lowering prompt. They are in no
+    /// reading, so `recorded` can differ from the round's own Validation
+    /// reading, which scores them 0.
+    pub skipped: u32,
+    /// Arm answers that were not a usable lowering; each scored 0.
+    pub unusable: u32,
+    /// Floor-arm answers that were not a usable lowering; each scored 0, which
+    /// widens `floor`. Zero without a floor arm.
+    pub floor_unusable: u32,
+    /// The round's own lowering, read against the items.
+    pub recorded: Reading,
+    pub arm: Reading,
+    /// `spread(recorded, floor arm)`, when a floor arm was given.
+    pub floor: Option<Reading>,
+}
+
+impl RelowerReading {
+    pub fn line(&self) -> String {
+        let show = |r: &Reading| {
+            format!("chrf={:.2} meaning={:.3} composite={:.4}", r.chrf, r.meaning, r.composite)
+        };
+        let floor = self
+            .floor
+            .as_ref()
+            .map_or(String::new(), |f| {
+                format!(" | floor {} unusable={}", show(f), self.floor_unusable)
+            });
+        format!(
+            "relower {} n={} skipped={} unusable={} recorded {} | arm {}{floor}",
+            self.language,
+            self.n,
+            self.skipped,
+            self.unusable,
+            show(&self.recorded),
+            show(&self.arm),
+        )
+    }
+}
+
+#[derive(Debug)]
+pub enum RelowerOutcome {
+    Unanswered { prompts: Vec<String> },
+    /// Per panel language in panel order; the verdict only when a floor arm was given.
+    Read { languages: Vec<RelowerReading>, verdict: Option<Verdict> },
+}
+
+impl RunStores {
+    /// `<root>/relower-<n>-<arm>`, where an arm's prompts and answers live.
+    pub fn relower_dir(&self, n: u32, arm: &str) -> PathBuf {
+        self.root.join(format!("relower-{n}-{arm}"))
+    }
+
+    /// A diagnostic like [`recall`](Self::recall) and
+    /// [`stance_ablation`](Self::stance_ablation), never a gate: it serves the
+    /// distil decision, whether a tuned lowerer is worth keeping against the
+    /// prompted one (calibration-pending: see the map). Asks `arm` the byte-identical lowering prompts of round `n`'s live
+    /// Validation items, reads the arm and the round's own lowering
+    /// (`recorded`) against the items, and, given a `floor` arm (a second
+    /// prompted lowering, so the floor is lowering-only noise), decides by
+    /// [`decide_panel`] over (recorded, arm, spread(recorded, floor)). Only
+    /// the model of `arm` is unpinned; the embedder is checked. An arm answer
+    /// that is not a usable lowering scores 0 and is counted in `unusable`.
+    /// Records nothing; `arm_label` names only where the scratch packet store
+    /// lives, in the arm's directory.
+    pub fn relower<E: Embedder>(
+        &self,
+        n: u32,
+        arm_label: &str,
+        recorded: &mut dyn ModelPort,
+        arm: &mut dyn ModelPort,
+        mut floor: Option<&mut dyn ModelPort>,
+        scorer: &Scorer<E>,
+    ) -> Result<RelowerOutcome, RunError> {
+        let store = |_| RunError::Store;
+        check_embedder(self, scorer)?;
+        let held = self.held_splits(n, &[Split::Validation])?;
+        let inventory = self.inventory.inventory().map_err(store)?;
+        let ontology = self.ontology.ontology().map_err(store)?;
+
+        let dir = self.relower_dir(n, arm_label);
+        std::fs::create_dir_all(&dir).map_err(|e| RunError::Io(e.kind()))?;
+        for suffix in ["cc", "cc.lock"] {
+            let _ = std::fs::remove_file(dir.join(format!("base.{suffix}")));
+        }
+        let mut scratch = PacketStore::open(&dir.join("base.cc")).map_err(store)?;
+
+        // Per language, per item: the item text, then the recorded, arm and floor
+        // lowerings (`None` when unusable).
+        type Row = (String, Option<String>, Option<String>, Option<String>);
+        let mut waiting: Vec<String> = Vec::new();
+        let mut floor_waiting = false;
+        let mut rows: Vec<Vec<Row>> = Vec::new();
+        for (_, _, items) in &held {
+            let mut language_rows = Vec::new();
+            for (item, packet) in items {
+                // An item the round could not lower has no prompt to ask; it is skipped
+                // and counted, not scored.
+                let Some(prompt) =
+                    self.lowering_prompt(&mut scratch, packet.clone(), item, &inventory, &ontology)?
+                else {
+                    continue;
+                };
+                let text = |a: Asked| match a {
+                    Asked::Text(t) => Some(t),
+                    _ => None,
+                };
+                let recorded_text = match asked(recorded, &prompt)? {
+                    Asked::Waiting => return Err(RunError::Unrecorded),
+                    other => text(other),
+                };
+                let floor_text = match floor.as_deref_mut() {
+                    Some(f) => match asked(f, &prompt)? {
+                        Asked::Waiting => {
+                            floor_waiting = true;
+                            None
+                        }
+                        other => text(other),
+                    },
+                    None => None,
+                };
+                let arm_text = match asked(arm, &prompt)? {
+                    Asked::Waiting => {
+                        let d = prompt.digest();
+                        if !waiting.contains(&d) {
+                            waiting.push(d);
+                        }
+                        None
+                    }
+                    other => text(other),
+                };
+                language_rows.push((item.text.clone(), recorded_text, arm_text, floor_text));
+            }
+            rows.push(language_rows);
+        }
+        if floor_waiting {
+            return Err(RunError::FloorUnanswered);
+        }
+        if !waiting.is_empty() {
+            return Ok(RelowerOutcome::Unanswered { prompts: waiting });
+        }
+
+        // One score call: each usable lowering against its item, in row order.
+        let mut inputs: Vec<ScoreInput> = Vec::new();
+        for (reference, recorded, arm, floor_text) in rows.iter().flatten() {
+            for output in [recorded, arm, floor_text].into_iter().flatten() {
+                inputs.push(ScoreInput { reference, output });
+            }
+        }
+        let mut scores = if inputs.is_empty() {
+            Vec::new()
+        } else {
+            scorer.score(&inputs).map_err(|_| RunError::Embed)?
+        }
+        .into_iter();
+        let mut next = |t: &Option<String>| -> Result<ItemScore, RunError> {
+            match t {
+                Some(_) => scores.next().ok_or(RunError::Store),
+                None => Ok(ItemScore { chrf: 0.0, meaning: Some(0.0) }),
+            }
+        };
+        let reading_of = |scored: &[ItemScore]| {
+            Reading::of(&SplitMean {
+                count: scored.len(),
+                chrf: mean(scored.iter().map(|s| s.chrf)),
+                meaning: mean(scored.iter().filter_map(|s| s.meaning)),
+            })
+            .ok_or(RunError::NoValidation)
+        };
+        let mut languages = Vec::new();
+        let live = self.corpus.all().map_err(store)?;
+        for ((language, _, _), language_rows) in held.iter().zip(&rows) {
+            let (mut rec, mut arm_scores, mut floor_scores) = (Vec::new(), Vec::new(), Vec::new());
+            let (mut unusable, mut floor_unusable) = (0u32, 0u32);
+            for (_, r, a, f) in language_rows {
+                rec.push(next(r)?);
+                arm_scores.push(next(a)?);
+                if a.is_none() {
+                    unusable += 1;
+                }
+                if floor.is_some() {
+                    floor_scores.push(next(f)?);
+                    if f.is_none() {
+                        floor_unusable += 1;
+                    }
+                }
+            }
+            let recorded_reading = reading_of(&rec)?;
+            languages.push(RelowerReading {
+                language: language.clone(),
+                n: language_rows.len() as u32,
+                skipped: live
+                    .iter()
+                    .filter(|i| {
+                        &i.language == language && SplitScheme::V1.live(i) == Some(Split::Validation)
+                    })
+                    .count() as u32
+                    - language_rows.len() as u32,
+                unusable,
+                floor_unusable,
+                recorded: recorded_reading,
+                arm: reading_of(&arm_scores)?,
+                floor: if floor.is_some() {
+                    Some(spread(&recorded_reading, &reading_of(&floor_scores)?))
+                } else {
+                    None
+                },
+            });
+        }
+        let verdict = if floor.is_some() {
+            let panel: Vec<(Reading, Reading, Reading)> = languages
+                .iter()
+                .filter_map(|l| Some((l.recorded, l.arm, l.floor?)))
+                .collect();
+            Some(decide_panel(&panel))
+        } else {
+            None
+        };
+        Ok(RelowerOutcome::Read { languages, verdict })
+    }
+}
+
 /// The distinct rule codes an admission refusal broke: validator rules by
 /// code, a store refusal by its variant name. Nothing from the packet or the
 /// stores is kept; an I/O failure is `io`.
@@ -1613,6 +1867,11 @@ fn check_drift<M: ModelPort + ?Sized, E: Embedder>(
     if model.model() != run.record.model {
         return Err(RunError::Drift(DriftOf::Model));
     }
+    check_embedder(run, scorer)
+}
+
+/// The embedder the run pinned is the one scoring.
+fn check_embedder<E: Embedder>(run: &RunStores, scorer: &Scorer<E>) -> Result<(), RunError> {
     if scorer.embedder().model() != run.record.embedder {
         return Err(RunError::Drift(DriftOf::Embedder));
     }
@@ -2223,14 +2482,19 @@ fn floor_of(
             let (a, b) = (replicate(1, tag)?, replicate(2, tag)?);
             Ok((
                 tag.clone(),
-                Reading {
-                    chrf: (a.chrf - b.chrf).abs(),
-                    meaning: (a.meaning - b.meaning).abs(),
-                    composite: (a.composite - b.composite).abs(),
-                },
+                spread(&a, &b),
             ))
         })
         .collect()
+}
+
+/// The absolute difference of two readings, metric by metric.
+fn spread(a: &Reading, b: &Reading) -> Reading {
+    Reading {
+        chrf: (a.chrf - b.chrf).abs(),
+        meaning: (a.meaning - b.meaning).abs(),
+        composite: (a.composite - b.composite).abs(),
+    }
 }
 
 /// Each panel language's Validation reading in `round`, in panel order.
