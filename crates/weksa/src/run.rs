@@ -2157,6 +2157,12 @@ fn score_round<M: ModelPort, E: Embedder>(
     Ok(RoundOutcome::Recorded(record))
 }
 
+/// The composite of one chrF (0 to 100) and one meaning: their mean, chrF as a
+/// fraction. The one formula for a split mean's [`Reading`] and a per-item score.
+fn composite_of(chrf: f64, meaning: f64) -> f64 {
+    (chrf / 100.0 + meaning) / 2.0
+}
+
 /// One validation reading: chrF 0 to 100, meaning 0 to 1, and their composite.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Reading {
@@ -2177,7 +2183,7 @@ impl Reading {
         Some(Self {
             chrf,
             meaning,
-            composite: (chrf / 100.0 + meaning) / 2.0,
+            composite: composite_of(chrf, meaning),
         })
     }
 }
@@ -2507,9 +2513,10 @@ fn floor_of(
 /// unordered pairs): with three floor arms a prompted repeat reads NoGain in
 /// 92% of the trials (bootstrap 95% over draws 80 to 100%), Regressed 8% and
 /// Accepted 0%; a "Yes." arm and a mild degradation (one detail blurred per
-/// utterance) read Regressed in 100%, and a subtler one in 75% (50 to 100%): at
-/// 14 items a degradation under about three standard errors cannot be told from
-/// noise. `FLOOR_Z` was chosen on that data, so the rates are in-sample.
+/// utterance) read Regressed in 100% (each a single fixed draw), and a subtler
+/// one in 75% (50 to 100%): at 14 items a mean composite drop near 0.04 against
+/// a floor near 0.06 is flagged only some of the time. `FLOOR_Z` was chosen on
+/// that data, so the rates are in-sample.
 pub const FLOOR_Z: f64 = 3.0;
 pub const FLOOR_ARMS_MIN: usize = 3;
 
@@ -2540,7 +2547,7 @@ pub fn paired_floor(recorded: &[ItemScore], arms: &[Vec<ItemScore>]) -> Reading 
     Reading {
         chrf: pooled(&|s| s.chrf),
         meaning: pooled(&meaning),
-        composite: pooled(&|s| (s.chrf / 100.0 + meaning(s)) / 2.0),
+        composite: pooled(&|s| composite_of(s.chrf, meaning(s))),
     }
 }
 
@@ -2949,6 +2956,9 @@ mod tests {
         let two = paired_floor(&recorded, &[wobble.clone(), wobble.clone()]);
         assert!((one.chrf - want).abs() < 1e-9 && (two.chrf - want).abs() < 1e-9, "{one:?} {two:?}");
         assert!(one.meaning.abs() < 1e-9);
+        // Composite per item is (chrF / 100 + meaning) / 2: the wobble moves chrF
+        // by 2 and meaning by 0, so the composite wobbles by 0.01.
+        assert!((one.composite - FLOOR_Z * (0.01_f64 * 0.01 * 4.0 / 3.0 / 4.0).sqrt()).abs() < 1e-9, "{one:?}");
         // Arms pool by the mean of their variances: one wobbling arm and one
         // exact repeat give the root of half the variance.
         let exact = recorded.to_vec();
