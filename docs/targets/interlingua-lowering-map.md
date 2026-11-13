@@ -518,7 +518,9 @@ items en-US n=28 skipped=7, ja-JP n=32 skipped=3. By class it adds: old items
 240; new items (`item:vgrow*`) prompted 116/4/0, noise 0.0334, Train-guide 0
 Accepted and 74 Regressed of 240. The other figures of this block (35% with R
 removed, the noise range, the 0.0185 gain and 0.41 ratio, the bootstrap
-intervals, the per-item SDs, R's +0.024, the mild-arm duplicate counts) were
+intervals, the per-item SDs, R's +0.024, the mild-arm duplicate counts and
+mean composite offsets, the Train-vocabulary overlap, the old/new class
+composites, the ten parse-refused item ids) were
 computed by scratch scripts outside git (Soul finding `evidence-outside-git`)
 and are not reproduced by the harness.
 

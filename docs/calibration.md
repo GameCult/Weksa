@@ -11,8 +11,9 @@ Regressed counts, and the mean panel noise. That is all it produces: the
 Accepted/NoGain/Regressed counts and the noise mean in the map's "Recalibration
 on the grown corpus" block are reproduced by it; the other figures there (the
 35% with R removed, the noise range, the 0.0185 gain and its 0.41 ratio, the
-bootstrap intervals, the per-item SDs, R's +0.024 and the mild-arm duplicate
-counts) were computed by scratch scripts that are not in the repo. It is a
+bootstrap intervals, the per-item SDs, R's +0.024, the mild-arm duplicate
+counts and mean composite offsets, the Train-vocabulary overlap, the old/new
+class composites and the ten parse-refused item ids) were computed by scratch scripts that are not in the repo. It is a
 diagnostic: it records nothing, writes no prompts, and never touches Test or
 Train.
 
