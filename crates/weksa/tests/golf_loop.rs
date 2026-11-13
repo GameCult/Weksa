@@ -4783,6 +4783,46 @@ fn open_refuses_a_bad_panel() {
     }
 }
 
+/// A corpus written before language tags were canonical-case holds `en-us`
+/// items, which `open` does not revalidate: `check_panel` accepts the panel
+/// `en-us`, so only the tag-form clause of `create` refuses it.
+#[test]
+fn create_refuses_a_legacy_cased_panel_tag_the_corpus_holds() {
+    let age = |corpus: &Path| {
+        let mut bytes = std::fs::read(corpus).unwrap();
+        let (from, to) = (b"en-US", b"en-us");
+        let mut n = 0;
+        for i in 0..bytes.len().saturating_sub(from.len() - 1) {
+            if &bytes[i..i + from.len()] == from {
+                bytes[i..i + from.len()].copy_from_slice(to);
+                n += 1;
+            }
+        }
+        assert!(n > 0, "the corpus holds no en-US to age");
+        std::fs::write(corpus, bytes).unwrap();
+    };
+    let dao = dao_over(|_, _| {});
+    let (corpus, inventory, entities) = (&dao.corpus, &dao.inventory, &dao.entities);
+    drop(dao.run);
+    age(corpus);
+    let tags = |s: &str| CorpusStore::open(corpus).unwrap().all().unwrap().iter().any(|i| i.language == s);
+    assert!(tags("en-us") && !tags("en-US"));
+    let root = dao._dir.path().join("legacy-panel");
+    let err = RunStores::create(
+        &root,
+        "p",
+        RunPaths { corpus, inventory, entities, ontology: &dao.ontology, speaker_state: &common::speaker_state_beside(&dao.ontology) },
+        "fake-model",
+        "bag",
+        weksa::run::LowererReach::ToolLessRelay,
+        ModelFamily::Unrecorded,
+        &["en-us".to_string()],
+    )
+    .err();
+    assert_eq!(err, Some(RunError::Panel));
+    assert!(!root.join("run.cc").exists());
+}
+
 #[test]
 fn round_means_are_per_language() {
     let mut dao = bilingual(LAOZI_JA);
