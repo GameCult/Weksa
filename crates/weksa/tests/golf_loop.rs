@@ -1100,7 +1100,8 @@ fn lowering_prompts(dao: &Dao, inventory: &InventoryStore) -> Vec<(String, Promp
                 .unwrap();
             let state = weksa::SpeakerStateStore::open(&dir.path().join("s.cc")).unwrap();
             let view = view.with_scene(&inv, &state, &corpus).unwrap();
-            let prompt = Prompt::lower(&view, &key, "en-US", &inv, dao.run.entities(), &weksa::Ontology::empty()).unwrap();
+            let speaker = corpus.get(key.as_str()).unwrap().unwrap().speaker;
+            let prompt = Prompt::lower(&view, &key, &speaker, "en-US", &inv, dao.run.entities(), &weksa::Ontology::empty()).unwrap();
             (key.to_string(), prompt)
         })
         .collect()
@@ -2755,7 +2756,7 @@ fn source_tripwires() {
         2,
         "two lowering call sites: the round's and the stance ablation's replay of it"
     );
-    // Prompt::lower takes the view, the item's key, the inventory and the entity
+    // Prompt::lower takes the view, the item's key and speaker id, the inventory and the entity
     // port: no corpus item, train set, offer or store.
     let start = context.find("pub fn lower(").unwrap();
     let signature = &context[start..start + context[start..].find(") -> ").unwrap()];
@@ -2885,6 +2886,73 @@ fn the_lowerer_sees_no_item_text() {
         keys
     };
     assert_eq!(keys(true), keys(false));
+}
+
+/// The promise `lower-prompt-no-item-text`: no lowering prompt holds the
+/// item's speaker id. A referent citing the speaker must not put that entity
+/// id (nor its forms) into the prompt; another cited entity still prints.
+#[test]
+fn the_lowerer_never_sees_the_items_speaker() {
+    use weksa::entity::{Entity, EntityOrigin, LanguageForms};
+    use weksa::packet::EntityId;
+    let speaker = EntityId::parse("entity:spkcanary").unwrap();
+    let other = EntityId::parse("entity:othercite").unwrap();
+    let mut dao = dao_over(|corpus, entities| {
+        let mut entity_store = weksa::EntityStore::open(entities).unwrap();
+        for (id, form) in [("entity:spkcanary", "ZEBRAQUILL"), ("entity:othercite", "OTTERBLOOM")] {
+            entity_store
+                .put(Entity {
+                    id: EntityId::parse(id).unwrap(),
+                    forms: vec![LanguageForms {
+                        language: "en-US".into(),
+                        forms: vec![form.into()],
+                        pronunciation: None,
+                    }],
+                    origin: EntityOrigin::Cast {
+                        persona: "canary".into(),
+                        fixture: "f.yaml".into(),
+                    },
+                })
+                .unwrap();
+        }
+        let mut store = weksa::CorpusStore::open(corpus).unwrap();
+        let mut item = store.get("item:daodejing:1").unwrap().unwrap();
+        item.id = "item:spk:1".into();
+        item.text = "A held-apart sentence about OTTERBLOOM.".into();
+        item.speaker = EntityId::parse("entity:spkcanary").unwrap();
+        // The other entity is named on the item; the speaker is the speaker.
+        item.names = vec![weksa::corpus::NameSpan {
+            entity: EntityId::parse("entity:othercite").unwrap(),
+            start: 28,
+            end: 38,
+        }];
+        item.prior_turns = vec![];
+        store.add(item, &entity_store).unwrap();
+    });
+    let mut d = draft_of(1);
+    d.referents[0].entity = Some(speaker.clone());
+    d.referents[1].entity = Some(other.clone());
+    let mut model = fake(&good_answers());
+    model.answers.insert("item:spk:1".into(), json(&d));
+    model.lowered.insert("item:spk:1".into(), "CANARYLOWERED".into());
+    let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    let row = r.train().iter().find(|row| row.item == "item:spk:1").unwrap();
+    assert_ne!(row.outcome, Outcome::Refused(Stage::Lower), "a speaker with a form must not refuse either");
+    let with_other: Vec<&String> = model
+        .seen
+        .iter()
+        .filter(|(_, t)| t.starts_with(LOWER_INSTRUCTIONS) && t.contains("OTTERBLOOM"))
+        .map(|(_, t)| t)
+        .collect();
+    assert_eq!(with_other.len(), 1, "one lowering prompt cites the other entity");
+    let text = with_other[0];
+    assert!(text.contains("entity:othercite"), "{text}");
+    for banned in ["entity:spkcanary", "ZEBRAQUILL"] {
+        assert!(!text.contains(banned), "{banned} in {text}");
+    }
+    for (_, t) in model.seen.iter().filter(|(_, t)| t.starts_with(LOWER_INSTRUCTIONS)) {
+        assert!(!t.contains("entity:spkcanary") && !t.contains("ZEBRAQUILL"));
+    }
 }
 
 #[test]
@@ -3035,8 +3103,9 @@ fn lowering_text_at_the_bound_is_scored_and_line_breaks_are_text() {
     }
 }
 
-/// Two canary items, one Train and one Validation, whose speaker is an entity
-/// with forms only in another language; each encodes to a packet citing it.
+/// Two canary items, one Train and one Validation, whose prior-turn speaker is
+/// an entity with forms only in another language; each encodes to a packet
+/// citing it. (The item's own speaker would be stripped, never looked up.)
 #[test]
 fn a_lowering_prompt_that_cannot_be_built_refuses_at_lower_and_keeps_the_packet() {
     use weksa::entity::{Entity, EntityOrigin, LanguageForms};
@@ -3066,9 +3135,11 @@ fn a_lowering_prompt_that_cannot_be_built_refuses_at_lower_and_keeps_the_packet(
             let mut item = store.get(from).unwrap().unwrap();
             item.id = key.into();
             item.text = format!("A held-apart sentence for {key}.");
-            item.speaker = EntityId::parse("entity:sagexx").unwrap();
             item.names = vec![];
-            item.prior_turns = vec![];
+            item.prior_turns = vec![weksa::corpus::Turn {
+                speaker: EntityId::parse("entity:sagexx").unwrap(),
+                text: "A turn before.".into(),
+            }];
             store.add(item, &entity_store).unwrap();
         }
     });
@@ -4575,6 +4646,20 @@ fn add_languages(corpus: &Path, entities: &Path, ja: Option<&str>) {
         });
         entities.put(laozi).unwrap();
     }
+    entities
+        .put(weksa::Entity {
+            id: common::eid("narrator"),
+            forms: vec![weksa::LanguageForms {
+                language: "en-US".into(),
+                forms: vec!["Narrator".into()],
+                pronunciation: None,
+            }],
+            origin: weksa::EntityOrigin::Cast {
+                persona: "narrator".into(),
+                fixture: "f.yaml".into(),
+            },
+        })
+        .unwrap();
     let mut store = CorpusStore::open(corpus).unwrap();
     for (key, text, twin) in JA_TEXTS {
         let mut item = store.get(&format!("item:daodejing:{twin}")).unwrap().unwrap();
@@ -4582,7 +4667,8 @@ fn add_languages(corpus: &Path, entities: &Path, ja: Option<&str>) {
         item.text = text.into();
         item.language = "ja-JP".into();
         item.names = vec![];
-        item.prior_turns = vec![];
+        item.speaker = common::eid("narrator");
+        item.prior_turns = laozi_spoke_before();
         store.add(item, &entities).unwrap();
         let mut pt = store.get(&format!("item:daodejing:{twin}")).unwrap().unwrap();
         pt.id = format!("item:daodejing:2{twin}");
@@ -4594,7 +4680,18 @@ fn add_languages(corpus: &Path, entities: &Path, ja: Option<&str>) {
     }
 }
 
-/// The Dao draft of `item`, its first referent citing the speaker, Laozi.
+/// The one prior turn that makes Laozi citeable on an item he does not speak:
+/// the ja-JP items are the narrator's, so their lowering prompts print him.
+fn laozi_spoke_before() -> Vec<weksa::corpus::Turn> {
+    vec![weksa::corpus::Turn {
+        speaker: common::eid("laozi"),
+        text: "A turn before.".into(),
+    }]
+}
+
+/// The Dao draft of `item`, its first referent citing Laozi: the speaker of
+/// the en-US items (never printed to the lowerer), a prior-turn speaker of the
+/// ja-JP ones (printed in the item's language).
 fn citing_laozi(item: usize) -> String {
     let mut v = serde_json::to_value(draft_of(item)).unwrap();
     v["referents"][0]["entity"] = serde_json::json!("entity:laozi");
@@ -4655,8 +4752,9 @@ fn each_item_lowers_in_its_own_language() {
         } else {
             en += 1;
             assert!(text.contains("\n\nlanguage: en-US\n\n"), "{text}");
-            assert!(text.contains(r#"{"entity:laozi":["Laozi"]}"#), "{text}");
-            assert!(!text.contains("老子"), "{text}");
+            // Laozi speaks the en-US items: the lowerer is not told his name.
+            assert!(text.contains("\n\nentities: {}\n\n"), "{text}");
+            assert!(!text.contains("entity:laozi") && !text.contains("Laozi") && !text.contains("老子"), "{text}");
         }
     }
     assert_eq!((ja, en), (3, 3));
@@ -6266,7 +6364,7 @@ fn grown_bilingual() -> Dao {
                     item.text = text;
                     item.language = language.into();
                     item.names = vec![];
-                    item.prior_turns = vec![];
+                    item.prior_turns = if language == "ja-JP" { laozi_spoke_before() } else { vec![] };
                     store.add(item, &entities).unwrap();
                 }
             }

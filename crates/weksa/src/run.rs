@@ -1420,7 +1420,7 @@ impl RunStores {
         let view = self
             .assembled(view, &self.inventory)
             .map_err(|_| RunError::Store)?;
-        Ok(Prompt::lower(&view, &packet_item, &item.language, inventory, &self.entities, ontology).ok())
+        Ok(Prompt::lower(&view, &packet_item, &item.speaker, &item.language, inventory, &self.entities, ontology).ok())
     }
 
     /// `<root>/ablation-<n>`, where a stance ablation's prompts, answers and
@@ -2328,7 +2328,7 @@ fn score_round<M: ModelPort, E: Embedder>(
             fates[at] = Fate::Refused(Stage::Lower, Some(packet_key.clone()));
             continue;
         };
-        let Ok(prompt) = Prompt::lower(&view, &id, language, &inventory, &run.entities, &ontology) else {
+        let Ok(prompt) = Prompt::lower(&view, &id, &items[at].speaker, language, &inventory, &run.entities, &ontology) else {
             fates[at] = Fate::Refused(Stage::Lower, Some(packet_key.clone()));
             continue;
         };

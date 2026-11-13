@@ -586,11 +586,11 @@ mod lowering {
         let unread = admitted_unread(proof_packet(), &cast, "corpus/corpus.cc", &entities);
         let empty = weksa::Ontology::empty();
         assert_eq!(
-            Prompt::lower(&unread, &item, "en-US", &inv, &held, &empty).err(),
+            Prompt::lower(&unread, &item, &away(), "en-US", &inv, &held, &empty).err(),
             Some(LowerError::SceneUnread)
         );
         let read = admitted(proof_packet(), &cast, "corpus/corpus.cc", &entities);
-        assert!(Prompt::lower(&read, &item, "en-US", &inv, &held, &empty).is_ok());
+        assert!(Prompt::lower(&read, &item, &away(), "en-US", &inv, &held, &empty).is_ok());
     }
 
     fn dao(index: usize) -> (LoweringInput, Inventory, EntityStore, CorpusItemId) {
@@ -609,6 +609,11 @@ mod lowering {
         fn entity(&self, id: &EntityId) -> anyhow::Result<Option<Entity>> {
             Ok(self.0.iter().find(|e| &e.id == id).cloned())
         }
+    }
+
+    /// A speaker no referent cites.
+    fn away() -> EntityId {
+        EntityId::parse("entity:nobody").unwrap()
     }
 
     fn nibu(forms: &[(&str, &[&str])]) -> Entity {
@@ -635,7 +640,7 @@ mod lowering {
     fn lower_prompt_names_its_language() {
         let (view, inv, entities, item) = dao(2);
         for tag in ["en-US", "ja-JP", "pt-BR"] {
-            let prompt = Prompt::lower(&view, &item, tag, &inv, &entities, &weksa::Ontology::empty()).unwrap();
+            let prompt = Prompt::lower(&view, &item, &away(), tag, &inv, &entities, &weksa::Ontology::empty()).unwrap();
             let want = format!("{LOWER}\n\nlanguage: {tag}\n\npacket: ");
             assert!(prompt.text().starts_with(&want), "{tag}");
         }
@@ -647,7 +652,7 @@ mod lowering {
     #[test]
     fn lower_prompt_text_is_pinned() {
         let (view, inv, entities, item) = dao(2);
-        let prompt = Prompt::lower(&view, &item, "en-US", &inv, &entities, &weksa::Ontology::empty()).unwrap();
+        let prompt = Prompt::lower(&view, &item, &away(), "en-US", &inv, &entities, &weksa::Ontology::empty()).unwrap();
         let (head, listing) = prompt.text().split_once("inventory rev:3\n").unwrap();
         let expected = format!(
             "{LOWER}\n\nlanguage: en-US\n\npacket: {}\n\nentities: {{}}\n\nontology: none\n\n",
@@ -710,7 +715,7 @@ mod lowering {
         let entries = OntologyDraft::parse(draft).unwrap().into_entries("en-US", 3, 1, &annotator);
         onto.admit(entries, &store).unwrap();
         let prompt =
-            Prompt::lower(&view, &item, "en-US", &inv, &entities, &onto.ontology().unwrap()).unwrap();
+            Prompt::lower(&view, &item, &away(), "en-US", &inv, &entities, &onto.ontology().unwrap()).unwrap();
         assert!(prompt.text().contains("golden choice"));
         assert_eq!(prompt.digest(), "4a40eb57282b059d");
     }
@@ -732,7 +737,7 @@ mod lowering {
             let mut packet = packets().remove(2);
             packet.stance = stance.clone();
             let view = admitted(packet, &store, "daodejing/corpus.cc", &entities);
-            let prompt = Prompt::lower(&view, &item, "en-US", &inv, &entities, &weksa::Ontology::empty()).unwrap();
+            let prompt = Prompt::lower(&view, &item, &away(), "en-US", &inv, &entities, &weksa::Ontology::empty()).unwrap();
             (stance, prompt)
         };
         let three = [prompt_of(own), prompt_of(angry), prompt_of(Stance::default())];
@@ -769,7 +774,7 @@ mod lowering {
             ("sa-Latn", &["Nibuwa"]),
             ("en-US", &["Nibu", "Nibu's"]),
         ])]);
-        let prompt = Prompt::lower(&view, &item, "en-US", &cast.inventory().unwrap(), &held, &weksa::Ontology::empty()).unwrap();
+        let prompt = Prompt::lower(&view, &item, &away(), "en-US", &cast.inventory().unwrap(), &held, &weksa::Ontology::empty()).unwrap();
         assert!(
             prompt
                 .text()
@@ -799,8 +804,85 @@ mod lowering {
             ),
             (Held(vec![]), LowerError::UnknownEntity { entity: id }),
         ] {
-            assert_eq!(Prompt::lower(&view, &item, "en-US", &inv, &held, &weksa::Ontology::empty()).err(), Some(want));
+            assert_eq!(Prompt::lower(&view, &item, &away(), "en-US", &inv, &held, &weksa::Ontology::empty()).err(), Some(want));
         }
+    }
+
+    /// The item's speaker is never printed, though a referent cites it: its
+    /// referent loses the entity, the forms map loses its line, and the view
+    /// itself is not changed.
+    #[test]
+    fn a_cited_speaker_is_stripped_from_the_lowering_prompt() {
+        let cast = InventoryStore::open(&data("interlingua/inventory.cc")).unwrap();
+        let cast_entities = EntityStore::open(&data("entity/entity.cc")).unwrap();
+        let view = admitted(proof_packet(), &cast, "corpus/corpus.cc", &cast_entities);
+        let inv = cast.inventory().unwrap();
+        let item = CorpusItemId::parse("item:nibu:1").unwrap();
+        let speaker = EntityId::parse("entity:nibu").unwrap();
+        let held = Held(vec![nibu(&[("en-US", &["NIBUCANARY"])])]);
+        let lower = |held: &Held| {
+            Prompt::lower(&view, &item, &speaker, "en-US", &inv, held, &weksa::Ontology::empty())
+        };
+        let prompt = lower(&held).unwrap();
+        let text = prompt.text();
+        for banned in ["entity:nibu", "NIBUCANARY"] {
+            assert!(!text.contains(banned), "{banned} in {text}");
+        }
+        assert!(text.contains("\n\nentities: {}\n\n"), "{text}");
+        assert!(text.contains(r#""id":"n3","kind":"referent_kind:1","concept":"concept:5","entity":null"#), "{text}");
+        assert!(view.referents().iter().any(|r| r.entity.as_ref() == Some(&speaker)));
+        // A speaker the language has no form for, or the port lacks, does not refuse.
+        assert!(lower(&Held(vec![])).is_ok());
+        assert!(lower(&Held(vec![nibu(&[("sa-Latn", &["Nibuwa"])])])).is_ok());
+    }
+
+    /// Only the speaker is stripped: when the item's speaker is someone else,
+    /// the cited entity keeps its id in the packet and its forms line.
+    #[test]
+    fn a_cited_entity_that_is_not_the_speaker_is_kept() {
+        let cast = InventoryStore::open(&data("interlingua/inventory.cc")).unwrap();
+        let cast_entities = EntityStore::open(&data("entity/entity.cc")).unwrap();
+        let view = admitted(proof_packet(), &cast, "corpus/corpus.cc", &cast_entities);
+        let item = CorpusItemId::parse("item:nibu:1").unwrap();
+        let held = Held(vec![nibu(&[("en-US", &["NIBUCANARY"])])]);
+        let prompt = Prompt::lower(&view, &item, &away(), "en-US", &cast.inventory().unwrap(), &held, &weksa::Ontology::empty()).unwrap();
+        let text = prompt.text();
+        assert!(text.contains(r#""concept":"concept:5","entity":"entity:nibu""#), "{text}");
+        assert!(text.contains("\n\nentities: {\"entity:nibu\":[\"NIBUCANARY\"]}\n\n"), "{text}");
+    }
+
+    /// Every referent citing the speaker is stripped, not the first.
+    #[test]
+    fn a_speaker_cited_on_two_referents_prints_on_neither() {
+        let cast = InventoryStore::open(&data("interlingua/inventory.cc")).unwrap();
+        let cast_entities = EntityStore::open(&data("entity/entity.cc")).unwrap();
+        let mut packet = proof_packet();
+        let speaker = EntityId::parse("entity:nibu").unwrap();
+        packet.referents[0].entity = Some(speaker.clone());
+        assert_eq!(packet.referents.iter().filter(|r| r.entity.as_ref() == Some(&speaker)).count(), 2);
+        let view = admitted(packet, &cast, "corpus/corpus.cc", &cast_entities);
+        let item = CorpusItemId::parse("item:nibu:1").unwrap();
+        let held = Held(vec![nibu(&[("en-US", &["NIBUCANARY"])])]);
+        let prompt = Prompt::lower(&view, &item, &speaker, "en-US", &cast.inventory().unwrap(), &held, &weksa::Ontology::empty()).unwrap();
+        let text = prompt.text();
+        assert!(!text.contains("entity:nibu") && !text.contains("NIBUCANARY"), "{text}");
+        assert!(text.contains("\n\nentities: {}\n\n"), "{text}");
+    }
+
+    /// The speaker is matched by whole id: a cited entity whose id the
+    /// speaker's id is a prefix of is another entity and still prints.
+    #[test]
+    fn an_entity_sharing_a_prefix_with_the_speaker_is_kept() {
+        let cast = InventoryStore::open(&data("interlingua/inventory.cc")).unwrap();
+        let cast_entities = EntityStore::open(&data("entity/entity.cc")).unwrap();
+        let view = admitted(proof_packet(), &cast, "corpus/corpus.cc", &cast_entities);
+        let item = CorpusItemId::parse("item:nibu:1").unwrap();
+        let held = Held(vec![nibu(&[("en-US", &["NIBUCANARY"])])]);
+        let speaker = EntityId::parse("entity:nib").unwrap();
+        let prompt = Prompt::lower(&view, &item, &speaker, "en-US", &cast.inventory().unwrap(), &held, &weksa::Ontology::empty()).unwrap();
+        let text = prompt.text();
+        assert!(text.contains(r#""entity":"entity:nibu""#), "{text}");
+        assert!(text.contains("NIBUCANARY"), "{text}");
     }
 
     fn feature(inv: &Inventory, gloss: &str) -> weksa::InvId {
@@ -928,7 +1010,7 @@ mod lowering {
         let item = CorpusItemId::parse("item:nibu:1").unwrap();
         let view = view_of(Some(700), None, &cast, &cast_entities);
         let lowered = |view: &LoweringInput, o: &weksa::Ontology| {
-            Prompt::lower(view, &item, "ja-JP", &inv, &held, o).unwrap()
+            Prompt::lower(view, &item, &away(), "ja-JP", &inv, &held, o).unwrap()
         };
         let prompt = lowered(&view, &ontology);
         let text = prompt.text();
@@ -941,8 +1023,7 @@ mod lowering {
         assert!(none.text().contains("\n\nontology: none\n\n"));
         // Entries move the prompt and nothing else of the view does.
         assert_ne!(prompt.digest(), none.digest());
-        // The group is still private; the speaker's entity appears only because
-        // the packet cites it on a referent.
+        // The group is still private.
         let held_item = CorpusStore::open(&data("corpus/corpus.cc"))
             .unwrap()
             .get(item.as_str())

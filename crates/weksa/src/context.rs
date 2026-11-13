@@ -636,17 +636,17 @@ impl Prompt {
     /// holds the entries `ontology::select` chooses from the view's stance,
     /// discourse and the scene relation `with_scene` read, and `language`,
     /// never the caller; the scene's values are never printed, only the entries
-    /// they select. A view whose scene was never read is refused
-    /// ([`LowerError::SceneUnread`]). `item`
-    /// goes only to [`Prompt::item_keys`], never into the text. A speaker's
-    /// entity id appears
-    /// only when the encoder cites that entity on a referent, which is naming a
-    /// cited entity like any other. A cited entity the port lacks, or one with
-    /// no form in `language`, is an error and no prompt. The caller chooses the
-    /// language; the view has none.
+    /// they select. `item` goes only to [`Prompt::item_keys`], never into the
+    /// text. `speaker` is the item's speaker: it is never printed. A referent
+    /// citing it is printed with no entity, and it has no line in `entities:`
+    /// and no form to find, so a speaker the language has no form for does not
+    /// refuse. Any other cited entity is printed with its forms. A cited
+    /// entity the port lacks, or one with no form in `language`, is an error
+    /// and no prompt. The caller chooses the language; the view has none.
     pub fn lower(
         input: &LoweringInput,
         item: &CorpusItemId,
+        speaker: &EntityId,
         language: &str,
         inventory: &Inventory,
         entities: &dyn EntityForms,
@@ -656,7 +656,13 @@ impl Prompt {
             return Err(LowerError::SceneUnread);
         }
         let mut forms: BTreeMap<&str, Vec<String>> = BTreeMap::new();
-        for id in input.referents().iter().filter_map(|r| r.entity.as_ref()) {
+        let mut referents = input.referents().to_vec();
+        for referent in &mut referents {
+            if referent.entity.as_ref() == Some(speaker) {
+                referent.entity = None;
+            }
+        }
+        for id in referents.iter().filter_map(|r| r.entity.as_ref()) {
             let found = entity(entities, id)?;
             let named = found
                 .forms_in(language)
@@ -667,7 +673,7 @@ impl Prompt {
         let meaning = Meaning {
             context: input.context(),
             discourse: input.discourse(),
-            referents: input.referents(),
+            referents: &referents,
             predications: input.predications(),
             relations: input.relations(),
             extensions: input.extensions(),
