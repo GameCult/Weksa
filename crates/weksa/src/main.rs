@@ -685,13 +685,13 @@ impl AddArgs {
     }
 }
 
-/// The split of an item as `Train`, `Validation`, `Test` or `excluded`.
 /// A draw or arm label: [a-z0-9-]{1,32}.
 fn is_label(l: &str) -> bool {
     (1..=32).contains(&l.len())
         && l.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
+/// The split of an item as `Train`, `Validation`, `Test` or `excluded`.
 fn split_text(item: &CorpusItem) -> String {
     SplitScheme::V1
         .split(item)

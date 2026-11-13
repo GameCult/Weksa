@@ -1680,7 +1680,6 @@ impl RunStores {
             return Err(RunError::FloorArms);
         }
         let dir = self.relower_dir(n, arm_label);
-        std::fs::create_dir_all(&dir).map_err(|e| RunError::Io(e.kind()))?;
         // Ports in the order the prompts are asked: recorded, floors, arm.
         let floor_count = floors.len();
         let mut ports: Vec<&mut dyn ModelPort> = vec![recorded];
@@ -1733,7 +1732,8 @@ impl RunStores {
     /// scores 0. Port 0 is the recorded lowering, which must be answered
     /// (`Unrecorded` at once); any other port that is not is listed in
     /// `waiting`, and nothing is scored. `scratch` is the packet store the
-    /// prompts are built in, removed and reopened here.
+    /// prompts are built in, removed and reopened here; its directory is
+    /// created here, after the round is found.
     fn read_draws<E: Embedder>(
         &self,
         n: u32,
@@ -1745,6 +1745,9 @@ impl RunStores {
         let held = self.held_splits(n, &[Split::Validation])?;
         let inventory = self.inventory.inventory().map_err(store)?;
         let ontology = self.ontology.ontology().map_err(store)?;
+        if let Some(dir) = scratch.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| RunError::Io(e.kind()))?;
+        }
         for suffix in ["", ".lock"] {
             let mut name = scratch.as_os_str().to_owned();
             name.push(suffix);
@@ -2024,7 +2027,6 @@ impl RunStores {
             ports.push(d);
         }
         let dir = self.root.join(format!("calibrate-{n}"));
-        std::fs::create_dir_all(&dir).map_err(|e| RunError::Io(e.kind()))?;
         let drawn = self.read_draws(n, &dir.join("base.cc"), &mut ports, scorer)?;
         let missing: Vec<(String, u32)> = labels
             .iter()
@@ -2828,7 +2830,7 @@ pub const FLOOR_ARMS_MIN: usize = 3;
 /// than two items or no arm (0/0), and when an arm is ragged.
 pub fn paired_floor(recorded: &[ItemScore], arms: &[Vec<ItemScore>]) -> Reading {
     let n = recorded.len();
-    if arms.iter().any(|a| a.len() != n) {
+    if n < 2 || arms.iter().any(|a| a.len() != n) {
         return Reading { chrf: f64::NAN, meaning: f64::NAN, composite: f64::NAN };
     }
     let pooled = |of: &dyn Fn(&ItemScore) -> f64| {
