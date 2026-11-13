@@ -3764,9 +3764,18 @@ fn grade_stance(features: &[(&str, u16)]) -> weksa::packet::Stance {
 /// packet. Stances: item 1 restraint 800; item 2 restraint 800; item 3
 /// restraint 800 and affection 300; the written item restraint 500.
 fn recorded_dao(edit: impl FnOnce(&mut HashMap<String, String>)) -> (Dao, RoundRecord) {
+    recorded_dao_in(|_, _| {}, edit)
+}
+
+/// `recorded_dao` with `corpus_edit` run over the corpus and entities first.
+fn recorded_dao_in(
+    corpus_edit: impl FnOnce(&mut CorpusStore, &weksa::EntityStore),
+    edit: impl FnOnce(&mut HashMap<String, String>),
+) -> (Dao, RoundRecord) {
     let mut dao = dao_over(|corpus, entities| {
         let entities = weksa::EntityStore::open(entities).unwrap();
         let mut store = CorpusStore::open(corpus).unwrap();
+        corpus_edit(&mut store, &entities);
         let mut written = store.get("item:daodejing:2").unwrap().unwrap();
         written.id = WRITTEN.into();
         written.text = "Heaven endures through the long years without end.".into();
@@ -5298,4 +5307,308 @@ fn the_cycles_candidate_round_stops_on_a_withheld_lowering_prompt() {
         !dao.root.join("cycle-1/packets.cc").exists(),
         "the refused attempt's packets are discarded"
     );
+}
+
+// ---- distil-slice: relower, a fixed-packet re-lowering measure ----
+
+use weksa::run::{RelowerOutcome, RelowerReading};
+
+/// `relower` of round 1 with the Bag scorer; `floor` is an optional second arm.
+fn relower(
+    dao: &Dao,
+    recorded: &mut dyn ModelPort,
+    arm: &mut dyn ModelPort,
+    floor: Option<&mut dyn ModelPort>,
+) -> Result<RelowerOutcome, RunError> {
+    dao.run.relower(1, "arm", recorded, arm, floor, &Scorer::new(Bag))
+}
+
+fn relowered(outcome: Result<RelowerOutcome, RunError>) -> (Vec<RelowerReading>, Option<weksa::run::Verdict>) {
+    match outcome.unwrap() {
+        RelowerOutcome::Read { languages, verdict } => (languages, verdict),
+        RelowerOutcome::Unanswered { prompts } => panic!("unanswered {prompts:?}"),
+    }
+}
+
+#[test]
+fn relower_asks_only_validation_lowering_prompts_of_the_round() {
+    let (dao, r) = recorded_dao(|_| {});
+    let round_digests: Vec<String> = r.calls()[4..].iter().map(|c| c.prompt.clone()).collect();
+    // The reference pass: a lowerer shown every packet of the round, to learn
+    // which digest is which item's.
+    let (mut every, mut rec, mut arm) = (Lowerer::new(reader), Lowerer::new(reader), Lowerer::new(reader));
+    read(ablate(&dao, &mut every, &mut Lowerer::new(reader)).unwrap());
+    relowered(relower(&dao, &mut rec, &mut arm, None));
+    let of = |keys: &[&str]| -> Vec<String> {
+        every
+            .seen
+            .iter()
+            .filter(|s| keys.contains(&s.1.as_str()))
+            .map(|s| s.0.clone())
+            .fold(Vec::new(), |mut v, d| {
+                if !v.contains(&d) {
+                    v.push(d);
+                }
+                v
+            })
+    };
+    let mut want = of(&["item:daodejing:2", "item:daodejing:3", WRITTEN]);
+    want.sort();
+    let mut got = arm.digests();
+    got.sort();
+    assert_eq!(got, want, "exactly the Validation lowering prompts");
+    assert_eq!(want.len(), 3);
+    for d in &want {
+        assert!(round_digests.contains(d), "byte-identical to the round's prompt {d}");
+    }
+    // Neither the lone Train item, a Test item nor an encode prompt.
+    for (_, key, text) in &arm.seen {
+        assert!(!["item:daodejing:1", "item:daodejing:4", "item:daodejing:5"].contains(&key.as_str()));
+        assert!(text.starts_with(LOWER_INSTRUCTIONS));
+    }
+    assert_eq!(rec.digests().len(), 3, "the recorded port is asked the same prompts");
+}
+
+#[test]
+fn relower_reads_recorded_and_arm_against_the_item() {
+    let (dao, _) = recorded_dao(|_| {});
+    // An arm that says the item's own sentence beats a recorded lowering that
+    // adds the stance to it.
+    let (langs, verdict) = relowered(relower(
+        &dao,
+        &mut Lowerer::new(reader),
+        &mut Lowerer::new(blind),
+        None,
+    ));
+    let l = &langs[0];
+    assert_eq!((l.language.as_str(), l.n, l.unusable), ("en-US", 3, 0));
+    assert!(l.recorded.chrf < l.arm.chrf - 5.0, "{}", l.line());
+    assert!(l.arm.composite > l.recorded.composite);
+    assert!(l.floor.is_none() && verdict.is_none(), "no floor arm, no verdict");
+    // An arm equal to the recorded answers reads equal.
+    let (langs, _) = relowered(relower(&dao, &mut Lowerer::new(reader), &mut Lowerer::new(reader), None));
+    assert_eq!(langs[0].recorded, langs[0].arm);
+}
+
+/// Answers `text` for every item but `bad`, which gets something that is no lowering.
+struct Breaks(&'static str);
+
+impl ModelPort for Breaks {
+    fn model(&self) -> &str {
+        "fake-model"
+    }
+    fn answer(&mut self, prompt: &Prompt) -> Result<String, PortError> {
+        let key = prompt.item_keys()[0].clone();
+        if key == self.0 {
+            return Ok("this is not a lowering draft".into());
+        }
+        Ok(serde_json::json!({ "text": english(&key) }).to_string())
+    }
+}
+
+#[test]
+fn relower_counts_an_unusable_arm_answer_as_zero() {
+    let (dao, _) = recorded_dao(|_| {});
+    let keys = ["item:daodejing:2", "item:daodejing:3", WRITTEN];
+    let (whole, _) = relowered(relower(&dao, &mut Lowerer::new(blind), &mut Lowerer::new(blind), None));
+    let whole = whole[0].arm;
+    let (mut chrf, mut meaning) = (0.0, 0.0);
+    for key in keys {
+        let (langs, _) = relowered(relower(&dao, &mut Lowerer::new(blind), &mut Breaks(key), None));
+        let l = &langs[0];
+        assert_eq!((l.n, l.unusable), (3, 1), "{}", l.line());
+        assert!(l.arm.chrf < whole.chrf && l.arm.meaning < whole.meaning, "{}", l.line());
+        chrf += l.arm.chrf;
+        meaning += l.arm.meaning;
+    }
+    // Each item is refused once: the three means hold every item twice at its
+    // score and once at 0, so the refused item entered its mean as 0 and n stayed 3.
+    assert!((chrf - 2.0 * whole.chrf).abs() < 1e-6, "{chrf} {}", whole.chrf);
+    assert!((meaning - 2.0 * whole.meaning).abs() < 1e-6, "{meaning} {}", whole.meaning);
+}
+
+#[test]
+fn relower_decides_by_decide_panel_against_the_floor_arm() {
+    use weksa::run::decide_panel;
+    let (dao, _) = recorded_dao(|_| {});
+    let run = |recorded: fn(&str, &str) -> String, arm: fn(&str, &str) -> String| {
+        let mut floor = Lowerer::new(recorded);
+        let (langs, verdict) = relowered(relower(
+            &dao,
+            &mut Lowerer::new(recorded),
+            &mut Lowerer::new(arm),
+            Some(&mut floor),
+        ));
+        let l = &langs[0];
+        let floor_reading = l.floor.expect("a floor arm gives a floor");
+        // A floor arm that equals the recorded answers has no spread.
+        assert_eq!((floor_reading.chrf, floor_reading.meaning, floor_reading.composite), (0.0, 0.0, 0.0));
+        assert_eq!(verdict, Some(decide_panel(&[(l.recorded, l.arm, floor_reading)])));
+        verdict.unwrap()
+    };
+    assert_eq!(run(reader, reader), Verdict::Rejected(Why::NoGain));
+    assert_eq!(run(reader, blind), Verdict::Accepted);
+    assert!(matches!(run(blind, reader), Verdict::Rejected(Why::Regressed(_))));
+}
+
+#[test]
+fn relower_floor_is_the_spread_of_recorded_and_the_floor_arm() {
+    let (dao, _) = recorded_dao(|_| {});
+    let (langs, _) = relowered(relower(
+        &dao,
+        &mut Lowerer::new(blind),
+        &mut Lowerer::new(blind),
+        Some(&mut Breaks("item:daodejing:3")),
+    ));
+    let l = &langs[0];
+    let f = l.floor.unwrap();
+    // The floor arm read as an arm against the same recorded answers.
+    let (as_arm, _) = relowered(relower(&dao, &mut Lowerer::new(blind), &mut Breaks("item:daodejing:3"), None));
+    let a = as_arm[0].arm;
+    assert!(f.chrf > 0.0 && f.meaning > 0.0 && f.composite > 0.0);
+    assert!((f.chrf - (l.recorded.chrf - a.chrf).abs()).abs() < 1e-9, "{}", l.line());
+    assert!((f.composite - (l.recorded.composite - a.composite).abs()).abs() < 1e-9);
+    assert!(l.line().contains(&format!("| floor chrf={:.2}", f.chrf)), "{}", l.line());
+    assert_eq!(l.unusable, 0, "unusable counts the arm, not the floor");
+}
+
+#[test]
+fn relower_refuses_a_cycle_round_and_a_missing_recorded_answer() {
+    use weksa::model::RecordedAnswers;
+    let mut dao = dao();
+    two_rounds(&mut dao);
+    run_cycle(&mut dao, &mut cycle_fake(ONE_CONCEPT));
+    let candidate = dao.run.rounds().unwrap().into_iter().find(|r| r.cycle().is_some()).unwrap().n();
+    let mut arm = Lowerer::new(reader);
+    let r = dao.run.relower(candidate, "arm", &mut Lowerer::new(reader), &mut arm, None, &Scorer::new(Bag));
+    assert!(matches!(r, Err(RunError::Malformed("round"))));
+    let r = dao.run.relower(99, "arm", &mut Lowerer::new(reader), &mut arm, None, &Scorer::new(Bag));
+    assert!(matches!(r, Err(RunError::Malformed("round"))));
+    assert!(arm.seen.is_empty());
+
+    let (dao, _) = recorded_dao(|_| {});
+    let mut empty = RecordedAnswers::new(dao.root.join("round-1/nowhere"), "fake-model".into());
+    let mut arm = Lowerer::new(reader);
+    let r = relower(&dao, &mut empty, &mut arm, None);
+    assert!(matches!(r, Err(RunError::Unrecorded)));
+    assert!(arm.seen.is_empty(), "nothing is asked of the arm before the round's answer exists");
+}
+
+#[test]
+fn relower_floor_arm_with_an_unanswered_prompt_is_refused() {
+    use weksa::model::RecordedAnswers;
+    let (dao, _) = recorded_dao(|_| {});
+    let mut floor = RecordedAnswers::new(dao.root.join("relower-1-floor"), "fake-model".into());
+    let r = relower(&dao, &mut Lowerer::new(reader), &mut Lowerer::new(reader), Some(&mut floor));
+    assert!(matches!(r, Err(RunError::FloorUnanswered)));
+    assert!(!dao.root.join("relower-1-floor").exists(), "a floor arm is never written to");
+}
+
+#[test]
+fn relower_checks_the_embedder_not_the_model() {
+    struct Named(Lowerer);
+    impl ModelPort for Named {
+        fn model(&self) -> &str {
+            "another-model"
+        }
+        fn answer(&mut self, p: &Prompt) -> Result<String, PortError> {
+            self.0.answer(p)
+        }
+    }
+    let (dao, _) = recorded_dao(|_| {});
+    let mut other = Named(Lowerer::new(blind));
+    relowered(relower(&dao, &mut Lowerer::new(reader), &mut other, None));
+    let mut arm = Lowerer::new(reader);
+    let r = dao.run.relower(1, "arm", &mut Lowerer::new(reader), &mut arm, None, &Scorer::new(OtherEmbedder));
+    assert!(matches!(r, Err(RunError::Drift(DriftOf::Embedder))));
+    assert!(arm.seen.is_empty());
+}
+
+/// Every file under `dir` with its bytes, by relative path.
+fn tree(dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(d).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                stack.push(p);
+            } else {
+                out.insert(
+                    p.strip_prefix(dir).unwrap().to_string_lossy().into_owned(),
+                    std::fs::read(&p).unwrap(),
+                );
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn relower_records_nothing() {
+    use weksa::model::RecordedAnswers;
+    let (dao, _) = recorded_dao(|_| {});
+    let before = tree(&dao.root);
+    let mut recorded = RecordedAnswers::new(dao.root.join("round-1"), "fake-model".into());
+    // An unanswered arm writes its prompts in its own directory only.
+    let mut files = dao.run.answer_files(dao.run.relower_dir(1, "arm")).unwrap();
+    // The recorded answers are files here, as the relay leaves them.
+    let r = relower(&dao, &mut recorded, &mut files, None);
+    assert!(matches!(r, Err(RunError::Unrecorded)), "no round answer files yet");
+    let after = tree(&dao.root);
+    for (path, bytes) in &before {
+        assert_eq!(after.get(path), Some(bytes), "{path} changed");
+    }
+    assert!(
+        after.keys().all(|p| before.contains_key(p) || p.starts_with("relower-1-arm/")),
+        "only relower-1-arm gains files"
+    );
+
+    // With the round's answers present, the arm is asked and its prompts land in relower-1-arm.
+    let (dao, r) = recorded_dao(|_| {});
+    for call in &r.calls()[4..] {
+        std::fs::write(
+            dao.root.join(format!("round-1/{}.answer", call.prompt)),
+            r#"{"text":"The highest excellence is like the water."}"#,
+        )
+        .unwrap();
+    }
+    let before = tree(&dao.root);
+    let mut recorded = RecordedAnswers::new(dao.root.join("round-1"), "fake-model".into());
+    let mut files = dao.run.answer_files(dao.run.relower_dir(1, "arm")).unwrap();
+    let RelowerOutcome::Unanswered { prompts } = relower(&dao, &mut recorded, &mut files, None).unwrap() else {
+        panic!("the arm is unanswered")
+    };
+    assert_eq!(prompts.len(), 3);
+    let after = tree(&dao.root);
+    for (path, bytes) in &before {
+        assert_eq!(after.get(path), Some(bytes), "{path} changed");
+    }
+    let added: Vec<&String> = after.keys().filter(|p| !before.contains_key(*p)).collect();
+    assert!(added.iter().all(|p| p.starts_with("relower-1-arm/")), "{added:?}");
+    assert_eq!(added.iter().filter(|p| p.ends_with(".prompt")).count(), 3);
+}
+
+#[test]
+fn relower_arm_prompt_holding_test_text_is_withheld() {
+    // A Test sentence that a Validation lowering prompt holds: a line of the
+    // lowering instructions, which every lowering prompt carries.
+    let line = LOWER_INSTRUCTIONS.lines().find(|l| l.trim().chars().count() > 30).unwrap().trim().to_string();
+    let (dao, _) = recorded_dao_in(
+        |corpus, entities| {
+            let mut held = corpus.get("item:daodejing:4").unwrap().unwrap();
+            held.id = "item:held:9".into();
+            held.text = line.clone();
+            corpus.add(held, entities).unwrap();
+        },
+        |_| {},
+    );
+    let mut files = dao.run.answer_files(dao.run.relower_dir(1, "arm")).unwrap();
+    let r = relower(&dao, &mut Lowerer::new(reader), &mut files, None);
+    assert!(matches!(r, Err(RunError::Withheld)), "{:?}", r.map(|_| ()));
+    let dir = dao.run.relower_dir(1, "arm");
+    let prompts = std::fs::read_dir(&dir)
+        .map(|d| d.filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().ends_with(".prompt")).count())
+        .unwrap_or(0);
+    assert_eq!(prompts, 0, "no prompt file is written");
 }

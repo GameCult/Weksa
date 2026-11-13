@@ -1779,6 +1779,86 @@ fn loop_ablate_waits_then_prints_one_line_per_split() {
 }
 
 #[test]
+fn cli_loop_relower_exits_3_until_answered_and_refuses_bad_labels() {
+    let d = tempfile::tempdir().unwrap();
+    open_dao_run(d.path());
+    let url = fake_embedder();
+    let root = d.path().join("canaryroot");
+    let mut run = weksa::run::RunStores::open(&root).unwrap();
+    let scorer = weksa::Scorer::new(weksa::OllamaEmbedder::new(&url, &run.record().embedder));
+    let weksa::run::RoundOutcome::Recorded(r) = weksa::run::round(&mut run, &mut DaoModel, &scorer).unwrap()
+    else {
+        panic!("answered")
+    };
+    let said = r#"{"text":"The highest excellence is like the water."}"#;
+    for call in &r.calls()[3..] {
+        std::fs::write(root.join(format!("round-1/{}.answer", call.prompt)), said).unwrap();
+    }
+    let relower = |extra: &[&str]| {
+        weksa(
+            d.path(),
+            &[&["loop", "relower", "canaryroot", "--round", "1", "--lowerer", "tuned-x", "--ollama-url", &url], extra].concat(),
+        )
+    };
+
+    // Unanswered: exit 3, the digests, a prompt file per digest in the arm's directory.
+    let first = relower(&["--arm", "tuned"]);
+    assert_eq!(first.status.code(), Some(3), "{}", out(&first));
+    let text = out(&first);
+    let digests: Vec<&str> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("unanswered "))
+        .filter(|x| x.len() == 16)
+        .collect();
+    assert_eq!(digests.len(), 2, "the two Validation prompts: {text}");
+    for digest in &digests {
+        assert!(root.join(format!("relower-1-tuned/{digest}.prompt")).is_file());
+        std::fs::write(root.join(format!("relower-1-tuned/{digest}.answer")), said).unwrap();
+    }
+
+    // Answered: one line per language, labelled, naming the lowerer; no verdict without a floor.
+    let second = relower(&["--arm", "tuned"]);
+    assert!(second.status.success(), "{}", out(&second));
+    let text = out(&second);
+    assert!(text.starts_with("relower en-US n=2 unusable=0 recorded "), "{text}");
+    assert!(text.contains("arm=tuned lowerer=tuned-x"), "{text}");
+    assert!(text.contains(" lowering="), "{text}");
+    assert!(!text.contains("verdict") && !text.contains("floor"), "{text}");
+    for leaked in ["item:", "packet:", "highest excellence", "canaryroot"] {
+        assert!(!text.contains(leaked), "{text}");
+    }
+
+    // A floor arm that is not answered whole is refused, and never written to.
+    let o = relower(&["--arm", "tuned", "--floor", "second"]);
+    assert_eq!(o.status.code(), Some(1), "{}", out(&o));
+    assert!(!root.join("relower-1-second").exists());
+
+    // Answered floor: a verdict line.
+    std::fs::create_dir(root.join("relower-1-second")).unwrap();
+    for digest in &digests {
+        std::fs::write(root.join(format!("relower-1-second/{digest}.answer")), said).unwrap();
+    }
+    let o = relower(&["--arm", "tuned", "--floor", "second"]);
+    assert!(o.status.success(), "{}", out(&o));
+    let text = out(&o);
+    assert!(text.contains("| floor chrf=0.00") && text.trim_end().ends_with("verdict Rejected(NoGain)"), "{text}");
+
+    // Labels: equal, uppercase, empty, too long, a path.
+    let long = "a".repeat(33);
+    for args in [
+        vec!["--arm", "same", "--floor", "same"],
+        vec!["--arm", "Upper"],
+        vec!["--arm", ""],
+        vec!["--arm", &long],
+        vec!["--arm", "../x"],
+        vec!["--arm", "tuned", "--floor", "Bad"],
+    ] {
+        let o = relower(&args);
+        assert_eq!(o.status.code(), Some(1), "{args:?}: {}", out(&o));
+    }
+}
+
+#[test]
 fn loop_ablate_without_the_rounds_answers_says_so() {
     let d = tempfile::tempdir().unwrap();
     open_dao_run(d.path());
