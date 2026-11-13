@@ -1900,21 +1900,7 @@ fn cli_loop_calibrate_reads_answered_draws_and_refuses_unanswered_and_bad_labels
     }
     assert!(text.contains("answer it through weksa loop relower"), "{text}");
 
-    // Refusals: three prompted labels, a repeat, a label shared across kinds, class names and shapes.
-    for args in [
-        vec!["--prompted", "p1", "--prompted", "p2", "--prompted", "p3"],
-        vec!["--prompted", "p1", "--prompted", "p2", "--prompted", "p3", "--prompted", "p3"],
-        vec!["--prompted", "p1", "--prompted", "p2", "--prompted", "p3", "--prompted", "p4", "--degraded", "p4"],
-        vec!["--prompted", "P1", "--prompted", "p2", "--prompted", "p3", "--prompted", "p4"],
-        [&four[..], &["--class", "all=item:"]].concat(),
-        [&four[..], &["--class", "noequals"]].concat(),
-        [&four[..], &["--class", "old=item:a", "--class", "old=item:b"]].concat(),
-    ] {
-        let o = calibrate(&args);
-        assert_eq!(o.status.code(), Some(1), "{args:?}: {}", out(&o));
-    }
-
-    // Answer each draw through relower's door, then read them.
+    // Answer every draw through relower's door; from here the only thing that can refuse is the argument.
     let o = weksa(
         d.path(),
         &["loop", "relower", "canaryroot", "--round", "1", "--lowerer", "x", "--arm", "p1", "--ollama-url", &url],
@@ -1926,12 +1912,41 @@ fn cli_loop_calibrate_reads_answered_draws_and_refuses_unanswered_and_bad_labels
         .filter(|x| x.len() == 16)
         .map(String::from)
         .collect();
-    for label in ["p1", "p2", "p3", "p4", "bad"] {
+    assert_eq!(digests.len(), 2);
+    // `P1` and `a_b` are answered too, so only the label check can refuse them.
+    for label in ["p1", "p2", "p3", "p4", "bad", "P1", "a_b"] {
         std::fs::create_dir_all(root.join(format!("relower-1-{label}"))).unwrap();
         for digest in &digests {
             std::fs::write(root.join(format!("relower-1-{label}/{digest}.answer")), said).unwrap();
         }
     }
+    // A draw answered in part.
+    std::fs::create_dir_all(root.join("relower-1-part")).unwrap();
+    std::fs::write(root.join(format!("relower-1-part/{}.answer", digests[0])), said).unwrap();
+    let o = calibrate(&["--prompted", "p1", "--prompted", "p2", "--prompted", "p3", "--prompted", "part"]);
+    assert_eq!(o.status.code(), Some(1), "{}", out(&o));
+    assert!(out(&o).contains("unanswered part 1") && !out(&o).contains("unanswered p1"), "{}", out(&o));
+
+    // Refusals, every draw answered: the baseline reads, each variant differs by one fault.
+    assert!(calibrate(&four).status.success());
+    for args in [
+        vec!["--prompted", "p1", "--prompted", "p2", "--prompted", "p3"],
+        vec!["--prompted", "p1", "--prompted", "p2", "--prompted", "p3", "--prompted", "p3"],
+        vec!["--prompted", "p1", "--prompted", "p2", "--prompted", "p3", "--prompted", "p4", "--degraded", "p4"],
+        vec!["--prompted", "p1", "--prompted", "p2", "--prompted", "p3", "--prompted", "p4", "--candidate", "bad", "--degraded", "bad"],
+        vec!["--prompted", "P1", "--prompted", "p2", "--prompted", "p3", "--prompted", "p4"],
+        vec!["--prompted", "a_b", "--prompted", "p2", "--prompted", "p3", "--prompted", "p4"],
+        [&four[..], &["--class", "all=item:"]].concat(),
+        [&four[..], &["--class", "noequals"]].concat(),
+        [&four[..], &["--class", "Old=item:a"]].concat(),
+        [&four[..], &["--class", "old=item:a,"]].concat(),
+        [&four[..], &["--class", "old=item:a", "--class", "old=item:b"]].concat(),
+    ] {
+        let o = calibrate(&args);
+        assert_eq!(o.status.code(), Some(1), "{args:?}: {}", out(&o));
+        assert!(!out(&o).contains("unanswered"), "{args:?} must be refused for itself: {}", out(&o));
+    }
+
     let o = calibrate(&[&four[..], &["--degraded", "bad", "--class", "old=item:daodejing"]].concat());
     assert!(o.status.success(), "{}", out(&o));
     let text = out(&o);

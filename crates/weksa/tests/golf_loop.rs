@@ -6177,6 +6177,9 @@ fn relower_arm_prompt_holding_test_text_is_withheld() {
 
 // ---- calibrate: the accept rule replayed over answered relower draws ----
 
+/// The cut a [`Tee`] answers with something that is no lowering.
+const NOT_A_LOWERING: usize = 99;
+
 /// Answers each lowering prompt with the item's own text cut by `cut(key)`
 /// tenths, and leaves the answer where an answer file goes, as the relay does.
 struct Tee {
@@ -6192,8 +6195,13 @@ impl ModelPort for Tee {
     fn answer(&mut self, prompt: &Prompt) -> Result<String, PortError> {
         let key = prompt.item_keys()[0].clone();
         let text: Vec<char> = self.texts[&key].chars().collect();
-        let keep = (text.len() * (10 - (self.cut)(&key))).div_ceil(10);
-        let answer = serde_json::json!({ "text": text[..keep].iter().collect::<String>() }).to_string();
+        let cut = (self.cut)(&key);
+        let keep = (text.len() * (10 - cut.min(10))).div_ceil(10);
+        let answer = if cut == NOT_A_LOWERING {
+            "this is no lowering".to_string()
+        } else {
+            serde_json::json!({ "text": text[..keep].iter().collect::<String>() }).to_string()
+        };
         std::fs::create_dir_all(&self.dir).unwrap();
         std::fs::write(self.dir.join(format!("{}.answer", prompt.digest())), &answer).unwrap();
         Ok(answer)
@@ -6320,4 +6328,103 @@ fn calibrate_reads_answered_draws_by_decide_panel() {
             "new [(5, 0), (5, 0)] prompted 120/16/24/80 noise 0.0138 degraded [(60, 60), (60, 50)] candidate 120/60/20/40",
         ]
     );
+}
+
+/// An item in each language whose packet, so whose prompt, no other item shares.
+const BAD_EN: &str = "item:daodejing:3";
+const BAD_JA: &str = "item:daodejing:13";
+
+#[test]
+fn calibrate_classes_match_key_prefixes_exactly() {
+    use weksa::run::CalibrateOutcome;
+    let dao = grown_bilingual();
+    let seed = |dao: &Dao| {
+        let mut round1 = Tee { dir: dao.root.join("round-1"), texts: corpus_texts(dao), cut: Box::new(|_| 0) };
+        let mut arm = Tee { dir: dao.run.relower_dir(1, "seed"), texts: corpus_texts(dao), cut: Box::new(|_| 0) };
+        dao.run.relower(1, "seed", &mut round1, &mut arm, &mut [], &Scorer::new(Bag)).unwrap();
+    };
+    seed(&dao);
+    let prompted: Vec<String> = (1..=4).map(|d| format!("p{d}")).collect();
+    for label in &prompted {
+        answer_draw(&dao, label, |_| 0);
+    }
+    let class = |name: &str, prefix: &str| (name.to_string(), vec![prefix.to_string()]);
+    let classes = [
+        class("en", "item:vgrow:"),      // the en-US items only; a prefix one byte short also takes the ja-JP ones
+        class("mid", "vgrow"),           // a key does not start with it, though it contains it
+        class("both", "item:vgrow"),
+        ("two".to_string(), vec!["item:vgrow:1".to_string(), "item:vgrowja:1".to_string()]),
+    ];
+    let CalibrateOutcome::Read { classes, .. } =
+        dao.run.calibrate(1, &prompted, &[], &[], &classes, &Scorer::new(Bag)).unwrap()
+    else {
+        panic!("answered")
+    };
+    let seen: Vec<(String, Vec<(u32, u32)>)> = classes
+        .iter()
+        .map(|c| (c.name.clone(), c.languages.iter().map(|l| (l.n, l.skipped)).collect()))
+        .collect();
+    // Panel order: en-US, ja-JP.
+    assert_eq!(
+        seen,
+        [
+            ("all".to_string(), vec![(7, 0), (7, 0)]),
+            ("en".to_string(), vec![(5, 0), (0, 0)]),
+            ("mid".to_string(), vec![(0, 0), (0, 0)]),
+            ("both".to_string(), vec![(5, 0), (5, 0)]),
+            ("two".to_string(), vec![(1, 0), (1, 0)]),
+        ]
+    );
+}
+
+#[test]
+fn unusable_answers_are_counted_for_draws_and_for_arm_and_floors_apart() {
+    use weksa::model::RecordedAnswers;
+    use weksa::run::{CalibrateOutcome, RelowerOutcome};
+    let dao = grown_bilingual();
+    let tee = |dir: PathBuf, bad: &'static [&'static str]| Tee {
+        dir,
+        texts: corpus_texts(&dao),
+        cut: Box::new(move |k| if bad.contains(&k) { NOT_A_LOWERING } else { 0 }),
+    };
+    // The recorded lowering is unusable on one item; it is no draw and is not counted.
+    let mut round1 = tee(dao.root.join("round-1"), &[BAD_EN]);
+    let mut seed = tee(dao.run.relower_dir(1, "seed"), &[]);
+    dao.run.relower(1, "seed", &mut round1, &mut seed, &mut [], &Scorer::new(Bag)).unwrap();
+
+    // relower: the arm is unusable on one item, the first floor on two; they are counted apart.
+    let mut recorded = RecordedAnswers::new(dao.root.join("round-1"), "fake-model".into());
+    let mut arm = tee(dao.run.relower_dir(1, "arm"), &[BAD_EN]);
+    let mut f1 = tee(dao.run.relower_dir(1, "f1"), &[BAD_EN, BAD_JA]);
+    let mut f2 = tee(dao.run.relower_dir(1, "f2"), &[]);
+    let mut f3 = tee(dao.run.relower_dir(1, "f3"), &[]);
+    let RelowerOutcome::Read { languages, .. } = dao
+        .run
+        .relower(1, "arm", &mut recorded, &mut arm, &mut [&mut f1, &mut f2, &mut f3], &Scorer::new(Bag))
+        .unwrap()
+    else {
+        panic!("answered")
+    };
+    assert_eq!(languages.iter().map(|l| l.unusable).sum::<u32>(), 1);
+    assert_eq!(languages.iter().map(|l| l.floor_unusable).sum::<u32>(), 2);
+
+    // calibrate: three unusable answers across the draws, none of them the recorded one.
+    answer_draw_bad(&dao, "p1", &[BAD_EN, BAD_JA]);
+    answer_draw_bad(&dao, "p2", &[]);
+    answer_draw_bad(&dao, "p3", &[]);
+    answer_draw_bad(&dao, "p4", &[]);
+    answer_draw_bad(&dao, "bad", &[BAD_EN]);
+    let prompted: Vec<String> = (1..=4).map(|d| format!("p{d}")).collect();
+    let CalibrateOutcome::Read { unusable, .. } = dao
+        .run
+        .calibrate(1, &prompted, &["bad".to_string()], &[], &[], &Scorer::new(Bag))
+        .unwrap()
+    else {
+        panic!("answered")
+    };
+    assert_eq!(unusable, 3);
+}
+
+fn answer_draw_bad(dao: &Dao, label: &str, bad: &'static [&'static str]) {
+    answer_draw(dao, label, move |k| if bad.contains(&k) { NOT_A_LOWERING } else { 0 });
 }
