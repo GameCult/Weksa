@@ -7,7 +7,7 @@ referent without falling into generic fantasy-smith voice.
 The test is deliberately small: one interlingua packet, one rendered utterance,
 and one trace naming the activated cultural ontology axes.
 
-Profile stack:
+Profile stack (these files were deleted from main by cut `delete-cultural-ontology`; they remain in git history before that commit, and the paths below are kept as the fixture's record of what it cited):
 
 - `data/cultural-ontology/persona-stacks/brokkr.yaml`
 - `data/cultural-ontology/referents/old-norse-edda-source-tradition.yaml`
