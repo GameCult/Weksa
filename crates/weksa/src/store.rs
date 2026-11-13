@@ -344,6 +344,9 @@ impl CorpusStore {
         if let Some(why) = empty_attestation(&item.source) {
             return Err(malformed(&item.id, why));
         }
+        if let Some(by) = &item.names_by {
+            check_annotator(&item.id, by)?;
+        }
         check_entities(&item, entities)?;
         for held in self.all()? {
             if normalized(&held.text) == text && item.supersedes.as_deref() != Some(&held.id) {

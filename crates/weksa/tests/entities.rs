@@ -573,3 +573,25 @@ fn committed_items_read_with_no_names_label() {
         assert!(items.iter().all(|i| i.names_by.is_none()), "{sub}");
     }
 }
+
+#[test]
+fn a_blank_names_by_generator_is_refused_by_the_corpus_door() {
+    use weksa::Annotator;
+    use weksa::corpus::ModelFamily;
+    let d = tempfile::tempdir().unwrap();
+    let mut entities = EntityStore::open(&d.path().join("e.cc")).unwrap();
+    let mut corpus = CorpusStore::open(&d.path().join("c.cc")).unwrap();
+    let blank = Annotator::Model { family: ModelFamily::Anthropic, generator: " ".into() };
+    let (cast, items) = weksa::encode::WorkDraft::parse(LANTERN)
+        .unwrap()
+        .into_import(&[marked(3, "Quiet, both of you.")], &blank)
+        .unwrap();
+    for e in cast {
+        entities.put(e).unwrap();
+    }
+    assert!(matches!(
+        refusal(corpus.add(items[0].clone(), &entities)),
+        StoreRefusal::Malformed { .. }
+    ));
+    assert!(corpus.all().unwrap().is_empty());
+}
