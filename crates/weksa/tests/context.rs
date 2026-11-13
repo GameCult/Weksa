@@ -885,6 +885,72 @@ mod lowering {
         assert!(text.contains("NIBUCANARY"), "{text}");
     }
 
+    /// The proof packet admitted for an item whose speaker is `speaker` and
+    /// whose prior turn is `other`'s, with `speaker` on referent n3 and `other`
+    /// on referent n1, then lowered in en-US over an entity port holding `held`.
+    fn lowered_for(speaker: &str, other: &str, held: &[Entity]) -> String {
+        let cast = InventoryStore::open(&data("interlingua/inventory.cc")).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let mut entities = EntityStore::open(&dir.path().join("e.cc")).unwrap();
+        for slug in [speaker, other] {
+            entities.put(super::common::ent(slug, "en-US", &["Stored"])).unwrap();
+        }
+        let mut corpus = CorpusStore::open(&dir.path().join("c.cc")).unwrap();
+        let mut item = super::common::item_in("item:nibu:1", "A line.", &super::common::group_in_bucket(10), super::common::cast());
+        item.speaker = super::common::eid(speaker);
+        item.prior_turns = vec![weksa::Turn { speaker: super::common::eid(other), text: "Well?".into() }];
+        corpus.add(item, &entities).unwrap();
+        let mut packet = proof_packet();
+        packet.referents[0].entity = Some(super::common::eid(other));
+        packet.referents[2].entity = Some(super::common::eid(speaker));
+        let view = PacketStore::open(&dir.path().join("p.cc"))
+            .unwrap()
+            .admit(packet, &cast, &corpus, &entities)
+            .unwrap();
+        let state = weksa::SpeakerStateStore::open(&dir.path().join("s.cc")).unwrap();
+        let view = view.with_scene(&cast.inventory().unwrap(), &state, &corpus).unwrap();
+        let item = CorpusItemId::parse("item:nibu:1").unwrap();
+        Prompt::lower(
+            &view,
+            &item,
+            &super::common::eid(speaker),
+            "en-US",
+            &cast.inventory().unwrap(),
+            &Held(held.to_vec()),
+            &weksa::Ontology::empty(),
+        )
+        .unwrap()
+        .text()
+        .to_string()
+    }
+
+    /// Persona's ruling `speaker-alias-token-in-lowering-prompt`: the item's
+    /// speaker prints as one fixed role token, the same for every speaker and
+    /// every item, with the speaker's forms under it; its entity id never
+    /// prints. Another cited entity still prints under its own id.
+    #[test]
+    fn the_item_speaker_is_a_fixed_token_with_its_forms() {
+        const TOKEN: &str = "entity:speaker";
+        let forms = |slug: &str, form: &str| super::common::ent(slug, "en-US", &[form]);
+        let other = forms("othercite", "OTTERBLOOM");
+        let a = lowered_for("keeperzed", "othercite", &[forms("keeperzed", "ZEBRAQUILL"), other.clone()]);
+        let b = lowered_for("secondvoice", "othercite", &[forms("secondvoice", "MARMOTLUTE"), other.clone()]);
+        for (text, id, form, other_form) in [(&a, "keeperzed", "ZEBRAQUILL", "MARMOTLUTE"), (&b, "secondvoice", "MARMOTLUTE", "ZEBRAQUILL")] {
+            assert!(!text.contains(id), "{id} in {text}");
+            assert!(!text.contains(other_form), "{other_form} in {text}");
+            assert!(text.contains(r#""concept":"concept:5","entity":"entity:speaker""#), "{text}");
+            assert!(text.contains(&format!(r#""{TOKEN}":["{form}"]"#)), "{text}");
+            assert!(text.contains(r#""entity":"entity:othercite""#), "{text}");
+            assert!(text.contains(r#""entity:othercite":["OTTERBLOOM"]"#), "{text}");
+        }
+        // The token is one constant: the entities lines differ only in the speaker's form.
+        assert_eq!(a.replace("ZEBRAQUILL", "F"), b.replace("MARMOTLUTE", "F"));
+        // A speaker with no form in the language does not refuse and gets no token entry.
+        let bare = lowered_for("keeperzed", "othercite", &[other]);
+        assert!(!bare.contains("keeperzed") && !bare.contains(TOKEN), "{bare}");
+        assert!(bare.contains(r#"{"entity:othercite":["OTTERBLOOM"]}"#), "{bare}");
+    }
+
     fn feature(inv: &Inventory, gloss: &str) -> weksa::InvId {
         inv.entries().find(|e| e.gloss == gloss).unwrap().id
     }
