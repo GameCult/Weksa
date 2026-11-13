@@ -5,8 +5,8 @@ culture, and constraint, and the planned lowerer that turns an agent's
 meaning packet into the reader's display language.
 
 **What is valuable here.** The interlingua standard and the lowering design: a
-meaning packet owns what is meant, the scene state (live: `weksa scene put|dump`; speaker
-documents are planned) owns the speaker's relation to the addressee, which selects register,
+meaning packet owns what is meant, the scene state (live: `weksa scene put|dump`, labelled by the rule in
+`docs/scene-annotation.md`; speaker documents are planned) owns the speaker's relation to the addressee, which selects register,
 address and politeness, and a lowerer owns surface text and leaves a trace.
 
 **The problem it solves.** An agent's outward speech today is one English

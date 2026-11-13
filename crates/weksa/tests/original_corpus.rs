@@ -1039,7 +1039,7 @@ fn committed_scenes_cover_original_groups() {
     let held: BTreeSet<String> = scenes.iter().map(|s| s.group.clone()).collect();
     assert_eq!(held, live, "a scene for each live Train or Validation group, none other");
     // Revisions append: a group's later revisions re-derived its relation.
-    assert!(scenes.iter().all(|s| s.n <= 2));
+    assert!(scenes.iter().all(|s| s.n <= 3));
     const S7: &str = "claude-sonnet-5-5 (Weksa Hands, model-annotated original scenes)";
     const GROWTH: &str = "claude-sonnet-5-5 (Weksa Hands, model-annotated validation-growth scenes; annotator is not the writer)";
     let grown: BTreeSet<String> = CorpusStore::open(&data.join("corpus.cc"))
@@ -1051,16 +1051,31 @@ fn committed_scenes_cover_original_groups() {
         .map(|i| i.group)
         .collect();
     assert_eq!(grown.len(), 42);
+    const RUBRIC: &str =
+        "claude-sonnet-5-5 (Weksa Hands, scene rubric r1, docs/scene-annotation.md)";
+    assert!(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/scene-annotation.md")
+            .is_file(),
+        "the rubric r1 names a doc, and the doc is in the repo"
+    );
     let mut by_growth = BTreeSet::new();
     for s in &scenes {
         match &s.annotator {
             Annotator::Model { family, generator } => {
                 assert_eq!(*family, ModelFamily::Anthropic, "{}", s.group);
-                assert!(generator == S7 || generator == GROWTH, "{}", s.group);
+                assert!(
+                    generator == S7 || generator == GROWTH || generator == RUBRIC,
+                    "{}",
+                    s.group
+                );
                 if generator == GROWTH {
                     by_growth.insert(s.group.clone());
-                    // One relation, keeper to unnamed, the three Scene features.
+                    // Written once, never revised by its own generator.
                     assert_eq!(s.n, 1, "{}", s.group);
+                }
+                if generator == GROWTH || generator == RUBRIC {
+                    // One relation, keeper to unnamed, the three Scene features.
                     assert_eq!(s.relations.len(), 1, "{}", s.group);
                     let rel = &s.relations[0];
                     assert_eq!(rel.from.as_str(), "entity:keeper", "{}", s.group);
@@ -1075,7 +1090,32 @@ fn committed_scenes_cover_original_groups() {
         by_growth, grown,
         "the growth scenes are exactly the vgrow groups"
     );
+    // The label a run reads is each group's latest revision: all 98 are rubric r1's.
+    let mut latest = std::collections::BTreeMap::new();
+    for s in &scenes {
+        if latest.get(&s.group).is_none_or(|l: &&weksa::speaker::Scene| l.n < s.n) {
+            latest.insert(s.group.clone(), s);
+        }
+    }
+    let mut lines = Vec::new();
+    for (group, s) in &latest {
+        let Annotator::Model { generator, .. } = &s.annotator else {
+            panic!("{group} is not model-annotated");
+        };
+        assert_eq!(generator, RUBRIC, "{group}: the latest revision follows rubric r1");
+        lines.push(format!("{group}\n{}\n{:?}", s.n, s.relations[0].features));
+    }
+    let parts: Vec<&[u8]> = lines.iter().map(|l| l.as_bytes()).collect();
+    assert_eq!(
+        weksa::split::fnv1a64_of(&parts),
+        DIGEST_OF_THE_SCENES,
+        "a latest scene changed without a rubric revision"
+    );
 }
+
+/// Taken over each live group's latest revision (group, n, features) at rubric r1,
+/// 2026-11-13.
+const DIGEST_OF_THE_SCENES: u64 = 2505219080875817063;
 
 /// The sweep both seed-pair tests share: over a grid of grades per feature (each
 /// also ABSENT) and the production `Condition::holds`, no listed pair of one
