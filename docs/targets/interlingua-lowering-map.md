@@ -406,7 +406,7 @@ of 1120 trials, NoGain 71%, Regressed 0%: a net gain of 0.079 against a mean
 noise term of 0.079. At 14 items per language the rule is therefore a low-power
 filter for a gain of this size; by 1/sqrt(n), about 35 or more items per
 language would bring the noise term near 0.05 (an extrapolation, not measured).
-### Validation growth (`validation-growth`, built; recalibration not run)
+### Validation growth (`validation-growth`, built and recalibrated)
 
 Power needs about 35 or more Validation items per language. `data/original`
 now holds 35 per language (it held 14; Train 14 and Test 8 are unchanged):
@@ -441,9 +441,75 @@ packets will be refused at encode (inventory coverage) and score 0 as the means
 do; they stay in the corpus. That is a result about inventory generalization,
 not a defect.
 
-Every calibration number above (92/0/8 prompted rates, the 29% power, the 0.079
-noise term) is for the 14-item corpus; the corpus digest changed, and the
-numbers are redone on the grown corpus in a separate recalibration step.
+Every calibration number in the Distil measure section above (92/0/8 prompted
+rates, the 29% power, the 0.079 noise term) is for the 14-item corpus and stays
+the stated baseline of that corpus.
+
+Recalibration on the grown corpus (`runs/growth-base`, main 44b66f9, panel
+en-US and ja-JP, round 1 recorded by briefed subagents; 6 prompted draws
+including the recorded one, 2 mild degradations, an all-"Yes." control and 4
+Train-guide draws by Claude sonnet-5-5; the same decision rule at FLOOR_Z 3 and
+3-arm floors; 120 prompted trials from the 30 ordered pairs of 6 draws with the
+other 4 as floor candidates, so trials share draws and are not independent).
+Soul pass `cut-validation-growth.s3` re-derived every number below; its
+findings shaped the wording.
+
+- Live Validation items: 28 en-US and 32 ja-JP of 35 each; 10 are refused at
+  parse (en-US original:18, 23, 25, 27 and vgrow:4, 5, 6; ja-JP original-ja:17,
+  22 and vgrow-ja:2); `relower` skips an item with no packet, so every reading
+  here is over live items only. Old 14: 10 en-US and 12 ja-JP live; new 21: 18
+  and 20.
+- Prompted repeat: NoGain 96.7%, Accepted 3.3%, Regressed 0% (14 items: 92 / 0 /
+  8). All four false accepts are one pair, base p6 and candidate the recorded
+  lowering R: R comes from the round, the other five draws from `relower`, and
+  in en-US R scores +0.024 per item above them [+0.002, +0.052], so R is not
+  exchangeable with a repeat (a Plausible Soul finding, cause not isolated). No
+  false-accept bound can be drawn from 6 draws.
+- Degraded arms read Regressed: all-"Yes." 100% (as before); mild-1 31.7%;
+  mild-2 0% (14 items: 100% and 75% on a subtler arm). The mild arms are weak
+  and not independent: they were rewritten from R with one detail blurred, the
+  original wording is not on disk, mild-2 equals R word for word in 5 of 60
+  items and mild-1 in 2, and mild-1 equals mild-2 in 27 of 60 although they
+  were asked to blur different details. Their mean composite is 0.003 to 0.015
+  below the prompted mean (the old subtler arm: 0.037 and 0.052). The
+  sensitivity to a small regression is not re-measured.
+- Noise: the panel noise term of the sum rule is 0.045 on average over the base
+  and floor choices (0.031 to 0.064), against 0.079 at 14 items. The 1/sqrt(n)
+  forecast (about 0.05) assumed per-item variance stayed the same; it did not:
+  the per-item SD of the difference between two prompted draws is about 0.085
+  on the old items and 0.034 on the new ones, so the pooled term landed near
+  the forecast because less variable items were added. Not a confirmation of
+  the forecast.
+- Power: the Train-guide arm (14 Train sentences as a register guide) is
+  Accepted in 21.2% of 240 trials, NoGain 78.8%, against 29% at 14 items, and
+  its mean composite gain over the prompted draws is 0.0185, 0.41 of the mean
+  noise term (0.37 on the first floor choice per base); with `relower`-only
+  bases (R removed) it is Accepted in 35% (28 of 80). Split by item class
+  (paired bootstrap over items, 95%): old items +0.029 [+0.005, +0.052] (en-US
+  +0.049 [+0.023, +0.084] on 10 items, ja-JP +0.013 [-0.021, +0.037] on 12);
+  new items -0.002 [-0.011, +0.007] pooled, but two opposite effects: en-US
+  -0.017 [-0.027, -0.007] on 18 items and ja-JP +0.011 [+0.001, +0.022] on 20.
+  So the old-versus-new contrast exists in en-US; in ja-JP old (+0.013) and new
+  (+0.011) do not differ. Measured: the 14-item gain does not carry to the new
+  en-US items. Inferred, not isolated: that it was in-sample register fit. The
+  new items differ from the old in several ways at once (written free of the
+  inventory, longer, a different scene convention, lower scores, a smaller
+  vocabulary overlap with Train in en-US: 0.29 against 0.52) and were briefed to
+  the same register as Train, by Claude as the old were. The 29% power figure
+  stays the stated baseline of the 14-item corpus; no better arm is known on
+  the new items, so the rule's power against a real gain is not re-measured.
+- The two classes are different strata (Soul s2 `register-stratum-shift`): the
+  new items score lower (composite 0.41 against 0.64 pooled) so a pooled
+  60-item mean mixes them; report old and new separately.
+- The self-preference effect is not measured (ruling
+  `validation-growth-writer-claude-checked`). The new scenes use a different
+  `in_group` convention from the old ones (follow-up
+  `vgrow-scene-in-group-convention`), so the new-item scores are for scenes that
+  will be re-annotated; the corpus digest changes again then.
+
+Evidence lives in the Self workspace (`cal2/`, `runs/growth-base`), not in git,
+and uses a DUMP patch kept out of the repo; no committed harness reruns these
+numbers (Soul finding `evidence-outside-git`, follow-up owed).
 
 ### Smallest measurable distil slice (`distil-incontext`, not built)
 
