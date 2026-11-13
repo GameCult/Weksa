@@ -111,25 +111,53 @@ pub(crate) fn is_language_tag(s: &str) -> bool {
     if !first_ok {
         return false;
     }
-    let mut singleton = first == "x";
-    subtags.all(|t| {
+    // `private`: inside the `x` private-use section (subtags 1 to 8, lowercase).
+    // `ext`: inside any singleton section, where a one-byte subtag starts the next.
+    // `pending`: the last subtag was a singleton and nothing has followed it yet.
+    let mut private = first == "x";
+    let mut ext = private;
+    let mut pending = private;
+    for t in subtags {
         if !(1..=8).contains(&t.len()) || !t.bytes().all(|b| b.is_ascii_alphanumeric()) {
             return false;
         }
-        let alpha = t.bytes().all(|b| b.is_ascii_alphabetic());
-        let canonical = if singleton {
-            t.bytes().all(|b| !b.is_ascii_uppercase())
-        } else if alpha && t.len() == 2 {
-            t.bytes().all(|b| b.is_ascii_uppercase())
-        } else if alpha && t.len() == 4 {
-            t.as_bytes()[0].is_ascii_uppercase()
-                && t.bytes().skip(1).all(|b| b.is_ascii_lowercase())
+        let lower = t.bytes().all(|b| !b.is_ascii_uppercase());
+        if private {
+            if !lower {
+                return false;
+            }
+            pending = false;
+        } else if t.len() == 1 {
+            // A singleton: lowercase, and not directly after another singleton.
+            if !lower || pending {
+                return false;
+            }
+            ext = true;
+            pending = true;
+            private = t == "x";
+        } else if ext {
+            // Extension subtags are 2 to 8 lowercase.
+            if !lower {
+                return false;
+            }
+            pending = false;
         } else {
-            t.bytes().all(|b| !b.is_ascii_uppercase())
-        };
-        singleton |= t.len() == 1;
-        canonical
-    })
+            let alpha = t.bytes().all(|b| b.is_ascii_alphabetic());
+            let canonical = if t.len() == 2 {
+                // A region: two letters. Two digits are not a subtag at all.
+                alpha && t.bytes().all(|b| b.is_ascii_uppercase())
+            } else if alpha && t.len() == 4 {
+                t.as_bytes()[0].is_ascii_uppercase()
+                    && t.bytes().skip(1).all(|b| b.is_ascii_lowercase())
+            } else {
+                lower
+            };
+            if !canonical {
+                return false;
+            }
+        }
+    }
+    !pending
 }
 
 /// A slug: `[a-z0-9]` and inner `-`, 1 to 48 bytes, no edge `-`.
@@ -243,7 +271,7 @@ mod tests {
     fn a_language_tag_is_in_canonical_case() {
         for good in [
             "en", "en-US", "ja-JP", "zh-Hant-TW", "sr-Latn", "es-419", "de-1996", "en-CA-x-ca",
-            "x-private", "en-u-nu-latn", "ja-JP-x-a1",
+            "x-private", "x-ab", "x-a", "x-a-b", "en-x-a-b", "en-u-nu-x-a-b", "en-u-nu-latn", "ja-JP-x-a1",
         ] {
             assert!(is_language_tag(good), "{good}");
         }
@@ -251,7 +279,8 @@ mod tests {
             "", "e", "EN", "En", "en-us", "en-Us", "en-uS", "ja-jp", "JA-JP", "zh-hant-TW",
             "zh-HANT-TW", "zh-hAnt-TW", "zh-Hant-tw", "en-CA-x-CA", "en-CA-x-Ca", "de-1996-X",
             "es-419-LATN", "en--US", "en-", "-en", "en_US", "abcdefghi", "en-abcdefghi",
-            "xx-\u{e9}",
+            "xx-\u{e9}", "x", "en-x", "en-u", "en-US-x", "en-0", "en-12", "en-u-x", "en-u-0",
+            "x-AB", "x-Ab", "en-x-AB", "en-a-b-ccc", "en-u-NU", "en-U-nu", "en-a-b",
         ] {
             assert!(!is_language_tag(bad), "{bad}");
         }

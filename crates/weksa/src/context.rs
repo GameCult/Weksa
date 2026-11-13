@@ -93,7 +93,7 @@ Answer with one JSON object and nothing else: {\"text\": \"...\"}, the continuat
 pub const MINT_ONTOLOGY_INSTRUCTIONS: &str = "\
 Below are lines written in one language (the language line), the features an ontology condition may test, and the entries that language's ontology already has. Draft new entries: choices this language's culture makes, for a speaker in a stance and scene, about word, grammar, discourse, sound or script, that the lines show.
 Answer with one JSON object and nothing else: {\"entries\": [{\"layer\": \"...\", \"when\": [...], \"choice\": \"...\", \"examples\": [...]}]}. No code fence, no commentary.
-Give 1 to 8 entries. layer is exactly one of Lexicon, Grammar, Discourse, Phonology, Orthography. when holds at most 4 conditions, each {\"slot\": \"Stance\" | \"Discourse\" | \"Scene\", \"feature\": \"<id>\", \"test\": ...}, where <id> is the id printed before the colon of a listed feature (\"feature:10\", never its name) and its slot is one that feature lists. test is {\"AtLeast\": <permille>}, {\"AtMost\": <permille>} or {\"AtMostOrUnset\": <permille>} on a grade feature, or {\"Is\": {\"Option\": \"<label>\"}} on an options feature with one of its labels, or {\"Is\": {\"Flag\": true}} on a flag feature. The example line shows each form on listed features; its choice and examples are placeholders, not content to copy. when may be empty when a choice holds for every line of the language. choice states a pattern the lines show, in at most 200 bytes, without quoting a line. examples are original short phrases of the language, never copied from the lines below, at most 3, each at most 120 bytes.";
+Give only entries the lines show, as many as they support (a language holds at most 64 in all). layer is exactly one of Lexicon, Grammar, Discourse, Phonology, Orthography. when holds at most 4 conditions, each {\"slot\": \"Stance\" | \"Discourse\" | \"Scene\", \"feature\": \"<id>\", \"test\": ...}, where <id> is the id printed before the colon of a listed feature (\"feature:10\", never its name) and its slot is one that feature lists. test is {\"AtLeast\": <permille>}, {\"AtMost\": <permille>} or {\"AtMostOrUnset\": <permille>} on a grade feature, or {\"Is\": {\"Option\": \"<label>\"}} on an options feature with one of its labels, or {\"Is\": {\"Flag\": true}} on a flag feature. The example line shows each form on listed features; its choice and examples are placeholders, not content to copy. when may be empty when a choice holds for every line of the language. choice states a pattern the lines show, in at most 200 bytes, without quoting a line. examples are original short phrases of the language, never copied from the lines below, at most 3, each at most 120 bytes.";
 
 /// The live Train items of a corpus, in key order. The only input minting
 /// reads; it cannot be built from a slice, and no accessor returns text or an
@@ -924,6 +924,12 @@ mod tests {
         const SEPS: [&str; 8] = ["\n", "\r\n", "\r", "\u{b}", "\u{c}", "\u{85}", "\u{2028}", "\u{2029}"];
         let is_sep = |c: char| matches!(c, '\n' | '\r' | '\u{b}' | '\u{c}' | '\u{85}' | '\u{2028}' | '\u{2029}');
         let g = group_in(Split::Train);
+        // The escape itself, not through `str::lines`: one break per separator
+        // (CRLF is one), rendered as a newline and two spaces.
+        for sep in SEPS {
+            assert_eq!(indented(&format!("a{sep}b")), "a\n  b", "{sep:?}");
+        }
+        assert_eq!(indented("a\r\n\r\nb"), "a\n  \n  b");
         for sep in SEPS {
             let it = item("item:a:1", &format!("hi{sep}[item:z:9] x"), &g, false);
             let out = block(&it, None);
