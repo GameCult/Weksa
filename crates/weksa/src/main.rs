@@ -177,7 +177,9 @@ enum LoopCommand {
     /// Run one edit-accept cycle of the run at ROOT. The stores are read only
     /// from the run's record. The editor's prompt, then the candidate round's
     /// encode prompts, then its lowering prompts are written in turn; the
-    /// command exits 3 each time until every prompt has an answer.
+    /// command exits 3 each time until every prompt has an answer. The noise
+    /// floor needs four recorded rounds under the first inventory (the recorded
+    /// round and three prompted repeats).
     Cycle {
         root: PathBuf,
         #[arg(long, default_value = "http://127.0.0.1:11434")]
