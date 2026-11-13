@@ -406,6 +406,56 @@ of 1120 trials, NoGain 71%, Regressed 0%: a net gain of 0.079 against a mean
 noise term of 0.079. At 14 items per language the rule is therefore a low-power
 filter for a gain of this size; by 1/sqrt(n), about 35 or more items per
 language would bring the noise term near 0.05 (an extrapolation, not measured).
+### Validation growth plan (`validation-growth`, not built)
+
+Power needs about 35 or more Validation items per language (14 now). The
+corpus is `data/original`: model-written original prose for Train and
+Validation (written to be non-memorised; public domain text was rejected for
+them), eight public-domain sentences per language for Test with full
+provenance. The split is derived from an item's group alone
+(`SplitScheme::V1`: FNV-1a of `weksa-split-v1:<group>` mod 100, under 40 Train,
+under 80 Validation, else Test; a model-written item in a Test group is in no
+split), and every item so far is its own group (`original-<noun>`). Growth is
+therefore: about 21 new model-written items per language, each its own new
+group, the group name chosen before the text is written (the bucket is then a
+property of the name, not of the text), keeping names whose bucket is
+Validation, with source `ModelWritten` (family, generator, prompt digest),
+a speaker and a Scene as the existing items have, and the inventory and
+ontology beds unchanged for the measure. No Test text is read by the writer:
+the writer's prompt holds a noun list, the register note and the language,
+never a Test sentence or `weksa corpus dump` output.
+Costs and hazards, all real: (a) the corpus digest changes, so a run record
+pins a new corpus and every calibration number above is redone on it (eight
+prompted draws of 35 items per language, about 2.5 times the 14-item cost);
+(b) the inventory was drafted with Validation informing it (ja inventory rev
+5), so fresh Validation items also measure inventory coverage, and some
+will refuse at encode (counted 0) until concepts are added, which is a result,
+not a defect; (c) the writer and the lowerers are one model family, so a
+lowerer may be favoured by its own prose (self-preference, Panickssery et al.
+2024); a cross-family writer for the new Validation items removes that
+(question `validation-growth-writer`).
+Not built here because the writer fork is open, the scenes and entities for
+~42 items are a real authoring cut, and the digest change invalidates the
+runs in flight.
+
+### Smallest measurable distil slice (`distil-incontext`, not built)
+
+Distil is a tuned lowerer measured against the prompted one; the tuned model
+needs a host (follow-up `distil-host-question-owed`). The smallest slice that
+measures whether Train pairs buy a gain with the rule that exists is
+training-free: an in-context arm, the prompted lowerer given Train
+(packet, text) pairs as few-shot examples, answered through the one prompt door
+and read by `loop relower` against three prompted repeats. Parts: 12b's
+Train-only export (follow-up `distil-export-at-freeze`, guarded against Test
+text) as the few-shot source; the arm's directory of answers; the existing
+floor and verdict. A weaker version ran on 14 items: a lowerer shown the 28
+Train sentences (no packets) beat the prompted draws in both languages and the
+rule Accepted it in 29% of 1120 trials. The slice is decisive only with the
+Validation growth above: at 14 items it can only fail to reject. It decides the
+fine-tune question in one direction: if in-context Train pairs do not clear the
+floor at 35 items, a tuned model's gain over the prompted one is not
+measurable with this corpus either.
+
 Training pairs are Train only, at a frozen revision; the export is 12b.
 
 ## Lowerer first cut (`golf-loop-lowerer-cut`)
