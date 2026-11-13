@@ -1755,7 +1755,8 @@ impl RunStores {
         // Per language, per item: the item id and text, then each port's lowering
         // (`None` when unusable or unanswered).
         let mut waiting: Vec<Vec<String>> = vec![Vec::new(); ports.len()];
-        let mut rows: Vec<Vec<(String, String, Vec<Option<String>>)>> = Vec::new();
+        type Row = (String, String, Vec<Option<String>>);
+        let mut rows: Vec<Vec<Row>> = Vec::new();
         for (_, _, items) in &held {
             let mut language_rows = Vec::new();
             for (item, packet) in items {

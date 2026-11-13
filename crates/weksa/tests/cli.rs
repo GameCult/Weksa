@@ -1867,6 +1867,84 @@ fn cli_loop_relower_exits_3_until_answered_and_refuses_bad_labels() {
 }
 
 #[test]
+fn cli_loop_calibrate_reads_answered_draws_and_refuses_unanswered_and_bad_labels() {
+    let d = tempfile::tempdir().unwrap();
+    open_dao_run(d.path());
+    let url = fake_embedder();
+    let root = d.path().join("canaryroot");
+    let mut run = weksa::run::RunStores::open(&root).unwrap();
+    let scorer = weksa::Scorer::new(weksa::OllamaEmbedder::new(&url, &run.record().embedder));
+    let weksa::run::RoundOutcome::Recorded(r) = weksa::run::round(&mut run, &mut DaoModel, &scorer).unwrap()
+    else {
+        panic!("answered")
+    };
+    let said = r#"{"text":"The highest excellence is like the water."}"#;
+    for call in &r.calls()[3..] {
+        std::fs::write(root.join(format!("round-1/{}.answer", call.prompt)), said).unwrap();
+    }
+    let calibrate = |extra: &[&str]| {
+        weksa(
+            d.path(),
+            &[&["loop", "calibrate", "canaryroot", "--round", "1", "--ollama-url", &url], extra].concat(),
+        )
+    };
+    let four = ["--prompted", "p1", "--prompted", "p2", "--prompted", "p3", "--prompted", "p4"];
+
+    // Unanswered draws: exit 1, each label with its missing count, no relower directory created.
+    let o = calibrate(&four);
+    assert_eq!(o.status.code(), Some(1), "{}", out(&o));
+    let text = out(&o);
+    for label in ["p1", "p2", "p3", "p4"] {
+        assert!(text.contains(&format!("unanswered {label} 2")), "{text}");
+        assert!(!root.join(format!("relower-1-{label}")).exists());
+    }
+    assert!(text.contains("answer it through weksa loop relower"), "{text}");
+
+    // Refusals: three prompted labels, a repeat, a label shared across kinds, class names and shapes.
+    for args in [
+        vec!["--prompted", "p1", "--prompted", "p2", "--prompted", "p3"],
+        vec!["--prompted", "p1", "--prompted", "p2", "--prompted", "p3", "--prompted", "p3"],
+        vec!["--prompted", "p1", "--prompted", "p2", "--prompted", "p3", "--prompted", "p4", "--degraded", "p4"],
+        vec!["--prompted", "P1", "--prompted", "p2", "--prompted", "p3", "--prompted", "p4"],
+        [&four[..], &["--class", "all=item:"]].concat(),
+        [&four[..], &["--class", "noequals"]].concat(),
+        [&four[..], &["--class", "old=item:a", "--class", "old=item:b"]].concat(),
+    ] {
+        let o = calibrate(&args);
+        assert_eq!(o.status.code(), Some(1), "{args:?}: {}", out(&o));
+    }
+
+    // Answer each draw through relower's door, then read them.
+    let o = weksa(
+        d.path(),
+        &["loop", "relower", "canaryroot", "--round", "1", "--lowerer", "x", "--arm", "p1", "--ollama-url", &url],
+    );
+    assert_eq!(o.status.code(), Some(3), "{}", out(&o));
+    let digests: Vec<String> = out(&o)
+        .lines()
+        .filter_map(|l| l.strip_prefix("unanswered "))
+        .filter(|x| x.len() == 16)
+        .map(String::from)
+        .collect();
+    for label in ["p1", "p2", "p3", "p4", "bad"] {
+        std::fs::create_dir_all(root.join(format!("relower-1-{label}"))).unwrap();
+        for digest in &digests {
+            std::fs::write(root.join(format!("relower-1-{label}/{digest}.answer")), said).unwrap();
+        }
+    }
+    let o = calibrate(&[&four[..], &["--degraded", "bad", "--class", "old=item:daodejing"]].concat());
+    assert!(o.status.success(), "{}", out(&o));
+    let text = out(&o);
+    assert!(text.starts_with("calibrate draws prompted=4 degraded=1 candidate=0 floor-arms=3 unusable=0"), "{text}");
+    assert!(text.contains("calibrate class=all items en-US n=2 skipped=0"), "{text}");
+    assert!(text.contains("calibrate class=all prompted trials=20 nogain=20 accepted=0 regressed=0"), "{text}");
+    assert!(text.contains("calibrate class=old degraded=bad trials=20 regressed=0"), "{text}");
+    for leaked in ["item:daodejing", "packet:", "highest excellence", "canaryroot"] {
+        assert!(!text.contains(leaked), "{text}");
+    }
+}
+
+#[test]
 fn loop_ablate_without_the_rounds_answers_says_so() {
     let d = tempfile::tempdir().unwrap();
     open_dao_run(d.path());
