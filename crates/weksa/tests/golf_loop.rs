@@ -4122,6 +4122,28 @@ fn a_stance_ablation_refuses_a_cycle_round_and_missing_round_answers() {
 }
 
 #[test]
+fn a_refused_stance_ablation_creates_no_folder_and_wipes_no_store() {
+    let (dao, _) = recorded_dao(|_| {});
+    let (mut rec, mut model) = (Lowerer::new(reader), Lowerer::new(reader));
+    // No round 99: no folder appears.
+    assert!(matches!(
+        dao.run.stance_ablation(99, &mut rec, &mut model, &Scorer::new(Bag)),
+        Err(RunError::Malformed("round"))
+    ));
+    assert!(!dao.run.ablation_dir(99).exists(), "a refused ablation makes no folder");
+    // An earlier ablation of a refused n keeps its stores byte for byte.
+    let kept = dao.run.ablation_dir(2);
+    std::fs::create_dir_all(&kept).unwrap();
+    std::fs::write(kept.join("base.cc"), b"earlier ablation").unwrap();
+    assert!(matches!(
+        dao.run.stance_ablation(2, &mut rec, &mut model, &Scorer::new(Bag)),
+        Err(RunError::Malformed("round"))
+    ));
+    assert_eq!(std::fs::read(kept.join("base.cc")).unwrap(), b"earlier ablation");
+    assert_eq!(std::fs::read_dir(&kept).unwrap().count(), 1);
+}
+
+#[test]
 fn a_stance_ablation_refuses_a_cycle_round() {
     let mut dao = dao();
     two_rounds(&mut dao);

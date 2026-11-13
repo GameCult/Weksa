@@ -1428,6 +1428,8 @@ impl RunStores {
     ) -> Result<AblationOutcome, RunError> {
         let store = |_| RunError::Store;
         check_drift(self, model, scorer)?;
+        // A refused round writes nothing: the round is read before any folder is made.
+        let mut splits = self.held_splits(n, &[Split::Train, Split::Validation])?;
         let inventory = self.inventory.inventory().map_err(store)?;
         let ontology = self.ontology.ontology().map_err(store)?;
 
@@ -1443,8 +1445,6 @@ impl RunStores {
             PacketStore::open(&dir.join("drop.cc")).map_err(store)?,
             PacketStore::open(&dir.join("permute.cc")).map_err(store)?,
         ];
-
-        let mut splits = self.held_splits(n, &[Split::Train, Split::Validation])?;
 
         let mut waiting: Vec<String> = Vec::new();
         let mut readings = Vec::new();
