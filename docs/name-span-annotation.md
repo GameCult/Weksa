@@ -34,8 +34,9 @@ You are given a work's cast: each member's entity id and the forms the work spel
   scratch copies before the first write, so a refusal (a parse failure, a span
   the store judges, a work that repeats a line under case or width folding)
   leaves the stores untouched. Re-draw the whole answer once, log it, and import
-  again. A work file repeating a line's text is refused naming both lines; fix
-  the file (a repeated line cannot be two corpus items).
+  again. A work file repeating a line's text is refused naming both lines; leave
+  that line out of the answer file (the rest imports with its numbering intact),
+  since a repeated line cannot be two corpus items.
 - A line the answer does not cover is not imported by that run; a later run over
   other lines of the work does not collide (keys are `item:<slug>:<n>`).
 - A line whose own text holds `[[` or `]]` cannot be marked and is refused; it
@@ -44,6 +45,8 @@ You are given a work's cast: each member's entity id and the forms the work spel
 ## Label scope
 
 `names_by` labels the spans only, not the line or its speaker. One label per
-item: a later attestation is a superseding item with the same text and group.
+item: a later attestation would be a superseding item with the same text and
+group, but no command writes one yet; question `pd-name-span-attestation` owns
+that door.
 `None` means unrecorded (the cast seeds, `weksa corpus add`, the Dao De Jing
 bed), not attested.

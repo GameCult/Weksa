@@ -2276,3 +2276,18 @@ fn the_annotator_flags_decide_the_label() {
     let dump = out(&weksa(d.path(), &["corpus", "dump"]));
     assert!(dump.contains("by Some(Operator)"), "{dump}");
 }
+
+#[test]
+fn an_import_refused_on_a_cast_entity_leaves_both_stores_untouched() {
+    let d = tempfile::tempdir().unwrap();
+    // entity:tamsin is already held by a cast origin, so the work's PublicDomain
+    // claim on it (cast position 2, after orsa) is refused by EntityStore::put.
+    cast_entities(d.path(), &["tamsin"]);
+    let (w, n) = lantern(d.path(), &["Quiet, both of you."], &["Quiet, both of you."]);
+    let before = std::fs::read(d.path().join("e.cc")).unwrap();
+    let o = weksa(d.path(), &[&["corpus", "import", &w, &n][..], &MODEL].concat());
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("a cast entity"), "{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(std::fs::read(d.path().join("e.cc")).unwrap(), before);
+    assert!(!d.path().join("c.cc").exists() || CorpusStore::open(&d.path().join("c.cc")).unwrap().all().unwrap().is_empty());
+}
