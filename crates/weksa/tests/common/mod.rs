@@ -205,6 +205,7 @@ pub fn item_in(key: &str, text: &str, group: &str, source: Source) -> CorpusItem
         language: "en-US".into(),
         speaker: eid("nibu"),
         names: vec![],
+        names_by: None,
         group: group.into(),
         prior_turns: vec![],
         source,

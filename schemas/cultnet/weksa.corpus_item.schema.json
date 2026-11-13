@@ -24,6 +24,17 @@
         "$ref": "#/$defs/NameSpan"
       }
     },
+    "names_by": {
+      "description": "Who placed `names`: the annotator of the intake that wrote them. `None`\nwhen nothing records one (the cast seeds, `weksa corpus add`, the Dao De\nJing bed); it labels the spans, never the line or its speaker.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Annotator"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "prior_turns": {
       "type": "array",
       "items": {
@@ -63,6 +74,41 @@
     "names"
   ],
   "$defs": {
+    "Annotator": {
+      "description": "Who annotated a document. A model's generator is an attestation string, held\nto the same form as every provenance string.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "Operator"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "Model": {
+              "type": "object",
+              "properties": {
+                "family": {
+                  "$ref": "#/$defs/ModelFamily"
+                },
+                "generator": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "family",
+                "generator"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Model"
+          ]
+        }
+      ]
+    },
     "EntityId": {
       "type": "string",
       "pattern": "^entity:[a-z0-9]([a-z0-9-]{0,46}[a-z0-9])?$"

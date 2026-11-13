@@ -9,6 +9,7 @@ fn item(group: &str, source: Source) -> CorpusItem {
         language: "en-US".into(),
         speaker: weksa::EntityId::parse("entity:s").unwrap(),
         names: vec![],
+        names_by: None,
         group: group.into(),
         prior_turns: vec![],
         source,
