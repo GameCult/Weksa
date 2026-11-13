@@ -538,7 +538,6 @@ struct Meaning<'a> {
     stance: &'a Stance,
 }
 
-/// Printed in place of a prior turn whose text no live Train item holds.
 /// What the lowering prompt prints in place of the item's speaker's entity id:
 /// one constant, the same for every speaker and every item, so no id and
 /// nothing derived from one reaches the lowerer. It parses as an entity id so
@@ -546,6 +545,7 @@ struct Meaning<'a> {
 /// ([`LowerError::SpeakerTokenTaken`]); the entity store does not reserve it.
 pub const SPEAKER_TOKEN: &str = "entity:speaker";
 
+/// Printed in place of a prior turn whose text no live Train item holds.
 const ELIDED: &str = "[elided]";
 
 impl Prompt {

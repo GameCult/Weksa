@@ -839,6 +839,33 @@ mod lowering {
         }
     }
 
+    /// The speaker's forms are those of the item's language, and a language whose form list is
+    /// an empty list is no form: the line has no token entry.
+    #[test]
+    fn the_speakers_forms_are_those_of_the_items_language() {
+        let cast = InventoryStore::open(&data("interlingua/inventory.cc")).unwrap();
+        let cast_entities = EntityStore::open(&data("entity/entity.cc")).unwrap();
+        let view = admitted(proof_packet(), &cast, "corpus/corpus.cc", &cast_entities);
+        let inv = cast.inventory().unwrap();
+        let item = CorpusItemId::parse("item:nibu:1").unwrap();
+        let speaker = EntityId::parse("entity:nibu").unwrap();
+        let lower = |tag: &str, held: &Held| {
+            Prompt::lower(&view, &item, &speaker, tag, &inv, held, &weksa::Ontology::empty())
+                .unwrap()
+                .text()
+                .to_string()
+        };
+        let held = Held(vec![nibu(&[("en-US", &["ENGLISHFORM"]), ("ja-JP", &["NIHONGOFORM"])])]);
+        let ja = lower("ja-JP", &held);
+        assert!(ja.contains("\n\nentities: {\"entity:speaker\":[\"NIHONGOFORM\"]}\n\n"), "{ja}");
+        assert!(!ja.contains("ENGLISHFORM"), "{ja}");
+        let en = lower("en-US", &held);
+        assert!(en.contains("{\"entity:speaker\":[\"ENGLISHFORM\"]}") && !en.contains("NIHONGOFORM"), "{en}");
+        let empty = lower("en-US", &Held(vec![nibu(&[("en-US", &[])])]));
+        assert!(empty.contains("\n\nentities: {}\n\n") && !empty.contains("entity:speaker"), "{empty}");
+        assert!(empty.contains(r#""concept":"concept:5","entity":null"#), "{empty}");
+    }
+
     /// A real entity whose id is the token would read as the speaker: refused.
     #[test]
     fn a_cited_entity_with_the_tokens_id_is_refused() {
