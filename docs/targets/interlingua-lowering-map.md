@@ -379,16 +379,19 @@ gain past the noise of the panel's sum (the root of the languages' composite
 floors squared, at least one step), Rejected(Regressed) a loss past a language's
 floor, Rejected(NoGain) neither. The cycle's own floor is still the spread of two
 round replicates (`floor_of`); it has no per-item scores to pair.
-Calibration (`runs/distil-base`, 7 prompted draws, 14 en-US and 14 ja-JP
-Validation items; every base, candidate and 3-arm floor combination, 420 trials;
-intervals bootstrap over draws): a prompted repeat reads NoGain 92% (80 to 100),
-Regressed 8% (0 to 20), Accepted 0%; an all-"Yes." arm reads Regressed 100%; a
-mild degradation (one detail blurred per utterance) 99% (95 to 100); a subtler
-one 54% (15 to 95). At 14 items a degradation under about three standard errors
-(a composite near 0.06) cannot be told from noise, and no arm known to be better
-exists, so the rule's power to accept a real gain is unmeasured. `FLOOR_Z` was
-chosen on this data (2.5 gives NoGain 85% and 76% on the subtler arm), so the
-rates are in-sample.
+Calibration (`runs/distil-base`, 8 prompted draws, each its own subagent, 14
+en-US and 14 ja-JP Validation items; every base, candidate and 3-arm floor
+combination, 1120 trials from 28 unordered pairs; intervals bootstrap over
+draws, each degraded arm one fixed draw): a prompted repeat reads NoGain 92%
+(80 to 100), Regressed 8% (0 to 20), Accepted 0%, which with 28 pairs bounds
+false-accept only to about 10%; an all-"Yes." arm reads Regressed 100%; a mild
+degradation (one detail blurred per utterance) 100%; a subtler one 75% (50 to
+100). At 14 items a degradation under about three standard errors (a composite
+near 0.06) cannot be told from noise, and no arm known to be better exists, so
+the rule's power to accept a real gain is unmeasured. `FLOOR_Z` was chosen on
+this data (2.5 gives NoGain 84% and 93% on the subtler arm), so the rates are
+in-sample. Without the noise term in the gain test a prompted repeat reads
+Accepted in 40% of the trials.
 Training pairs are Train only, at a frozen revision; the export is 12b.
 
 ## Lowerer first cut (`golf-loop-lowerer-cut`)

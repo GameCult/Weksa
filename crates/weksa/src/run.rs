@@ -1641,9 +1641,10 @@ impl RunStores {
     /// distil decision, whether a tuned lowerer is worth keeping against the
     /// prompted one (calibration-pending: see the map). Asks `arm` the byte-identical lowering prompts of round `n`'s live
     /// Validation items, reads the arm and the round's own lowering
-    /// (`recorded`) against the items, and, given a `floor` arm (a second
-    /// prompted lowering, so the floor is lowering-only noise), decides by
-    /// [`decide_panel`] over (recorded, arm, spread(recorded, floor)). Only
+    /// (`recorded`) against the items, and, given `floors` (three or more
+    /// prompted repeats of the recorded lowering, so the floor is lowering-only
+    /// noise), decides by [`decide_panel`] over (recorded, arm,
+    /// [`paired_floor`]). Only
     /// the model of `arm` is unpinned; the embedder is checked. An arm answer
     /// that is not a usable lowering scores 0 and is counted in `unusable`.
     /// Records nothing; `arm_label` names only where the scratch packet store
@@ -2269,7 +2270,7 @@ pub fn decide(base: &Reading, candidate: &Reading, floor: &Reading) -> Verdict {
 /// and the noise of that sum, the root of the languages' composite floors
 /// squared (independent languages; a one-language panel's noise is its floor,
 /// as in [`decide`]). Without that noise term a prompted repeat of the base
-/// lowering read Accepted in 30% of the calibration trials on `distil-base`. A language
+/// lowering read Accepted in 40% of the calibration trials on `distil-base` at `FLOOR_Z` 3. A language
 /// may lose up to its own noise floor if the panel nets more than a step; the
 /// rule gives up strict Pareto non-regression, which on noisy per-language
 /// readings ratchets every base to a favourable draw and strangles the loop
@@ -2502,12 +2503,13 @@ fn floor_of(
 /// How many standard errors of a prompted-vs-prompted mean difference the
 /// relower floor is wide, and the fewest floor arms (prompted repeats of the
 /// recorded lowering) it is measured over. Calibrated on `runs/distil-base`
-/// (seven prompted draws of 14 en-US and 14 ja-JP Validation items): with
-/// three floor arms a prompted repeat reads NoGain in 92% of the trials
-/// (bootstrap 95% over draws 80 to 100%), a "Yes." arm and a mild
-/// degradation (one detail blurred per utterance) read Regressed in 100% and
-/// 99%, and a second, subtler one in 54% (15 to 95%): at 14 items a
-/// degradation under about three standard errors cannot be told from noise.
+/// (eight prompted draws of 14 en-US and 14 ja-JP Validation items, 28
+/// unordered pairs): with three floor arms a prompted repeat reads NoGain in
+/// 92% of the trials (bootstrap 95% over draws 80 to 100%), Regressed 8% and
+/// Accepted 0%; a "Yes." arm and a mild degradation (one detail blurred per
+/// utterance) read Regressed in 100%, and a subtler one in 75% (50 to 100%): at
+/// 14 items a degradation under about three standard errors cannot be told from
+/// noise. `FLOOR_Z` was chosen on that data, so the rates are in-sample.
 pub const FLOOR_Z: f64 = 3.0;
 pub const FLOOR_ARMS_MIN: usize = 3;
 
@@ -2518,11 +2520,11 @@ pub const FLOOR_ARMS_MIN: usize = 3;
 /// `arms * (n - 1)` degrees of freedom instead of the one coincidental
 /// difference of means a two-run spread is (which reads 0 whenever the two
 /// means happen to meet, and then a one-step dip regresses). Paired per item,
-/// after Koehn (2004). NaN (fail closed in [`decide`]) when there is no pair
-/// of items or no arm.
+/// after Koehn (2004). NaN (fail closed in [`decide`]) when there are fewer
+/// than two items or no arm (0/0), and when an arm is ragged.
 pub fn paired_floor(recorded: &[ItemScore], arms: &[Vec<ItemScore>]) -> Reading {
     let n = recorded.len();
-    if n < 2 || arms.is_empty() || arms.iter().any(|a| a.len() != n) {
+    if arms.iter().any(|a| a.len() != n) {
         return Reading { chrf: f64::NAN, meaning: f64::NAN, composite: f64::NAN };
     }
     let pooled = |of: &dyn Fn(&ItemScore) -> f64| {
@@ -2934,16 +2936,26 @@ mod tests {
         assert!(f.chrf.abs() < 1e-9 && f.meaning.abs() < 1e-9 && f.composite.abs() < 1e-9, "{f:?}");
         // Differences 2, -2, 2, -2 on chrF: sample variance 16/3, standard error
         // sqrt(16/3/4), FLOOR_Z of it; arms pool, so a second equal arm changes nothing.
-        let wobble: Vec<ItemScore> = recorded
-            .iter()
-            .enumerate()
-            .map(|(i, s)| item(s.chrf - if i % 2 == 0 { 2.0 } else { -2.0 }, s.meaning.unwrap()))
-            .collect();
+        let wobble_arm = |recorded: &[ItemScore]| -> Vec<ItemScore> {
+            recorded
+                .iter()
+                .enumerate()
+                .map(|(i, s)| item(s.chrf - if i % 2 == 0 { 2.0 } else { -2.0 }, s.meaning.unwrap()))
+                .collect()
+        };
+        let wobble = wobble_arm(&recorded);
         let want = FLOOR_Z * (16.0_f64 / 3.0 / 4.0).sqrt();
         let one = paired_floor(&recorded, std::slice::from_ref(&wobble));
-        let two = paired_floor(&recorded, &[wobble.clone(), wobble]);
+        let two = paired_floor(&recorded, &[wobble.clone(), wobble.clone()]);
         assert!((one.chrf - want).abs() < 1e-9 && (two.chrf - want).abs() < 1e-9, "{one:?} {two:?}");
         assert!(one.meaning.abs() < 1e-9);
+        // Arms pool by the mean of their variances: one wobbling arm and one
+        // exact repeat give the root of half the variance.
+        let exact = recorded.to_vec();
+        let mixed = paired_floor(&recorded, &[wobble.clone(), exact]);
+        assert!((mixed.chrf - FLOOR_Z * (16.0_f64 / 3.0 / 2.0 / 4.0).sqrt()).abs() < 1e-9, "{mixed:?}");
+        // The calibrated constants, pinned apart from the formula.
+        assert_eq!((FLOOR_Z, FLOOR_ARMS_MIN), (3.0, 3));
         // Under two items, no arms or a ragged arm there is no floor: NaN fails
         // closed in `decide`.
         for f in [
