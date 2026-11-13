@@ -19,7 +19,7 @@ use weksa::run::{
 };
 use weksa::score::ScoreInput;
 use weksa::{
-    Annotator, AnswerFiles, CorpusStore, EntityId, EntityStore, Family, InventoryStore, OllamaEmbedder, OntologyStore, OptionLabel,
+    Annotator, CorpusStore, EntityId, EntityStore, Family, InventoryStore, OllamaEmbedder, OntologyStore, OptionLabel,
     PacketStore, PairRelation, Party, Scene, Slot, SpeakerStateStore, ValueKind, Scorer, Split, SplitScheme, StoreError, lower, pronounce, validate,
 };
 
@@ -1070,10 +1070,7 @@ fn main() -> Result<()> {
         Command::Loop(LoopCommand::Round { root, ollama_url }) => {
             let unreadable = |_| anyhow::anyhow!("a store would not read");
             let mut run = RunStores::open(&root)?;
-            let mut files = AnswerFiles::new(
-                run.next_round_dir().map_err(unreadable)?,
-                run.record().model.clone(),
-            );
+            let mut files = run.answer_files(run.next_round_dir().map_err(unreadable)?)?;
             let scorer = Scorer::new(OllamaEmbedder::new(&ollama_url, &run.record().embedder));
             match round(&mut run, &mut files, &scorer)? {
                 RoundOutcome::Unanswered { prompts } => {
@@ -1093,10 +1090,11 @@ fn main() -> Result<()> {
             ollama_url,
         }) => {
             let run = RunStores::open(&root)?;
-            let model = run.record().model.clone();
-            let mut recorded =
-                RecordedAnswers::new(root.join(format!("round-{round}")), model.clone());
-            let mut files = AnswerFiles::new(run.ablation_dir(round), model);
+            let mut recorded = RecordedAnswers::new(
+                root.join(format!("round-{round}")),
+                run.record().model.clone(),
+            );
+            let mut files = run.answer_files(run.ablation_dir(round))?;
             let scorer = Scorer::new(OllamaEmbedder::new(&ollama_url, &run.record().embedder));
             match run.stance_ablation(round, &mut recorded, &mut files, &scorer)? {
                 AblationOutcome::Unanswered { prompts } => {
@@ -1119,7 +1117,7 @@ fn main() -> Result<()> {
         }
         Command::Loop(LoopCommand::Recall { root }) => {
             let run = RunStores::open(&root)?;
-            let mut files = AnswerFiles::new(run.recall_dir(), run.record().model.clone());
+            let mut files = run.answer_files(run.recall_dir())?;
             match run.recall(&mut files)? {
                 RecallOutcome::Unanswered { prompts } => {
                     for digest in &prompts {
@@ -1133,7 +1131,7 @@ fn main() -> Result<()> {
         }
         Command::Loop(LoopCommand::MintOntology { root, language }) => {
             let run = RunStores::open(&root)?;
-            let mut files = AnswerFiles::new(run.ontology_mint_dir(), run.record().model.clone());
+            let mut files = run.answer_files(run.ontology_mint_dir())?;
             match run.mint_ontology(&mut files, &language)? {
                 OntologyMintOutcome::Unanswered { prompt } => {
                     println!("unanswered {prompt}");
@@ -1152,10 +1150,7 @@ fn main() -> Result<()> {
         Command::Loop(LoopCommand::Cycle { root, ollama_url }) => {
             let unreadable = |_| anyhow::anyhow!("a store would not read");
             let mut run = RunStores::open(&root)?;
-            let mut files = AnswerFiles::new(
-                run.next_cycle_dir().map_err(unreadable)?,
-                run.record().model.clone(),
-            );
+            let mut files = run.answer_files(run.next_cycle_dir().map_err(unreadable)?)?;
             let scorer = Scorer::new(OllamaEmbedder::new(&ollama_url, &run.record().embedder));
             match cycle(&mut run, &mut files, &scorer)? {
                 CycleOutcome::Unanswered { prompts } => {

@@ -669,7 +669,7 @@ fn answer_files_write_the_prompt_and_read_the_answer() {
     let p = prompt();
     let dir = tempfile::tempdir().unwrap();
     let round = dir.path().join("round-1");
-    let mut files = AnswerFiles::new(round.clone(), "answerer".into());
+    let mut files = AnswerFiles::new(round.clone(), "answerer".into(), vec![]);
     assert_eq!(files.model(), "answerer");
 
     // No answer: the prompt is written under its digest, and nothing else.
@@ -701,7 +701,7 @@ fn answer_files_write_the_prompt_and_read_the_answer() {
 
     // A directory that cannot be made is an io error of its kind.
     std::fs::write(dir.path().join("file"), "").unwrap();
-    let mut blocked = AnswerFiles::new(dir.path().join("file").join("round"), "m".into());
+    let mut blocked = AnswerFiles::new(dir.path().join("file").join("round"), "m".into(), vec![]);
     assert!(matches!(blocked.answer(&p), Err(PortError::Io(_))));
 
     // A reply or prompt file that cannot be read is an io error, never "unanswered".
@@ -1113,7 +1113,7 @@ fn unanswered_round_writes_nothing() {
     let expected = prompts(&dao.run);
     assert_eq!(expected.len(), 3);
 
-    let mut files = AnswerFiles::new(dao.run.next_round_dir().unwrap(), "fake-model".into());
+    let mut files = AnswerFiles::new(dao.run.next_round_dir().unwrap(), "fake-model".into(), vec![]);
     let RoundOutcome::Unanswered { prompts: digests } =
         round(&mut dao.run, &mut files, &Scorer::new(Bag)).unwrap()
     else {
@@ -1144,7 +1144,7 @@ fn unanswered_round_writes_nothing() {
     for (key, p) in &expected[..2] {
         std::fs::write(round1.join(format!("{}.answer", p.digest())), &answers[key]).unwrap();
     }
-    let mut files = AnswerFiles::new(dao.run.next_round_dir().unwrap(), "fake-model".into());
+    let mut files = AnswerFiles::new(dao.run.next_round_dir().unwrap(), "fake-model".into(), vec![]);
     let RoundOutcome::Unanswered { prompts: digests } =
         round(&mut dao.run, &mut files, &Scorer::new(Bag)).unwrap()
     else {
@@ -1159,7 +1159,7 @@ fn unanswered_round_writes_nothing() {
     let (key, p) = &expected[2];
     std::fs::write(round1.join(format!("{}.answer", p.digest())), &answers[key]).unwrap();
     let lowering = lowering_prompts(&dao, dao.run.inventory());
-    let mut files = AnswerFiles::new(dao.run.next_round_dir().unwrap(), "fake-model".into());
+    let mut files = AnswerFiles::new(dao.run.next_round_dir().unwrap(), "fake-model".into(), vec![]);
     let RoundOutcome::Unanswered { prompts: digests } =
         round(&mut dao.run, &mut files, &Scorer::new(Bag)).unwrap()
     else {
@@ -1183,7 +1183,7 @@ fn unanswered_round_writes_nothing() {
     for (key, p) in &lowering[..2] {
         std::fs::write(round1.join(format!("{}.answer", p.digest())), lowered(key)).unwrap();
     }
-    let mut files = AnswerFiles::new(dao.run.next_round_dir().unwrap(), "fake-model".into());
+    let mut files = AnswerFiles::new(dao.run.next_round_dir().unwrap(), "fake-model".into(), vec![]);
     let RoundOutcome::Unanswered { prompts: digests } =
         round(&mut dao.run, &mut files, &Scorer::new(Bag)).unwrap()
     else {
@@ -1195,13 +1195,13 @@ fn unanswered_round_writes_nothing() {
     assert_eq!(std::fs::read(dao.root.join("run.cc")).unwrap(), run_cc);
     let (key, p) = &lowering[2];
     std::fs::write(round1.join(format!("{}.answer", p.digest())), lowered(key)).unwrap();
-    let mut files = AnswerFiles::new(dao.run.next_round_dir().unwrap(), "fake-model".into());
+    let mut files = AnswerFiles::new(dao.run.next_round_dir().unwrap(), "fake-model".into(), vec![]);
     let r = recorded(round(&mut dao.run, &mut files, &Scorer::new(Bag)).unwrap());
     assert_eq!((r.n(), r.calls().len()), (1, 6));
     assert_eq!(two_dp(r.language("en-US").unwrap().train_mean.chrf.unwrap()), 44.18);
 
     // Round 2 asks again, encode first.
-    let mut files = AnswerFiles::new(dao.run.next_round_dir().unwrap(), "fake-model".into());
+    let mut files = AnswerFiles::new(dao.run.next_round_dir().unwrap(), "fake-model".into(), vec![]);
     assert!(dao.root.join("round-2").parent().is_some());
     let RoundOutcome::Unanswered { prompts: again } =
         round(&mut dao.run, &mut files, &Scorer::new(Bag)).unwrap()
@@ -1224,7 +1224,7 @@ fn unanswered_round_writes_nothing() {
         )
         .unwrap();
     }
-    let mut files = AnswerFiles::new(dao.run.next_round_dir().unwrap(), "fake-model".into());
+    let mut files = AnswerFiles::new(dao.run.next_round_dir().unwrap(), "fake-model".into(), vec![]);
     let second = recorded(round(&mut dao.run, &mut files, &Scorer::new(Bag)).unwrap());
     assert_eq!(second.n(), 2);
     let ns: Vec<u32> = dao.run.rounds().unwrap().iter().map(|r| r.n()).collect();
@@ -1411,7 +1411,7 @@ fn non_utf8_encode_answer_is_a_parse_refusal() {
         let answer = serde_json::json!({ "text": table[key] }).to_string();
         std::fs::write(round1.join(format!("{}.answer", p.digest())), answer).unwrap();
     }
-    let mut files = AnswerFiles::new(round1.clone(), "fake-model".into());
+    let mut files = AnswerFiles::new(round1.clone(), "fake-model".into(), vec![]);
     let r = recorded(round(&mut dao.run, &mut files, &Scorer::new(Bag)).unwrap());
     assert_eq!(r.calls().len(), 5);
     // Item 3 is Validation: its refusal is a Parse refusal and the round stands.
@@ -1621,7 +1621,7 @@ fn errors_echo_no_input() {
     // A port error, from a canary directory.
     let blocker = tmp.path().join("canaryfile");
     std::fs::write(&blocker, "").unwrap();
-    let mut files = AnswerFiles::new(blocker.join("canarydir"), "m".into());
+    let mut files = AnswerFiles::new(blocker.join("canarydir"), "m".into(), vec![]);
     let e = files.answer(&prompt()).err().unwrap();
     note(&e, &e);
     // A round over canary answers records refusals, not the answers.
@@ -2084,7 +2084,7 @@ fn a_rejection_leaves_no_candidate_inventory_from_an_earlier_attempt() {
         let scorer = Scorer::new(Bag);
         let ask = |dao: &mut Dao| {
             let mut files =
-                AnswerFiles::new(dao.run.next_cycle_dir().unwrap(), "fake-model".into());
+                AnswerFiles::new(dao.run.next_cycle_dir().unwrap(), "fake-model".into(), vec![]);
             cycle(&mut dao.run, &mut files, &scorer).unwrap()
         };
         let dir = dao.root.join("cycle-1");
@@ -2154,7 +2154,7 @@ fn unanswered_cycle_writes_nothing() {
     let run_cc = std::fs::read(dao.root.join("run.cc")).unwrap();
     let scorer = Scorer::new(Bag);
     let ask = |dao: &mut Dao| {
-        let mut files = AnswerFiles::new(dao.run.next_cycle_dir().unwrap(), "fake-model".into());
+        let mut files = AnswerFiles::new(dao.run.next_cycle_dir().unwrap(), "fake-model".into(), vec![]);
         cycle(&mut dao.run, &mut files, &scorer).unwrap()
     };
     let dir = dao.root.join("cycle-1");
@@ -3036,7 +3036,7 @@ fn views_with_one_meaning_share_one_unanswered_lowering_prompt() {
         };
         std::fs::write(round1.join(format!("{}.answer", p.digest())), answer).unwrap();
     }
-    let mut files = AnswerFiles::new(round1.clone(), "fake-model".into());
+    let mut files = AnswerFiles::new(round1.clone(), "fake-model".into(), vec![]);
     let RoundOutcome::Unanswered { prompts: asked } =
         round(&mut dao.run, &mut files, &Scorer::new(Bag)).unwrap()
     else {
@@ -3190,7 +3190,7 @@ fn parse_reasons_count_per_code_over_both_splits_and_name_unreadable() {
         let answer = serde_json::json!({ "text": table[key] }).to_string();
         std::fs::write(round1.join(format!("{}.answer", p.digest())), answer).unwrap();
     }
-    let mut files = AnswerFiles::new(round1, "fake-model".into());
+    let mut files = AnswerFiles::new(round1, "fake-model".into(), vec![]);
     let r = recorded(round(&mut dao.run, &mut files, &Scorer::new(Bag)).unwrap());
     assert_eq!(reasons(&r), [("syntax", 1), ("unreadable", 1)]);
 }
@@ -3483,7 +3483,7 @@ fn a_recall_of_the_wrong_words_or_no_answer_reads_low_and_a_missing_answer_waits
     let r = reading.languages[0].clone();
     assert_eq!((r.n, r.answered, r.chrf), (3, 0, 0.0));
     // With no answers on disk the files port waits on all three prompts.
-    let mut files = AnswerFiles::new(dao.run.recall_dir(), "m".into());
+    let mut files = AnswerFiles::new(dao.run.recall_dir(), "m".into(), vec![]);
     let RecallOutcome::Unanswered { prompts } = dao.run.recall(&mut files).unwrap() else {
         panic!("nobody answered");
     };
@@ -4031,7 +4031,7 @@ fn a_stance_ablation_records_nothing_and_writes_nothing_in_its_round() {
     let before = (snapshot(&round1), snapshot(&dao.root), dao.run.rounds().unwrap(), dao.run.decisions().unwrap());
     let go = || {
         let mut rec = RecordedAnswers::new(round1.clone(), "fake-model".into());
-        let mut files = weksa::model::AnswerFiles::new(dao.run.ablation_dir(1), "fake-model".into());
+        let mut files = weksa::model::AnswerFiles::new(dao.run.ablation_dir(1), "fake-model".into(), vec![]);
         // Nothing answers yet: the replay and variant prompts are written.
         dao.run.stance_ablation(1, &mut rec, &mut files, &Scorer::new(Bag))
     };
@@ -5113,4 +5113,59 @@ fn a_run_reads_entries_and_scenes_at_its_own_head() {
         &["en-US".to_string()],
     );
     assert!(run.is_ok(), "{:?}", run.err());
+}
+
+// ---- test-text-guard: no prompt file or answer for a prompt holding Test text ----
+
+#[test]
+fn answer_files_withhold_prompts_that_hold_test_text() {
+    use weksa::model::{AnswerFiles, ModelPort, PortError};
+    let p = prompt();
+    let line = p.text().lines().find(|l| l.chars().count() >= 24).unwrap().to_string();
+    let short = p.text().lines().find(|l| !l.is_empty() && l.chars().count() < 24).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let round = dir.path().join("round-1");
+    let held = |texts: Vec<String>| AnswerFiles::new(round.clone(), "m".into(), texts);
+    // A whole line, a long fragment of one, and a JSON string value are Test text.
+    for text in [line.clone(), line[..24].to_string(), format!("{short:?}")] {
+        let mut files = held(vec![text.trim_matches('"').to_string()]);
+        assert_eq!(files.answer(&p), Err(PortError::Withheld), "{text}");
+    }
+    assert!(!round.exists(), "a refused prompt creates nothing");
+    // A short Test sentence inside other prose is not Test text: "Stop." is not "Stop. Then".
+    let mut files = held(vec![short[..short.len() - 1].to_string()]);
+    assert_eq!(files.answer(&p), Err(PortError::Unanswered));
+    // The refusal comes before a recorded answer is read.
+    std::fs::write(round.join(format!("{}.answer", p.digest())), "x").unwrap();
+    assert_eq!(held(vec![line]).answer(&p), Err(PortError::Withheld));
+}
+
+#[test]
+fn run_answer_files_withhold_a_live_test_item_text() {
+    use common::{cast, entities_in, group_in_bucket, item_in};
+    use weksa::model::{ModelPort, PortError};
+    let mut w = world();
+    let entities = entities_in(w.dir.path());
+    let text = "Hold this sentence back.";
+    // The sentence in a Test group, and a Train line that quotes it (the corpus
+    // door refuses an identical twin, not a longer line that holds it).
+    let quoting = format!("{text} And then some.");
+    for (key, line, bucket) in [("item:held:1", text, 90), ("item:held:2", &quoting, 10)] {
+        w.corpus
+            .add(item_in(key, line, &group_in_bucket(bucket), cast()), &entities)
+            .unwrap();
+    }
+    let run = run_over(w.dir.path());
+    let dir = w.dir.path().join("answers");
+    let mut files = run.answer_files(dir.clone()).unwrap();
+    let inv = run.inventory().inventory().unwrap();
+    let train = run.train().unwrap();
+    let encode = |key: &str| {
+        let offer = run.offer(key).unwrap().unwrap();
+        weksa::context::Prompt::encode(&offer, &train, &inv, 4)
+    };
+    assert_eq!(files.answer(&encode("item:nibu:1")), Err(PortError::Unanswered));
+    // The quoting line's prompt holds the Test sentence: refused, and nothing is written.
+    assert_eq!(files.answer(&encode("item:held:2")), Err(PortError::Withheld));
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "only the clean prompt");
 }

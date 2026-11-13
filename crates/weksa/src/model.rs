@@ -20,6 +20,8 @@ pub trait ModelPort {
 pub enum PortError {
     /// Nobody has answered yet.
     Unanswered,
+    /// The prompt holds the text of a Test item. It is neither written nor answered.
+    Withheld,
     Io(ErrorKind),
 }
 
@@ -27,6 +29,7 @@ impl fmt::Display for PortError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PortError::Unanswered => f.write_str("the prompt is unanswered"),
+            PortError::Withheld => f.write_str("the prompt holds Test item text"),
             PortError::Io(kind) => write!(f, "io error {kind:?}"),
         }
     }
@@ -40,12 +43,32 @@ impl std::error::Error for PortError {}
 pub struct AnswerFiles {
     dir: PathBuf,
     model: String,
+    withheld: Vec<String>,
 }
 
 impl AnswerFiles {
-    pub fn new(dir: PathBuf, model: String) -> Self {
-        Self { dir, model }
+    /// Refuses (`PortError::Withheld`) any prompt that holds the text of one of
+    /// `withheld`, before it reads or writes a file: the one door a prompt
+    /// leaves the loop through, so a Test sentence cannot reach a model by it.
+    pub fn new(dir: PathBuf, model: String, withheld: Vec<String>) -> Self {
+        Self { dir, model, withheld }
     }
+}
+
+/// Whether `prompt` holds `text` as a line, as a JSON string, or (at 24 chars
+/// or more) anywhere. A short sentence is matched whole, since "Stop." is a
+/// substring of any prompt that says "Stop. Then ..."; an item reaches a
+/// prompt as a line or a JSON string value.
+fn holds(prompt: &str, text: &str) -> bool {
+    let text = text.trim();
+    if text.is_empty() {
+        return false;
+    }
+    if text.chars().count() >= 24 && prompt.contains(text) {
+        return true;
+    }
+    let json = serde_json::to_string(text).unwrap_or_default();
+    prompt.lines().any(|l| l.trim() == text) || prompt.contains(&json)
 }
 
 /// Answers read from one directory and nothing else: `<digest>.answer` is the
@@ -86,6 +109,9 @@ impl ModelPort for AnswerFiles {
 
     fn answer(&mut self, prompt: &Prompt) -> Result<String, PortError> {
         let io = |e: std::io::Error| PortError::Io(e.kind());
+        if self.withheld.iter().any(|t| holds(prompt.text(), t)) {
+            return Err(PortError::Withheld);
+        }
         let digest = prompt.digest();
         match RecordedAnswers::new(self.dir.clone(), self.model.clone()).answer(prompt) {
             Err(PortError::Unanswered) => {}

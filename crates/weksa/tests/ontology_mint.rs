@@ -242,7 +242,7 @@ fn mint_ontology_writes_nothing_but_its_prompt_and_answer_files() {
     let dir = tempfile::tempdir().unwrap();
     let run = fixture(dir.path(), &["en-US", "ja-JP"]);
     let before = digests(dir.path());
-    let mut files = AnswerFiles::new(run.ontology_mint_dir(), "m".into());
+    let mut files = AnswerFiles::new(run.ontology_mint_dir(), "m".into(), vec![]);
     let OntologyMintOutcome::Unanswered { prompt } =
         run.mint_ontology(&mut files, "en-US").unwrap()
     else {
@@ -268,7 +268,7 @@ fn mint_ontology_writes_nothing_but_its_prompt_and_answer_files() {
 fn mint_ontology_unanswered_then_drafted_then_refused() {
     let dir = tempfile::tempdir().unwrap();
     let run = fixture(dir.path(), &["en-US"]);
-    let mut files = AnswerFiles::new(run.ontology_mint_dir(), "m".into());
+    let mut files = AnswerFiles::new(run.ontology_mint_dir(), "m".into(), vec![]);
     let OntologyMintOutcome::Unanswered { prompt } =
         run.mint_ontology(&mut files, "en-US").unwrap()
     else {
@@ -310,7 +310,7 @@ fn a_mint_answer_admits_into_a_copy_and_a_new_run_pins_the_copy() {
     let draft = format!(
         r#"{{"entries":[{{"layer":"Discourse","when":[{{"slot":"Stance","feature":"{STANCE_G}","test":{{"AtLeast":500}}}}],"choice":"a grown choice","examples":[]}}]}}"#
     );
-    let mut files = AnswerFiles::new(run.ontology_mint_dir(), "m".into());
+    let mut files = AnswerFiles::new(run.ontology_mint_dir(), "m".into(), vec![]);
     let OntologyMintOutcome::Unanswered { prompt } =
         run.mint_ontology(&mut files, "en-US").unwrap()
     else {
