@@ -271,7 +271,7 @@ mod tests {
     fn a_language_tag_is_in_canonical_case() {
         for good in [
             "en", "en-US", "ja-JP", "zh-Hant-TW", "sr-Latn", "es-419", "de-1996", "en-CA-x-ca",
-            "x-private", "x-ab", "x-a", "en-u-nu-latn", "ja-JP-x-a1",
+            "x-private", "x-ab", "x-a", "x-a-b", "en-x-a-b", "en-u-nu-x-a-b", "en-u-nu-latn", "ja-JP-x-a1",
         ] {
             assert!(is_language_tag(good), "{good}");
         }
@@ -280,7 +280,7 @@ mod tests {
             "zh-HANT-TW", "zh-hAnt-TW", "zh-Hant-tw", "en-CA-x-CA", "en-CA-x-Ca", "de-1996-X",
             "es-419-LATN", "en--US", "en-", "-en", "en_US", "abcdefghi", "en-abcdefghi",
             "xx-\u{e9}", "x", "en-x", "en-u", "en-US-x", "en-0", "en-12", "en-u-x", "en-u-0",
-            "x-AB", "x-Ab", "en-x-AB",
+            "x-AB", "x-Ab", "en-x-AB", "en-a-b-ccc", "en-u-NU", "en-U-nu", "en-a-b",
         ] {
             assert!(!is_language_tag(bad), "{bad}");
         }
