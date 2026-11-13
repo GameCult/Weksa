@@ -44,7 +44,7 @@ use crate::encode::{
     EditDraft, LoweringDraft, MAX_EDIT_CHANGES, OntologyDraft, PacketDraft, encoder_id,
 };
 use crate::form::{is_attestation, is_language_tag, is_slug};
-use crate::model::{ModelPort, PortError};
+use crate::model::{AnswerFiles, ModelPort, PortError};
 use crate::packet::{Packet, Stance};
 use crate::score::{CHRF_VERSION, chrf, Embedder, ItemScore, ScoreInput, Scorer, SplitMean, aggregate};
 use crate::split::{Split, SplitScheme, fnv1a64, fnv1a64_of, hex16};
@@ -474,6 +474,8 @@ pub enum RunError {
     /// The inventory store holds no revision.
     NoInventory,
     Io(ErrorKind),
+    /// A prompt held the text of a Test item and was refused before any file.
+    Withheld,
     /// A store or the run file would not read or write.
     Store,
     /// The embedder failed.
@@ -507,6 +509,7 @@ impl fmt::Display for RunError {
             RunError::Drift(of) => write!(f, "drift in {of:?}"),
             RunError::NoInventory => f.write_str("the inventory holds no revision"),
             RunError::Io(kind) => write!(f, "io error {kind:?}"),
+            RunError::Withheld => f.write_str("a prompt holds Test item text; it was neither written nor answered"),
             RunError::Store => f.write_str("a store would not read or write"),
             RunError::Unrecorded => f.write_str(
                 "the round holds no answer to a lowering prompt rebuilt now: the prompt digest drifted or the head inventory moved since the round",
@@ -935,6 +938,13 @@ impl RunStores {
             .collect())
     }
 
+    /// The answer door for prompts in `dir`: refuses a prompt that holds the text
+    /// of any item in a Test group of the corpus, in any language.
+    pub fn answer_files(&self, dir: PathBuf) -> anyhow::Result<AnswerFiles> {
+        let withheld = self.corpus.test_texts()?;
+        Ok(AnswerFiles::new(dir, self.record.model.clone(), withheld))
+    }
+
     /// The recorded rounds, in order.
     pub fn rounds(&self) -> anyhow::Result<Vec<RoundRecord>> {
         let mut rounds = self.cache.get_all::<RoundRecord>()?;
@@ -1120,7 +1130,8 @@ impl RunStores {
                 }
                 Err(PortError::Unanswered) => unanswered.push(prompt.digest()),
                 Err(PortError::Io(ErrorKind::InvalidData)) => scores.push((language, None)),
-                Err(PortError::Io(kind)) => return Err(RunError::Io(kind)),
+                Err(PortError::Withheld) => return Err(RunError::Withheld),
+        Err(PortError::Io(kind)) => return Err(RunError::Io(kind)),
             }
         }
         if !unanswered.is_empty() {
@@ -1208,7 +1219,8 @@ impl RunStores {
             Err(PortError::Io(ErrorKind::InvalidData)) => {
                 Ok(OntologyMintOutcome::Refused { code: "invalid-data" })
             }
-            Err(PortError::Io(kind)) => Err(RunError::Io(kind)),
+            Err(PortError::Withheld) => Err(RunError::Withheld),
+        Err(PortError::Io(kind)) => Err(RunError::Io(kind)),
         }
     }
 
@@ -1305,6 +1317,7 @@ fn asked(port: &mut dyn ModelPort, prompt: &Prompt) -> Result<Asked, RunError> {
             .map_or(Asked::Unusable, |d| Asked::Text(d.text))),
         Err(PortError::Io(ErrorKind::InvalidData)) => Ok(Asked::Unusable),
         Err(PortError::Unanswered) => Ok(Asked::Waiting),
+        Err(PortError::Withheld) => Err(RunError::Withheld),
         Err(PortError::Io(kind)) => Err(RunError::Io(kind)),
     }
 }
@@ -1636,7 +1649,8 @@ fn score_round<M: ModelPort, E: Embedder>(
                 answers.push((offer.key().to_string(), None))
             }
             Err(PortError::Unanswered) => unanswered.push(prompt.digest()),
-            Err(PortError::Io(kind)) => return Err(RunError::Io(kind)),
+            Err(PortError::Withheld) => return Err(RunError::Withheld),
+        Err(PortError::Io(kind)) => return Err(RunError::Io(kind)),
         }
         calls.push(Call {
             prompt: prompt.digest(),
@@ -1729,6 +1743,10 @@ fn score_round<M: ModelPort, E: Embedder>(
                     unanswered.push(prompt.digest());
                 }
                 continue;
+            }
+            Err(PortError::Withheld) => {
+                discard_packets(dir);
+                return Err(RunError::Withheld);
             }
             Err(PortError::Io(kind)) => {
                 discard_packets(dir);
@@ -2277,6 +2295,7 @@ pub fn cycle<M: ModelPort, E: Embedder>(
                 prompts: vec![prompt.digest()],
             });
         }
+        Err(PortError::Withheld) => return Err(RunError::Withheld),
         Err(PortError::Io(kind)) => return Err(RunError::Io(kind)),
     };
 

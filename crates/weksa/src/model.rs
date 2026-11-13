@@ -7,6 +7,7 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 
 use crate::context::Prompt;
+use crate::store::normalized;
 
 /// A model answering [`Prompt`]s and nothing else.
 pub trait ModelPort {
@@ -20,6 +21,8 @@ pub trait ModelPort {
 pub enum PortError {
     /// Nobody has answered yet.
     Unanswered,
+    /// The prompt holds the text of an item in a Test group. It is neither written nor answered.
+    Withheld,
     Io(ErrorKind),
 }
 
@@ -27,6 +30,7 @@ impl fmt::Display for PortError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PortError::Unanswered => f.write_str("the prompt is unanswered"),
+            PortError::Withheld => f.write_str("the prompt holds Test item text"),
             PortError::Io(kind) => write!(f, "io error {kind:?}"),
         }
     }
@@ -40,12 +44,29 @@ impl std::error::Error for PortError {}
 pub struct AnswerFiles {
     dir: PathBuf,
     model: String,
+    withheld: Vec<String>,
 }
 
 impl AnswerFiles {
-    pub fn new(dir: PathBuf, model: String) -> Self {
-        Self { dir, model }
+    /// Refuses (`PortError::Withheld`) any prompt that holds the text of one of
+    /// `withheld`, before it reads or writes a file: the one door a prompt
+    /// leaves the loop through, so a Test sentence cannot reach a model by it.
+    pub fn new(dir: PathBuf, model: String, withheld: Vec<String>) -> Self {
+        Self { dir, model, withheld }
     }
+}
+
+/// Normalised length from which a Test text is matched. Every live Test text is
+/// longer; a shorter one ("Stop.") would match any prompt that says "Stop. Then
+/// ...", so a Test item that short is not caught here.
+const LONG: usize = 12;
+
+/// Whether `prompt` holds `text`, by the corpus door's own sameness
+/// ([`normalized`]: NFKC, case fold, spacing and punctuation dropped): a
+/// re-cased, re-spaced, wrapped or width-changed copy still counts.
+fn holds(prompt: &str, text: &str) -> bool {
+    let key = normalized(text);
+    key.chars().count() >= LONG && normalized(prompt).contains(&key)
 }
 
 /// Answers read from one directory and nothing else: `<digest>.answer` is the
@@ -86,6 +107,9 @@ impl ModelPort for AnswerFiles {
 
     fn answer(&mut self, prompt: &Prompt) -> Result<String, PortError> {
         let io = |e: std::io::Error| PortError::Io(e.kind());
+        if self.withheld.iter().any(|t| holds(prompt.text(), t)) {
+            return Err(PortError::Withheld);
+        }
         let digest = prompt.digest();
         match RecordedAnswers::new(self.dir.clone(), self.model.clone()).answer(prompt) {
             Err(PortError::Unanswered) => {}

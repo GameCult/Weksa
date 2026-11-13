@@ -12,6 +12,7 @@ use unicode_normalization::{UnicodeNormalization, char::is_combining_mark, is_nf
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::corpus::{CorpusItem, CorpusItemId, Source, item_key, key_slug};
+use crate::split::{Split, SplitScheme};
 use crate::entity::{Entity, EntityOrigin, Pronunciation};
 use crate::form::{
     is_attestation, is_calendar_date, is_joining_only, is_language_tag, is_refused_format, is_slug,
@@ -246,6 +247,17 @@ impl CorpusStore {
         let mut items = self.cache.get_all::<CorpusItem>()?;
         items.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(items)
+    }
+
+    /// The text of every item in a Test group, any language, withdrawn and
+    /// model-written ones included: what no prompt may hold.
+    pub fn test_texts(&self) -> anyhow::Result<Vec<String>> {
+        Ok(self
+            .all()?
+            .into_iter()
+            .filter(|item| SplitScheme::V1.of_bucket(SplitScheme::V1.bucket(&item.group)) == Split::Test)
+            .map(|item| item.text)
+            .collect())
     }
 
     pub fn get(&self, key: &str) -> anyhow::Result<Option<CorpusItem>> {
