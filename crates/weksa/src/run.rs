@@ -509,7 +509,7 @@ impl fmt::Display for RunError {
             RunError::Drift(of) => write!(f, "drift in {of:?}"),
             RunError::NoInventory => f.write_str("the inventory holds no revision"),
             RunError::Io(kind) => write!(f, "io error {kind:?}"),
-            RunError::Withheld => f.write_str("a prompt holds Test item text; nothing was written"),
+            RunError::Withheld => f.write_str("a prompt holds Test item text; it was neither written nor answered"),
             RunError::Store => f.write_str("a store would not read or write"),
             RunError::Unrecorded => f.write_str(
                 "the round holds no answer to a lowering prompt rebuilt now: the prompt digest drifted or the head inventory moved since the round",

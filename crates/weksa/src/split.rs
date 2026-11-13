@@ -5,8 +5,7 @@
 //! `EncoderOffer` need a Checkpoint, and only the lib can make one
 //! (convergence-freeze adds the door). Operator tools (`weksa corpus dump`,
 //! `weksa score`, `CorpusStore`) read corpus text of any split; that is not
-//! gated here. `AnswerFiles`, the one door a prompt leaves the loop by, refuses
-//! any prompt that holds the text of a live Test item (`PortError::Withheld`).
+//! gated here.
 
 use std::collections::BTreeSet;
 

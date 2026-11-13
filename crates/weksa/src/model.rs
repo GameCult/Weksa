@@ -7,6 +7,7 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 
 use crate::context::Prompt;
+use crate::store::normalized;
 
 /// A model answering [`Prompt`]s and nothing else.
 pub trait ModelPort {
@@ -20,7 +21,7 @@ pub trait ModelPort {
 pub enum PortError {
     /// Nobody has answered yet.
     Unanswered,
-    /// The prompt holds the text of a Test item. It is neither written nor answered.
+    /// The prompt holds the text of an item in a Test group. It is neither written nor answered.
     Withheld,
     Io(ErrorKind),
 }
@@ -55,20 +56,29 @@ impl AnswerFiles {
     }
 }
 
-/// Whether `prompt` holds `text` as a line, as a JSON string, or (at 24 chars
-/// or more) anywhere. A short sentence is matched whole, since "Stop." is a
-/// substring of any prompt that says "Stop. Then ..."; an item reaches a
-/// prompt as a line or a JSON string value.
+/// Normalised length from which a Test text is matched anywhere in a prompt.
+const LONG: usize = 12;
+
+/// Whether `prompt` holds `text`. The corpus door's own sameness
+/// ([`normalized`]: NFKC, case fold, spacing and punctuation dropped) decides
+/// for a text of `LONG` normalised characters or more, so a re-cased,
+/// re-spaced, wrapped or width-changed copy still counts. A shorter text would
+/// match anything ("Stop." is in "Stop. Then ..."), so it counts only as a
+/// line's end after a non-letter (every renderer prints an item's text last on its line).
 fn holds(prompt: &str, text: &str) -> bool {
     let text = text.trim();
-    if text.is_empty() {
+    let key = normalized(text);
+    if key.is_empty() {
         return false;
     }
-    if text.chars().count() >= 24 && prompt.contains(text) {
-        return true;
+    if key.chars().count() >= LONG {
+        return normalized(prompt).contains(&key);
     }
-    let json = serde_json::to_string(text).unwrap_or_default();
-    prompt.lines().any(|l| l.trim() == text) || prompt.contains(&json)
+    prompt.lines().any(|l| {
+        l.trim_end().strip_suffix(text).is_some_and(|head| {
+            head.chars().next_back().is_none_or(|c| !c.is_alphanumeric())
+        })
+    })
 }
 
 /// Answers read from one directory and nothing else: `<digest>.answer` is the

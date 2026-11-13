@@ -249,12 +249,13 @@ impl CorpusStore {
         Ok(items)
     }
 
-    /// The text of every live Test item, any language: what no prompt may hold.
+    /// The text of every item in a Test group, any language, withdrawn and
+    /// model-written ones included: what no prompt may hold.
     pub fn test_texts(&self) -> anyhow::Result<Vec<String>> {
         Ok(self
             .all()?
             .into_iter()
-            .filter(|item| SplitScheme::V1.live(item) == Some(Split::Test))
+            .filter(|item| SplitScheme::V1.of_bucket(SplitScheme::V1.bucket(&item.group)) == Split::Test)
             .map(|item| item.text)
             .collect())
     }

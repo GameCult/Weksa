@@ -2596,6 +2596,8 @@ fn source_tripwires() {
             assert!(!text.contains(banned), "{file} names {banned}");
         }
     }
+    // Every prompt file leaves through RunStores::answer_files, which withholds Test text.
+    assert!(!read("main.rs").contains("AnswerFiles::new"));
     let mut all = Vec::new();
     let mut stack = vec![src.clone()];
     while let Some(dir) = stack.pop() {
@@ -5121,41 +5123,58 @@ fn a_run_reads_entries_and_scenes_at_its_own_head() {
 fn answer_files_withhold_prompts_that_hold_test_text() {
     use weksa::model::{AnswerFiles, ModelPort, PortError};
     let p = prompt();
-    let line = p.text().lines().find(|l| l.chars().count() >= 24).unwrap().to_string();
-    let short = p.text().lines().find(|l| !l.is_empty() && l.chars().count() < 24).unwrap();
     let dir = tempfile::tempdir().unwrap();
     let round = dir.path().join("round-1");
-    let held = |texts: Vec<String>| AnswerFiles::new(round.clone(), "m".into(), texts);
-    // A whole line, a long fragment of one, and a JSON string value are Test text.
-    for text in [line.clone(), line[..24].to_string(), format!("{short:?}")] {
-        let mut files = held(vec![text.trim_matches('"').to_string()]);
-        assert_eq!(files.answer(&p), Err(PortError::Withheld), "{text}");
-    }
+    let refused = |t: &str| {
+        AnswerFiles::new(round.clone(), "m".into(), vec![t.to_string()]).answer(&p)
+            == Err(PortError::Withheld)
+    };
+    // A text of 12 normalised characters or more counts anywhere in the prompt, in
+    // any case, spacing, wrapping or width: the corpus door's own sameness.
+    assert!(refused("Nibu says mind the hatch."));
+    assert!(refused("NIBU SAYS MIND THE HATCH"));
+    assert!(refused("nibu  says\n mind the\n\n hatch"));
+    assert!(refused("\u{ff2e}ibu says mind the hatch."));
     assert!(!round.exists(), "a refused prompt creates nothing");
-    // A short Test sentence inside other prose is not Test text: "Stop." is not "Stop. Then".
-    let mut files = held(vec![short[..short.len() - 1].to_string()]);
-    assert_eq!(files.answer(&p), Err(PortError::Unanswered));
+    // A short text counts only as the end of a line after a non-letter.
+    assert!(refused("the hatch."));
+    assert!(!refused("hatch"), "a mid-word short text is not the line's end");
+    assert!(!refused("mind the"));
+    assert!(!refused("   "), "a blank withheld text matches nothing");
+    // Unrelated text passes and the prompt is then written for its answerer.
+    let mut clean = AnswerFiles::new(round.clone(), "m".into(), vec!["The ferry leaves at noon.".into()]);
+    assert_eq!(clean.answer(&p), Err(PortError::Unanswered));
+    assert!(round.join(format!("{}.prompt", p.digest())).exists());
     // The refusal comes before a recorded answer is read.
     std::fs::write(round.join(format!("{}.answer", p.digest())), "x").unwrap();
-    assert_eq!(held(vec![line]).answer(&p), Err(PortError::Withheld));
+    assert!(refused("Nibu says mind the hatch."));
 }
 
 #[test]
-fn run_answer_files_withhold_a_live_test_item_text() {
+fn a_round_stops_on_a_prompt_that_holds_test_text() {
     use common::{cast, entities_in, group_in_bucket, item_in};
     use weksa::model::{ModelPort, PortError};
+    use weksa::run::{RunError, round};
     let mut w = world();
     let entities = entities_in(w.dir.path());
-    let text = "Hold this sentence back.";
-    // The sentence in a Test group, and a Train line that quotes it (the corpus
-    // door refuses an identical twin, not a longer line that holds it).
-    let quoting = format!("{text} And then some.");
-    for (key, line, bucket) in [("item:held:1", text, 90), ("item:held:2", &quoting, 10)] {
+    // Test sentences (one withdrawn), and Train lines that quote them: the corpus
+    // door refuses an identical twin, not a longer line that holds one.
+    let held = "Hold this sentence back.";
+    let gone = "A withdrawn Test sentence.";
+    w.corpus
+        .add(item_in("item:held:3", gone, &group_in_bucket(91), cast()), &entities)
+        .unwrap();
+    w.corpus.withdraw("item:held:3").unwrap();
+    for (key, line, bucket) in [
+        ("item:held:1", held.to_string(), 90),
+        ("item:held:2", format!("{held} And then some."), 10),
+        ("item:held:4", format!("{gone} And then some."), 11),
+    ] {
         w.corpus
-            .add(item_in(key, line, &group_in_bucket(bucket), cast()), &entities)
+            .add(item_in(key, &line, &group_in_bucket(bucket), cast()), &entities)
             .unwrap();
     }
-    let run = run_over(w.dir.path());
+    let mut run = run_over(w.dir.path());
     let dir = w.dir.path().join("answers");
     let mut files = run.answer_files(dir.clone()).unwrap();
     let inv = run.inventory().inventory().unwrap();
@@ -5165,7 +5184,15 @@ fn run_answer_files_withhold_a_live_test_item_text() {
         weksa::context::Prompt::encode(&offer, &train, &inv, 4)
     };
     assert_eq!(files.answer(&encode("item:nibu:1")), Err(PortError::Unanswered));
-    // The quoting line's prompt holds the Test sentence: refused, and nothing is written.
-    assert_eq!(files.answer(&encode("item:held:2")), Err(PortError::Withheld));
+    for key in ["item:held:2", "item:held:4"] {
+        assert_eq!(files.answer(&encode(key)), Err(PortError::Withheld), "{key}");
+    }
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "only the clean prompt");
+    // The round stops on it rather than skipping the item.
+    let scorer = weksa::score::Scorer::new(OneBag);
+    let mut round_files = run.answer_files(w.dir.path().join("round")).unwrap();
+    assert!(matches!(
+        round(&mut run, &mut round_files, &scorer),
+        Err(RunError::Withheld)
+    ));
 }
