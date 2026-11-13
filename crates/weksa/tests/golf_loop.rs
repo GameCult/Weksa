@@ -5282,3 +5282,20 @@ fn a_stance_ablation_stops_on_a_withheld_prompt() {
     let r = ablate(&dao, &mut Withholds, &mut Lowerer::new(blind));
     assert!(matches!(r, Err(RunError::Withheld)), "{:?}", r.map(|_| ()));
 }
+
+#[test]
+fn the_cycles_candidate_round_stops_on_a_withheld_lowering_prompt() {
+    // The edit is answered and the candidate round encodes at rev 4; every lowering
+    // prompt is then refused. No decision is recorded and no packets are left.
+    let mut dao = dao();
+    two_rounds(&mut dao);
+    let mut model = cycle_fake(ONE_CONCEPT);
+    model.raw_lowering = Some(Err(PortError::Withheld));
+    let r = cycle(&mut dao.run, &mut model, &Scorer::new(Bag));
+    assert!(matches!(r, Err(RunError::Withheld)), "{:?}", r.map(|_| ()));
+    assert!(dao.run.decisions().unwrap().is_empty(), "a refused cycle decides nothing");
+    assert!(
+        !dao.root.join("cycle-1/packets.cc").exists(),
+        "the refused attempt's packets are discarded"
+    );
+}
