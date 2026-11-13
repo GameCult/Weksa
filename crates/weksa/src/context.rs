@@ -538,6 +538,13 @@ struct Meaning<'a> {
     stance: &'a Stance,
 }
 
+/// What the lowering prompt prints in place of the item's speaker's entity id:
+/// one constant, the same for every speaker and every item, so no id and
+/// nothing derived from one reaches the lowerer. It parses as an entity id so
+/// the packet keeps its shape. A real entity of this id is refused at lowering
+/// ([`LowerError::SpeakerTokenTaken`]); the entity store does not reserve it.
+pub const SPEAKER_TOKEN: &str = "entity:speaker";
+
 /// Printed in place of a prior turn whose text no live Train item holds.
 const ELIDED: &str = "[elided]";
 
@@ -637,12 +644,18 @@ impl Prompt {
     /// discourse and the scene relation `with_scene` read, and `language`,
     /// never the caller; the scene's values are never printed, only the entries
     /// they select. `item` goes only to [`Prompt::item_keys`], never into the
-    /// text. `speaker` is the item's speaker: it is never printed. A referent
-    /// citing it is printed with no entity, and it has no line in `entities:`
-    /// and no form to find, so a speaker the language has no form for does not
-    /// refuse. Any other cited entity is printed with its forms. A cited
-    /// entity the port lacks, or one with no form in `language`, is an error
-    /// and no prompt. The caller chooses the language; the view has none.
+    /// text. `speaker` is the item's speaker: its id is never printed. The
+    /// promise guards the id that names an entity of this item, not the
+    /// speaker's forms, which every item of the language shares. A referent
+    /// citing the speaker is printed with [`SPEAKER_TOKEN`] as its entity, and
+    /// the entities line holds the speaker's forms under that token. A speaker
+    /// the language has no form for, or the port lacks, does not refuse: its
+    /// referents print no entity and the line has no entry. Any other cited
+    /// entity is printed under its own id with its forms; one the port lacks,
+    /// or one with no form in `language`, is an error and no prompt. A
+    /// referent citing the token's own id as an entity is
+    /// [`LowerError::SpeakerTokenTaken`]. The caller chooses the language; the
+    /// view has none.
     pub fn lower(
         input: &LoweringInput,
         item: &CorpusItemId,
@@ -655,14 +668,28 @@ impl Prompt {
         if input.scene_read() == &SceneRead::Unread {
             return Err(LowerError::SceneUnread);
         }
-        let mut forms: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+        let token = EntityId::parse(SPEAKER_TOKEN).expect("the token is an entity id");
         let mut referents = input.referents().to_vec();
-        for referent in &mut referents {
-            if referent.entity.as_ref() == Some(speaker) {
-                referent.entity = None;
+        if referents.iter().any(|r| r.entity.as_ref() == Some(&token)) {
+            return Err(LowerError::SpeakerTokenTaken);
+        }
+        let mut forms: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+        if referents.iter().any(|r| r.entity.as_ref() == Some(speaker)) {
+            let spoken = match entity(entities, speaker) {
+                Ok(found) => found.forms_in(language).filter(|f| !f.is_empty()).map(<[String]>::to_vec),
+                Err(LowerError::UnknownEntity { .. }) => None,
+                Err(e) => return Err(e),
+            };
+            if let Some(spoken) = &spoken {
+                forms.insert(token.as_str(), spoken.clone());
+            }
+            for referent in &mut referents {
+                if referent.entity.as_ref() == Some(speaker) {
+                    referent.entity = spoken.as_ref().map(|_| token.clone());
+                }
             }
         }
-        for id in referents.iter().filter_map(|r| r.entity.as_ref()) {
+        for id in referents.iter().filter_map(|r| r.entity.as_ref()).filter(|id| *id != &token) {
             let found = entity(entities, id)?;
             let named = found
                 .forms_in(language)

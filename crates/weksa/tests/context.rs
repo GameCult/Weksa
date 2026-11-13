@@ -808,11 +808,11 @@ mod lowering {
         }
     }
 
-    /// The item's speaker is never printed, though a referent cites it: its
-    /// referent loses the entity, the forms map loses its line, and the view
-    /// itself is not changed.
+    /// The item's speaker id is never printed, though a referent cites it: the
+    /// referent holds the token, the forms line holds the speaker's forms under
+    /// it, and the view itself is not changed.
     #[test]
-    fn a_cited_speaker_is_stripped_from_the_lowering_prompt() {
+    fn a_cited_speaker_is_replaced_by_the_token_in_the_lowering_prompt() {
         let cast = InventoryStore::open(&data("interlingua/inventory.cc")).unwrap();
         let cast_entities = EntityStore::open(&data("entity/entity.cc")).unwrap();
         let view = admitted(proof_packet(), &cast, "corpus/corpus.cc", &cast_entities);
@@ -825,18 +825,76 @@ mod lowering {
         };
         let prompt = lower(&held).unwrap();
         let text = prompt.text();
-        for banned in ["entity:nibu", "NIBUCANARY"] {
-            assert!(!text.contains(banned), "{banned} in {text}");
-        }
-        assert!(text.contains("\n\nentities: {}\n\n"), "{text}");
-        assert!(text.contains(r#""id":"n3","kind":"referent_kind:1","concept":"concept:5","entity":null"#), "{text}");
+        assert!(!text.contains("entity:nibu"), "{text}");
+        assert!(text.contains("\n\nentities: {\"entity:speaker\":[\"NIBUCANARY\"]}\n\n"), "{text}");
+        assert!(text.contains(r#""id":"n3","kind":"referent_kind:1","concept":"concept:5","entity":"entity:speaker""#), "{text}");
         assert!(view.referents().iter().any(|r| r.entity.as_ref() == Some(&speaker)));
-        // A speaker the language has no form for, or the port lacks, does not refuse.
-        assert!(lower(&Held(vec![])).is_ok());
-        assert!(lower(&Held(vec![nibu(&[("sa-Latn", &["Nibuwa"])])])).is_ok());
+        // A speaker the language has no form for, or the port lacks, does not
+        // refuse: its referent names no entity and the line has no entry.
+        for held in [Held(vec![]), Held(vec![nibu(&[("sa-Latn", &["Nibuwa"])])])] {
+            let prompt = lower(&held).unwrap();
+            let text = prompt.text();
+            assert!(text.contains("\n\nentities: {}\n\n") && !text.contains("entity:speaker"), "{text}");
+            assert!(text.contains(r#""concept":"concept:5","entity":null"#), "{text}");
+        }
     }
 
-    /// Only the speaker is stripped: when the item's speaker is someone else,
+    /// The speaker's forms are those of the item's language, and a language whose form list is
+    /// an empty list is no form: the line has no token entry.
+    #[test]
+    fn the_speakers_forms_are_those_of_the_items_language() {
+        let cast = InventoryStore::open(&data("interlingua/inventory.cc")).unwrap();
+        let cast_entities = EntityStore::open(&data("entity/entity.cc")).unwrap();
+        let view = admitted(proof_packet(), &cast, "corpus/corpus.cc", &cast_entities);
+        let inv = cast.inventory().unwrap();
+        let item = CorpusItemId::parse("item:nibu:1").unwrap();
+        let speaker = EntityId::parse("entity:nibu").unwrap();
+        let lower = |tag: &str, held: &Held| {
+            Prompt::lower(&view, &item, &speaker, tag, &inv, held, &weksa::Ontology::empty())
+                .unwrap()
+                .text()
+                .to_string()
+        };
+        let held = Held(vec![nibu(&[("en-US", &["ENGLISHFORM"]), ("ja-JP", &["NIHONGOFORM"])])]);
+        let ja = lower("ja-JP", &held);
+        assert!(ja.contains("\n\nentities: {\"entity:speaker\":[\"NIHONGOFORM\"]}\n\n"), "{ja}");
+        assert!(!ja.contains("ENGLISHFORM"), "{ja}");
+        let en = lower("en-US", &held);
+        assert!(en.contains("{\"entity:speaker\":[\"ENGLISHFORM\"]}") && !en.contains("NIHONGOFORM"), "{en}");
+        let empty = lower("en-US", &Held(vec![nibu(&[("en-US", &[])])]));
+        assert!(empty.contains("\n\nentities: {}\n\n") && !empty.contains("entity:speaker"), "{empty}");
+        assert!(empty.contains(r#""concept":"concept:5","entity":null"#), "{empty}");
+    }
+
+    /// A real entity whose id is the token would read as the speaker: refused.
+    #[test]
+    fn a_cited_entity_with_the_tokens_id_is_refused() {
+        let cast = InventoryStore::open(&data("interlingua/inventory.cc")).unwrap();
+        let mut packet = proof_packet();
+        packet.referents[2].entity = Some(EntityId::parse(weksa::context::SPEAKER_TOKEN).unwrap());
+        let dir = tempfile::tempdir().unwrap();
+        let mut entities = EntityStore::open(&dir.path().join("e.cc")).unwrap();
+        entities.put(super::common::ent("speaker", "en-US", &["Spk"])).unwrap();
+        entities.put(super::common::ent("nibu", "en-US", &["Nibu"])).unwrap();
+        let mut corpus = CorpusStore::open(&dir.path().join("c.cc")).unwrap();
+        let mut item = super::common::item_in("item:nibu:1", "A line.", &super::common::group_in_bucket(10), super::common::cast());
+        item.prior_turns = vec![weksa::Turn { speaker: super::common::eid("speaker"), text: "Well?".into() }];
+        corpus.add(item, &entities).unwrap();
+        let view = PacketStore::open(&dir.path().join("p.cc")).unwrap().admit(packet, &cast, &corpus, &entities).unwrap();
+        let state = weksa::SpeakerStateStore::open(&dir.path().join("s.cc")).unwrap();
+        let view = view.with_scene(&cast.inventory().unwrap(), &state, &corpus).unwrap();
+        let item = CorpusItemId::parse("item:nibu:1").unwrap();
+        let held = Held(vec![super::common::ent("speaker", "en-US", &["Spk"]), nibu(&[("en-US", &["Nibu"])])]);
+        for speaker in ["entity:nibu", "entity:speaker"] {
+            let speaker = EntityId::parse(speaker).unwrap();
+            assert_eq!(
+                Prompt::lower(&view, &item, &speaker, "en-US", &cast.inventory().unwrap(), &held, &weksa::Ontology::empty()).err(),
+                Some(LowerError::SpeakerTokenTaken)
+            );
+        }
+    }
+
+    /// Only the speaker is replaced: when the item's speaker is someone else,
     /// the cited entity keeps its id in the packet and its forms line.
     #[test]
     fn a_cited_entity_that_is_not_the_speaker_is_kept() {
@@ -851,9 +909,9 @@ mod lowering {
         assert!(text.contains("\n\nentities: {\"entity:nibu\":[\"NIBUCANARY\"]}\n\n"), "{text}");
     }
 
-    /// Every referent citing the speaker is stripped, not the first.
+    /// Every referent citing the speaker holds the token, not the first.
     #[test]
-    fn a_speaker_cited_on_two_referents_prints_on_neither() {
+    fn a_speaker_cited_on_two_referents_prints_the_token_on_both() {
         let cast = InventoryStore::open(&data("interlingua/inventory.cc")).unwrap();
         let cast_entities = EntityStore::open(&data("entity/entity.cc")).unwrap();
         let mut packet = proof_packet();
@@ -865,8 +923,9 @@ mod lowering {
         let held = Held(vec![nibu(&[("en-US", &["NIBUCANARY"])])]);
         let prompt = Prompt::lower(&view, &item, &speaker, "en-US", &cast.inventory().unwrap(), &held, &weksa::Ontology::empty()).unwrap();
         let text = prompt.text();
-        assert!(!text.contains("entity:nibu") && !text.contains("NIBUCANARY"), "{text}");
-        assert!(text.contains("\n\nentities: {}\n\n"), "{text}");
+        assert!(!text.contains("entity:nibu"), "{text}");
+        assert_eq!(text.matches(r#""entity":"entity:speaker""#).count(), 2, "{text}");
+        assert!(text.contains("\n\nentities: {\"entity:speaker\":[\"NIBUCANARY\"]}\n\n"), "{text}");
     }
 
     /// The speaker is matched by whole id: a cited entity whose id the
@@ -883,6 +942,72 @@ mod lowering {
         let text = prompt.text();
         assert!(text.contains(r#""entity":"entity:nibu""#), "{text}");
         assert!(text.contains("NIBUCANARY"), "{text}");
+    }
+
+    /// The proof packet admitted for an item whose speaker is `speaker` and
+    /// whose prior turn is `other`'s, with `speaker` on referent n3 and `other`
+    /// on referent n1, then lowered in en-US over an entity port holding `held`.
+    fn lowered_for(speaker: &str, other: &str, held: &[Entity]) -> String {
+        let cast = InventoryStore::open(&data("interlingua/inventory.cc")).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let mut entities = EntityStore::open(&dir.path().join("e.cc")).unwrap();
+        for slug in [speaker, other] {
+            entities.put(super::common::ent(slug, "en-US", &["Stored"])).unwrap();
+        }
+        let mut corpus = CorpusStore::open(&dir.path().join("c.cc")).unwrap();
+        let mut item = super::common::item_in("item:nibu:1", "A line.", &super::common::group_in_bucket(10), super::common::cast());
+        item.speaker = super::common::eid(speaker);
+        item.prior_turns = vec![weksa::Turn { speaker: super::common::eid(other), text: "Well?".into() }];
+        corpus.add(item, &entities).unwrap();
+        let mut packet = proof_packet();
+        packet.referents[0].entity = Some(super::common::eid(other));
+        packet.referents[2].entity = Some(super::common::eid(speaker));
+        let view = PacketStore::open(&dir.path().join("p.cc"))
+            .unwrap()
+            .admit(packet, &cast, &corpus, &entities)
+            .unwrap();
+        let state = weksa::SpeakerStateStore::open(&dir.path().join("s.cc")).unwrap();
+        let view = view.with_scene(&cast.inventory().unwrap(), &state, &corpus).unwrap();
+        let item = CorpusItemId::parse("item:nibu:1").unwrap();
+        Prompt::lower(
+            &view,
+            &item,
+            &super::common::eid(speaker),
+            "en-US",
+            &cast.inventory().unwrap(),
+            &Held(held.to_vec()),
+            &weksa::Ontology::empty(),
+        )
+        .unwrap()
+        .text()
+        .to_string()
+    }
+
+    /// Persona's ruling `speaker-alias-token-in-lowering-prompt`: the item's
+    /// speaker prints as one fixed role token, the same for every speaker and
+    /// every item, with the speaker's forms under it; its entity id never
+    /// prints. Another cited entity still prints under its own id.
+    #[test]
+    fn the_item_speaker_is_a_fixed_token_with_its_forms() {
+        const TOKEN: &str = "entity:speaker";
+        let forms = |slug: &str, form: &str| super::common::ent(slug, "en-US", &[form]);
+        let other = forms("othercite", "OTTERBLOOM");
+        let a = lowered_for("keeperzed", "othercite", &[forms("keeperzed", "ZEBRAQUILL"), other.clone()]);
+        let b = lowered_for("secondvoice", "othercite", &[forms("secondvoice", "MARMOTLUTE"), other.clone()]);
+        for (text, id, form, other_form) in [(&a, "keeperzed", "ZEBRAQUILL", "MARMOTLUTE"), (&b, "secondvoice", "MARMOTLUTE", "ZEBRAQUILL")] {
+            assert!(!text.contains(id), "{id} in {text}");
+            assert!(!text.contains(other_form), "{other_form} in {text}");
+            assert!(text.contains(r#""concept":"concept:5","entity":"entity:speaker""#), "{text}");
+            assert!(text.contains(&format!(r#""{TOKEN}":["{form}"]"#)), "{text}");
+            assert!(text.contains(r#""entity":"entity:othercite""#), "{text}");
+            assert!(text.contains(r#""entity:othercite":["OTTERBLOOM"]"#), "{text}");
+        }
+        // The token is one constant: the entities lines differ only in the speaker's form.
+        assert_eq!(a.replace("ZEBRAQUILL", "F"), b.replace("MARMOTLUTE", "F"));
+        // A speaker with no form in the language does not refuse and gets no token entry.
+        let bare = lowered_for("keeperzed", "othercite", &[other]);
+        assert!(!bare.contains("keeperzed") && !bare.contains(TOKEN), "{bare}");
+        assert!(bare.contains(r#"{"entity:othercite":["OTTERBLOOM"]}"#), "{bare}");
     }
 
     fn feature(inv: &Inventory, gloss: &str) -> weksa::InvId {
