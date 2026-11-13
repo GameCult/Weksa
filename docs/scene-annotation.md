@@ -53,3 +53,26 @@ intimacy, 0 to 1000: 500 when the line shows nothing; up to 800 when it shows sh
   `--to unnamed --inventory-rev 4`). `addressed` is not stored: no Scene feature
   carries it.
 - Disagreements are reported, never adjudicated.
+
+## Agreement at r1 (this cut, 98 live groups, 49 per language)
+
+Four fresh agents drew the labels (A-en, A-ja, B-en, B-ja); the briefs were the
+rubric section plus one language's shuffled sentences (SHA-256 of the brief
+bodies: en-US `db087476...dbc04e`, ja-JP `c5b81b27...97488c`; no Test text in
+either). No draw was repeated. Annotator model: `claude-sonnet-5-5`.
+
+A against B (B measures only): pooled `addressed` equal 96/98 (kappa 0.96),
+`in_group` equal 93/98 (kappa 0.79), `relative_status` equal 89/98, intimacy
+within 150 on 98/98. en-US: addressed 47/49, in_group 47/49 (0.86),
+relative_status 45/49. ja-JP: addressed 49/49, in_group 46/49 (0.64),
+relative_status 44/49.
+
+Blind check, A against the 56 older labels: `relative_status` equal 49/56,
+`in_group` equal 53/56 (kappa 0.64), intimacy within 150 on 55/56. Three
+in_group differences: `original-ja-shimoyado-2` and `original-ja-sakana` (both
+narrations, true to false) and `original-ja-asa` (an instruction to a household
+member, false to true).
+
+In_group true across the 98: 42 before, 15 after; every unaddressed line is now
+false (it was true on 17 of the 21 unaddressed vgrow groups). Disagreements are
+reported, not adjudicated.
