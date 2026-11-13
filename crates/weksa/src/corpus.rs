@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::form::{FormError, is_slug, string_form};
 use crate::packet::EntityId;
+use crate::speaker::Annotator;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Turn {
@@ -103,6 +104,11 @@ pub struct CorpusItem {
     /// Which entities the text names, and where. Fixed with the text at intake.
     #[cultcache(key = 10)]
     pub names: Vec<NameSpan>,
+    /// Who placed `names`: the annotator of the intake that wrote them. `None`
+    /// when nothing records one (the cast seeds, `weksa corpus add`, the Dao De
+    /// Jing bed); it labels the spans, never the line or its speaker.
+    #[cultcache(key = 11, default)]
+    pub names_by: Option<Annotator>,
 }
 
 impl CorpusItem {

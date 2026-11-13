@@ -502,3 +502,74 @@ fn a_malformed_pronunciation_is_refused() {
     }
     assert_eq!(store.get(&eid("kay")).unwrap(), None);
 }
+
+const LANTERN: &str = r#"{"slug":"lantern-wager","language":"en-US","admitted_on":"2026-11-13",
+    "source":{"PublicDomain":{"work":"The Lantern Wager","author":"A. Invented","edition_url":"https://example.invalid/lantern","licence":"public domain","jurisdiction":"US","translator":"none","edition_year":1890}},
+    "cast":[{"entity":"entity:orsa","forms":["Orsa"]},{"entity":"entity:tamsin","forms":["Tamsin","Tam"]}],
+    "lines":[{"group":"s1","speaker":"entity:orsa","text":"Tamsin, bring the lantern."},
+             {"group":"s1","speaker":"entity:tamsin","text":"Tamsin's lantern, said Orsa."},
+             {"group":"s2","speaker":"entity:orsa","text":"Quiet, both of you."}]}"#;
+
+fn marked(line: u32, text: &str) -> weksa::encode::MarkedLine {
+    weksa::encode::MarkedLine { line, marked: text.into() }
+}
+
+#[test]
+fn an_imported_work_passes_the_store_doors() {
+    use weksa::Annotator;
+    use weksa::corpus::ModelFamily;
+    let d = tempfile::tempdir().unwrap();
+    let mut entities = EntityStore::open(&d.path().join("e.cc")).unwrap();
+    let mut corpus = CorpusStore::open(&d.path().join("c.cc")).unwrap();
+    let model = Annotator::Model { family: ModelFamily::Anthropic, generator: "g".into() };
+    let work = || weksa::encode::WorkDraft::parse(LANTERN).unwrap();
+    let (cast, items) = work()
+        .into_import(&[marked(1, "[[entity:tamsin|Tamsin]], bring the lantern.")], &model)
+        .unwrap();
+    for e in cast {
+        assert_eq!(entities.put(e).unwrap(), AddOutcome::Added);
+    }
+    for i in items.clone() {
+        assert_eq!(corpus.add(i, &entities).unwrap(), AddOutcome::Added);
+    }
+    drop(corpus);
+    let mut corpus = CorpusStore::open(&d.path().join("c.cc")).unwrap();
+    let stored = corpus.get("item:lantern-wager:1").unwrap().unwrap();
+    assert_eq!(stored.names_by, Some(model.clone()));
+    assert_eq!(stored.names.len(), 1);
+    assert_eq!(corpus.add(items[0].clone(), &entities).unwrap(), AddOutcome::Unchanged);
+
+    // A form the entity does not list is the store's refusal, not the importer's.
+    let (_, bad) = work()
+        .into_import(&[marked(2, "[[entity:tamsin|Tamsin's]] lantern, said Orsa.")], &model)
+        .unwrap();
+    assert!(matches!(
+        refusal(corpus.add(bad[0].clone(), &entities)),
+        StoreRefusal::NameSpanNotAForm { .. }
+    ));
+
+    // An operator run over another line labels its own spans.
+    let (_, op) = work()
+        .into_import(&[marked(3, "Quiet, both of you.")], &Annotator::Operator)
+        .unwrap();
+    assert_eq!(corpus.add(op[0].clone(), &entities).unwrap(), AddOutcome::Added);
+    assert_eq!(
+        corpus.get("item:lantern-wager:3").unwrap().unwrap().names_by,
+        Some(Annotator::Operator)
+    );
+    // The first run's line keeps its label.
+    assert_eq!(corpus.get("item:lantern-wager:1").unwrap().unwrap().names_by, Some(model));
+}
+
+#[test]
+fn committed_items_read_with_no_names_label() {
+    let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
+    for sub in ["daodejing", "original"] {
+        let d = tempfile::tempdir().unwrap();
+        let copy = d.path().join("c.cc");
+        std::fs::copy(data.join(sub).join("corpus.cc"), &copy).unwrap();
+        let items = CorpusStore::open(&copy).unwrap().all().unwrap();
+        assert!(!items.is_empty(), "{sub}");
+        assert!(items.iter().all(|i| i.names_by.is_none()), "{sub}");
+    }
+}

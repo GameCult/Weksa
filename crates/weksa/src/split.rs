@@ -208,6 +208,7 @@ pub(crate) mod fixture {
             language: "en-US".into(),
             speaker: EntityId::parse("entity:nibu").unwrap(),
             names: vec![],
+            names_by: None,
             group: group.into(),
             prior_turns: vec![],
             source,
