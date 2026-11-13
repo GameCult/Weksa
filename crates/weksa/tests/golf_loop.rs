@@ -2645,6 +2645,9 @@ fn source_tripwires() {
         "Aggregate",
         "validation_mean",
         "validation_refused",
+        "ItemScore",
+        "LanguageScores",
+        "validation_scores",
     ] {
         assert!(!context.contains(banned), "context.rs names {banned}");
     }
@@ -3362,6 +3365,234 @@ fn a_run_from_before_does_not_open() {
     // No round of that run can be read: it stops at its first round or cycle.
     let reopened = RunStores::open(&root).unwrap();
     assert!(reopened.rounds().is_err());
+}
+
+/// A round as the file holds it, with key 22 the lib keeps private.
+#[derive(Clone, Debug, schemars::JsonSchema, cultcache_rs::DatabaseEntry)]
+#[cultcache(type = "weksa.loop_round")]
+struct ScoredRound {
+    #[cultcache(key = 0)]
+    n: u32,
+    #[cultcache(key = 1)]
+    inventory_rev: u32,
+    #[cultcache(key = 2)]
+    prompt_digest: String,
+    #[cultcache(key = 4)]
+    corpus_digest: String,
+    #[cultcache(key = 5)]
+    entity_digest: String,
+    #[cultcache(key = 6)]
+    model: String,
+    #[cultcache(key = 7)]
+    embedder: String,
+    #[cultcache(key = 8)]
+    chrf_version: String,
+    #[cultcache(key = 9)]
+    calls: Vec<weksa::run::Call>,
+    #[cultcache(key = 10)]
+    train: Vec<weksa::run::TrainRow>,
+    #[cultcache(key = 16)]
+    inventory_digest: String,
+    #[cultcache(key = 17)]
+    cycle: Option<u32>,
+    #[cultcache(key = 18)]
+    admit_rules: Vec<weksa::run::RuleCount>,
+    #[cultcache(key = 19)]
+    parse_reasons: Vec<weksa::run::RuleCount>,
+    #[cultcache(key = 20)]
+    own_family: u32,
+    #[cultcache(key = 21)]
+    languages: Vec<weksa::run::LanguageRound>,
+    #[cultcache(key = 22)]
+    validation_scores: Vec<weksa::run::LanguageScores>,
+}
+
+/// A round as written before key 22 existed.
+#[derive(Clone, Debug, schemars::JsonSchema, cultcache_rs::DatabaseEntry)]
+#[cultcache(type = "weksa.loop_round")]
+struct PreScoresRound {
+    #[cultcache(key = 0)]
+    n: u32,
+    #[cultcache(key = 1)]
+    inventory_rev: u32,
+    #[cultcache(key = 2)]
+    prompt_digest: String,
+    #[cultcache(key = 4)]
+    corpus_digest: String,
+    #[cultcache(key = 5)]
+    entity_digest: String,
+    #[cultcache(key = 6)]
+    model: String,
+    #[cultcache(key = 7)]
+    embedder: String,
+    #[cultcache(key = 8)]
+    chrf_version: String,
+    #[cultcache(key = 9)]
+    calls: Vec<weksa::run::Call>,
+    #[cultcache(key = 10)]
+    train: Vec<weksa::run::TrainRow>,
+    #[cultcache(key = 16)]
+    inventory_digest: String,
+    #[cultcache(key = 17)]
+    cycle: Option<u32>,
+    #[cultcache(key = 18)]
+    admit_rules: Vec<weksa::run::RuleCount>,
+    #[cultcache(key = 19)]
+    parse_reasons: Vec<weksa::run::RuleCount>,
+    #[cultcache(key = 20)]
+    own_family: u32,
+    #[cultcache(key = 21)]
+    languages: Vec<weksa::run::LanguageRound>,
+}
+
+/// The scores a round put in `run.cc`, read through the mirror (the lib's field
+/// is private). The run must be dropped first.
+fn stored_scores(root: &Path) -> Vec<weksa::run::LanguageScores> {
+    let mut cache = CultCache::new();
+    cache.register_entry_type::<RunRecord>().unwrap();
+    cache.register_entry_type::<ScoredRound>().unwrap();
+    cache
+        .add_generic_backing_store(SingleFileMessagePackBackingStore::new(root.join("run.cc")))
+        .unwrap();
+    cache.pull_all_backing_stores().unwrap();
+    cache.get_all::<ScoredRound>().unwrap().remove(0).validation_scores
+}
+
+/// The stored scores agree with the round's readings: one entry per language
+/// in the record's order, as many scores as Validation items (scored plus
+/// refused), the same means, and at least the refused items as exact zeros.
+fn assert_scores_match_readings(r: &RoundRecord, stored: &[weksa::run::LanguageScores]) {
+    let tags: Vec<&str> = r.languages().iter().map(|l| l.language.as_str()).collect();
+    let got: Vec<&str> = stored.iter().map(|l| l.language.as_str()).collect();
+    assert_eq!(got, tags, "one entry per panel language, in panel order");
+    for (reading, entry) in r.languages().iter().zip(stored) {
+        let m = &reading.validation_mean;
+        let v = reading.validation_refused;
+        let refused = (v.parse + v.admit + v.lower) as usize;
+        assert_eq!(entry.scores.len(), m.count, "{}", reading.language);
+        assert_eq!(entry.scores.len(), reading.validation_scored as usize + refused);
+        let n = entry.scores.len() as f64;
+        let chrf = entry.scores.iter().map(|s| s.chrf).sum::<f64>() / n;
+        assert!((chrf - m.chrf.unwrap()).abs() < 1e-9, "{}", reading.language);
+        let zeros = entry
+            .scores
+            .iter()
+            .filter(|s| s.chrf == 0.0 && s.meaning == Some(0.0))
+            .count();
+        assert!(zeros >= refused, "{}: refused items are stored as zeros", reading.language);
+    }
+}
+
+#[test]
+fn a_round_stores_one_score_per_validation_item() {
+    let mut dao = dao();
+    let mut model = fake(&good_answers());
+    let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    let root = dao.root.clone();
+    drop(dao.run);
+    let stored = stored_scores(&root);
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].language, "en-US");
+    assert_scores_match_readings(&r, &stored);
+}
+
+#[test]
+fn a_two_language_round_stores_each_languages_scores_in_panel_order() {
+    let mut dao = bilingual(LAOZI_JA);
+    let mut model = bilingual_fake();
+    // The ja-JP Validation item 13 is not an encodable draft: it scores 0.
+    model.answers.insert("item:daodejing:13".into(), "not a draft".into());
+    let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    let root = dao.root.clone();
+    drop(dao.run);
+    let stored = stored_scores(&root);
+    assert_scores_match_readings(&r, &stored);
+    let tags: Vec<&str> = stored.iter().map(|l| l.language.as_str()).collect();
+    assert_eq!(tags, ["en-US", "ja-JP"]);
+    // ja-JP: item 12 reads perfectly, then item 13 (the refused one), in
+    // stored item order; none of en-US's items is among them.
+    let ja: Vec<(f64, Option<f64>)> = stored[1].scores.iter().map(|s| (s.chrf, s.meaning)).collect();
+    assert_eq!(ja, [(100.0, Some(1.0)), (0.0, Some(0.0))]);
+    assert_eq!(stored[0].scores.len(), 2);
+    assert!(stored[0].scores.iter().all(|s| s.chrf < 100.0), "en-US holds its own items");
+}
+
+#[test]
+fn refused_validation_items_are_stored_as_zeros_at_every_stage() {
+    // Lower: the ja-JP items cite an entity with no ja-JP form.
+    let mut dao = bilingual(None);
+    let mut model = bilingual_fake();
+    let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    let root = dao.root.clone();
+    drop(dao.run);
+    let stored = stored_scores(&root);
+    assert_eq!(r.language("ja-JP").unwrap().validation_refused.lower, 2);
+    assert_scores_match_readings(&r, &stored);
+    assert!(stored[1].scores.iter().all(|s| s.chrf == 0.0 && s.meaning == Some(0.0)));
+
+    // Parse (item 3 is Validation) and Admit (item 2), one run each.
+    for (parse, admit) in [(true, false), (false, true)] {
+        let mut dao = self::dao();
+        let mut answers = good_answers();
+        if parse {
+            answers[2].1 = "not json at all".into();
+        }
+        if admit {
+            answers[1].1 = edited(2, unknown_concept);
+        }
+        let mut model = fake(&answers);
+        let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+        let root = dao.root.clone();
+        drop(dao.run);
+        let stored = stored_scores(&root);
+        let v = r.language("en-US").unwrap().validation_refused;
+        assert_eq!((v.parse, v.admit), (u32::from(parse), u32::from(admit)));
+        assert_scores_match_readings(&r, &stored);
+    }
+}
+
+#[test]
+fn an_old_run_without_scores_still_opens() {
+    let mut dao = dao();
+    let mut model = fake(&good_answers());
+    let r = recorded(round(&mut dao.run, &mut model, &Scorer::new(Bag)).unwrap());
+    let rec = dao.run.record().clone();
+    let root = dao.root.clone();
+    drop(dao.run);
+    let old = PreScoresRound {
+        n: r.n(),
+        inventory_rev: r.inventory_rev(),
+        prompt_digest: r.prompt_digest().into(),
+        corpus_digest: r.corpus_digest().into(),
+        entity_digest: r.entity_digest().into(),
+        model: r.model().into(),
+        embedder: r.embedder().into(),
+        chrf_version: r.chrf_version().into(),
+        calls: r.calls().to_vec(),
+        train: r.train().to_vec(),
+        inventory_digest: r.inventory_digest().into(),
+        cycle: r.cycle(),
+        admit_rules: vec![],
+        parse_reasons: vec![],
+        own_family: 0,
+        languages: vec![r.language("en-US").unwrap().clone()],
+    };
+    let _ = std::fs::remove_file(root.join("run.cc"));
+    {
+        let mut cache = CultCache::new();
+        cache.register_entry_type::<RunRecord>().unwrap();
+        cache.register_entry_type::<PreScoresRound>().unwrap();
+        cache
+            .add_generic_backing_store(SingleFileMessagePackBackingStore::new(root.join("run.cc")))
+            .unwrap();
+        cache.pull_all_backing_stores().unwrap();
+        cache.put("run:dao".to_string(), &rec).unwrap();
+        cache.put("run:dao:round:1".to_string(), &old).unwrap();
+    }
+    let reopened = RunStores::open(&root).unwrap();
+    let rounds = reopened.rounds().unwrap();
+    assert_eq!(rounds.len(), 1);
+    assert_eq!(rounds[0].language("en-US"), r.language("en-US"));
 }
 
 #[test]

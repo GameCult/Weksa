@@ -46,7 +46,7 @@ use crate::encode::{
 use crate::form::{is_attestation, is_language_tag, is_slug};
 use crate::model::{AnswerFiles, ModelPort, PortError};
 use crate::packet::{Packet, Stance};
-use crate::score::{CHRF_VERSION, chrf, Embedder, ItemScore, ScoreInput, Scorer, SplitMean, aggregate};
+use crate::score::{CHRF_VERSION, chrf, Embedder, ItemScore, ScoreInput, Scorer, SplitMean, aggregate, validation_items};
 use crate::split::{Split, SplitScheme, fnv1a64, fnv1a64_of, hex16};
 use crate::store::{
     CorpusStore, EntityStore, InventoryStore, OntologyStore, PacketStore, SpeakerStateStore,
@@ -246,9 +246,18 @@ pub struct LanguageRound {
     pub validation_refused: RefusalCounts,
 }
 
+/// One panel language's Validation scores in a round, in corpus order: numbers
+/// only, no item key and no text. Only `run.rs` reads them (the paired floor).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct LanguageScores {
+    pub language: String,
+    pub scores: Vec<ItemScore>,
+}
+
 /// One scored round. It holds no text and no Test reading: per-item rows for
-/// Train only, Validation only as means and refusal counts by stage. Only
-/// `run::round` builds one.
+/// Train only; Validation as means and refusal counts by stage, and as
+/// per-item scores (numbers only, private to this module). Only `run::round`
+/// builds one.
 ///
 /// ```
 /// fn f(r: &weksa::run::RoundRecord) -> u32 { r.n() }
@@ -277,6 +286,7 @@ pub struct LanguageRound {
 ///         parse_reasons: vec![],
 ///         own_family: 0,
 ///         languages: vec![],
+///         validation_scores: vec![],
 ///     }
 /// }
 /// ```
@@ -336,6 +346,12 @@ pub struct RoundRecord {
     // Key 20 is `own_family`; the per-language readings take 21.
     #[cultcache(key = 21)]
     languages: Vec<LanguageRound>,
+    /// Each panel language's live Validation scores in corpus order, a refused
+    /// item as 0. Private with no getter: only `run.rs` (the floor) reads them,
+    /// so a leak outside it is a compile error. A run from before has none.
+    #[cultcache(key = 22, default)]
+    #[schemars(default)]
+    validation_scores: Vec<LanguageScores>,
 }
 
 impl RoundRecord {
@@ -2069,6 +2085,7 @@ fn score_round<M: ModelPort, E: Embedder>(
 
     let mut train_rows = Vec::new();
     let mut languages: Vec<LanguageRound> = Vec::new();
+    let mut validation_scores: Vec<LanguageScores> = Vec::new();
     for tag in &run.record.panel {
         let of: Vec<(&CorpusItem, ItemScore)> = scored
             .iter()
@@ -2076,6 +2093,10 @@ fn score_round<M: ModelPort, E: Embedder>(
             .cloned()
             .collect();
         let means = aggregate(&of);
+        validation_scores.push(LanguageScores {
+            language: tag.clone(),
+            scores: validation_items(&of),
+        });
         languages.push(LanguageRound {
             language: tag.clone(),
             train_mean: means.train,
@@ -2153,6 +2174,7 @@ fn score_round<M: ModelPort, E: Embedder>(
             .collect(),
         own_family,
         languages,
+        validation_scores,
     };
     Ok(RoundOutcome::Recorded(record))
 }
@@ -2771,6 +2793,7 @@ mod tests {
             parse_reasons: vec![],
             own_family: 0,
             languages: vec![],
+            validation_scores: vec![],
         };
         assert_eq!(r.n(), 1);
     }
@@ -3286,6 +3309,7 @@ mod tests {
                 validation_scored: 2,
                 validation_refused: RefusalCounts::default(),
             }],
+            validation_scores: vec![],
         }
     }
 

@@ -28,7 +28,7 @@ pub struct ScoreInput<'a> {
     pub output: &'a str,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ItemScore {
     /// chrF of the output against the reference.
     pub chrf: f64,
@@ -131,13 +131,18 @@ pub struct Aggregate {
     pub validation: SplitMean,
 }
 
-/// The mean of the scores of the items read in split `want`.
-fn split_mean(scored: &[(&CorpusItem, ItemScore)], want: Split) -> SplitMean {
-    let of: Vec<&ItemScore> = scored
+/// The scores of the items read in split `want`, in list order.
+fn scores_in<'a>(scored: &'a [(&CorpusItem, ItemScore)], want: Split) -> Vec<&'a ItemScore> {
+    scored
         .iter()
         .filter(|(item, _)| SplitScheme::V1.live(item) == Some(want))
         .map(|(_, score)| score)
-        .collect();
+        .collect()
+}
+
+/// The mean of the scores of the items read in split `want`.
+fn split_mean(scored: &[(&CorpusItem, ItemScore)], want: Split) -> SplitMean {
+    let of = scores_in(scored, want);
     let average = |values: Vec<f64>| {
         (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64)
     };
@@ -155,6 +160,12 @@ pub fn aggregate(scored: &[(&CorpusItem, ItemScore)]) -> Aggregate {
         train: split_mean(scored, Split::Train),
         validation: split_mean(scored, Split::Validation),
     }
+}
+
+/// The Validation items' scores in list order, numbers only: no key, no text.
+/// A refused item arrives scored 0 and keeps its position.
+pub fn validation_items(scored: &[(&CorpusItem, ItemScore)]) -> Vec<ItemScore> {
+    scores_in(scored, Split::Validation).into_iter().cloned().collect()
 }
 
 /// The Test split's readings, scalars only: no item key, no minted string, no
@@ -247,6 +258,31 @@ mod tests {
 
     fn in_split(key: &str, text: &str, split: Split, model: bool) -> CorpusItem {
         item(key, text, &group_in(split), model)
+    }
+
+    #[test]
+    fn validation_items_keeps_validation_only_in_order() {
+        let train = in_split("item:t:1", UNRELATED, Split::Train, false);
+        let first = in_split("item:v:1", "first words", Split::Validation, false);
+        let refused = in_split("item:v:2", "second words", Split::Validation, false);
+        let last = in_split("item:v:3", "third words", Split::Validation, false);
+        let mut gone = in_split("item:v:4", "withdrawn words", Split::Validation, false);
+        gone.withdrawn = true;
+        let test = in_split("item:c:1", HELD_OUT, Split::Test, false);
+        let scored = [
+            (&train, score(10.0, Some(0.1))),
+            (&first, score(40.0, Some(0.4))),
+            (&test, score(60.0, Some(0.6))),
+            (&refused, score(0.0, Some(0.0))),
+            (&gone, score(90.0, Some(0.9))),
+            (&last, score(80.0, None)),
+        ];
+        let got = validation_items(&scored);
+        assert_eq!(
+            got,
+            [score(40.0, Some(0.4)), score(0.0, Some(0.0)), score(80.0, None)]
+        );
+        assert_eq!(got.len(), aggregate(&scored).validation.count);
     }
 
     #[test]
