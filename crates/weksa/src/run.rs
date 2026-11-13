@@ -1337,6 +1337,44 @@ type HeldSplit = (String, Split, Vec<(CorpusItem, Packet)>);
 type Lowered = (String, String, String, [Option<String>; 2]);
 
 impl RunStores {
+    /// The live items of each panel language in each listed split with their
+    /// round-`n` packets, per language then split, sorted by item key. A round
+    /// that is absent or a cycle's is `Malformed("round")`. Test is never held.
+    fn held_splits(&self, n: u32, splits: &[Split]) -> Result<Vec<HeldSplit>, RunError> {
+        let store = |_| RunError::Store;
+        self.rounds()
+            .map_err(store)?
+            .into_iter()
+            .find(|r| r.n() == n && r.cycle().is_none())
+            .ok_or(RunError::Malformed("round"))?;
+        let round_packets = PacketStore::open(&self.root.join(format!("round-{n}")).join("packets.cc"))
+            .map_err(store)?
+            .all()
+            .map_err(store)?;
+        let mut held: Vec<HeldSplit> = Vec::new();
+        for tag in &self.record.panel {
+            for split in splits {
+                held.push((tag.clone(), *split, Vec::new()));
+            }
+        }
+        for packet in round_packets {
+            let item = self
+                .corpus
+                .get(packet.provenance.corpus_item.as_str())
+                .map_err(store)?
+                .ok_or(RunError::Store)?;
+            for (language, split, items) in &mut held {
+                if *language == item.language && SplitScheme::V1.live(&item) == Some(*split) {
+                    items.push((item.clone(), packet.clone()));
+                }
+            }
+        }
+        for (_, _, items) in &mut held {
+            items.sort_by(|a, b| a.0.id.as_str().cmp(b.0.id.as_str()));
+        }
+        Ok(held)
+    }
+
     /// `<root>/ablation-<n>`, where a stance ablation's prompts, answers and
     /// variant packet stores live.
     pub fn ablation_dir(&self, n: u32) -> PathBuf {
@@ -1362,11 +1400,6 @@ impl RunStores {
     ) -> Result<AblationOutcome, RunError> {
         let store = |_| RunError::Store;
         check_drift(self, model, scorer)?;
-        self.rounds()
-            .map_err(store)?
-            .into_iter()
-            .find(|r| r.n() == n && r.cycle().is_none())
-            .ok_or(RunError::Malformed("round"))?;
         let inventory = self.inventory.inventory().map_err(store)?;
         let ontology = self.ontology.ontology().map_err(store)?;
 
@@ -1383,29 +1416,7 @@ impl RunStores {
             PacketStore::open(&dir.join("permute.cc")).map_err(store)?,
         ];
 
-        // Live Train and Validation packets, in item key order within a split.
-        let round_packets = PacketStore::open(&self.root.join(format!("round-{n}")).join("packets.cc"))
-            .map_err(store)?
-            .all()
-            .map_err(store)?;
-        let mut splits: Vec<HeldSplit> = Vec::new();
-        for tag in &self.record.panel {
-            for split in [Split::Train, Split::Validation] {
-                splits.push((tag.clone(), split, Vec::new()));
-            }
-        }
-        for packet in round_packets {
-            let item = self
-                .corpus
-                .get(packet.provenance.corpus_item.as_str())
-                .map_err(store)?
-                .ok_or(RunError::Store)?;
-            for (language, split, held) in &mut splits {
-                if *language == item.language && SplitScheme::V1.live(&item) == Some(*split) {
-                    held.push((item.clone(), packet.clone()));
-                }
-            }
-        }
+        let mut splits = self.held_splits(n, &[Split::Train, Split::Validation])?;
 
         let mut waiting: Vec<String> = Vec::new();
         let mut readings = Vec::new();
@@ -1413,7 +1424,6 @@ impl RunStores {
         let mut texts: Vec<Vec<Lowered>> = Vec::new();
         let mut unusable = vec![0u32; splits.len()];
         for (at, (_, _, held)) in splits.iter_mut().enumerate() {
-            held.sort_by(|a, b| a.0.id.as_str().cmp(b.0.id.as_str()));
             let mut rows = Vec::new();
             for (i, (item, packet)) in held.iter().enumerate() {
                 let packet_item = packet.provenance.corpus_item.clone();
@@ -1613,6 +1623,11 @@ fn check_drift<M: ModelPort + ?Sized, E: Embedder>(
     if model.model() != run.record.model {
         return Err(RunError::Drift(DriftOf::Model));
     }
+    check_embedder(run, scorer)
+}
+
+/// The embedder the run pinned is the one scoring.
+fn check_embedder<E: Embedder>(run: &RunStores, scorer: &Scorer<E>) -> Result<(), RunError> {
     if scorer.embedder().model() != run.record.embedder {
         return Err(RunError::Drift(DriftOf::Embedder));
     }
@@ -2223,14 +2238,19 @@ fn floor_of(
             let (a, b) = (replicate(1, tag)?, replicate(2, tag)?);
             Ok((
                 tag.clone(),
-                Reading {
-                    chrf: (a.chrf - b.chrf).abs(),
-                    meaning: (a.meaning - b.meaning).abs(),
-                    composite: (a.composite - b.composite).abs(),
-                },
+                spread(&a, &b),
             ))
         })
         .collect()
+}
+
+/// The absolute difference of two readings, metric by metric.
+fn spread(a: &Reading, b: &Reading) -> Reading {
+    Reading {
+        chrf: (a.chrf - b.chrf).abs(),
+        meaning: (a.meaning - b.meaning).abs(),
+        composite: (a.composite - b.composite).abs(),
+    }
 }
 
 /// Each panel language's Validation reading in `round`, in panel order.
