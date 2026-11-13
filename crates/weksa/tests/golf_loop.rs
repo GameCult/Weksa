@@ -4946,6 +4946,61 @@ fn a_cycle_decides_each_language_on_its_own_floor() {
     assert!(matches!(d.verdict(), Verdict::Rejected(Why::Regressed(_))), "{:?}", d.verdict());
 }
 
+/// A bilingual run whose head round loses one Validation item per language
+/// (en-US item 2, ja-JP item 13), then FLOOR_ARMS_MIN more rounds: the first `good_repeats`
+/// lose nothing, the rest lose what the head did. The candidate of the
+/// returned cycle loses nothing.
+fn bilingual_cycle(good_repeats: usize) -> Decision {
+    let mut dao = bilingual(LAOZI_JA);
+    let lossy = || {
+        let mut m = bilingual_fake();
+        for key in ["item:daodejing:2", "item:daodejing:13"] {
+            m.answers.insert(key.into(), "not a draft".into());
+        }
+        m
+    };
+    let mut head = lossy();
+    recorded(round(&mut dao.run, &mut head, &Scorer::new(Bag)).unwrap());
+    for i in 0..FLOOR_ARMS_MIN {
+        let mut repeat = if i < good_repeats { bilingual_fake() } else { lossy() };
+        recorded(round(&mut dao.run, &mut repeat, &Scorer::new(Bag)).unwrap());
+    }
+    let mut model = bilingual_fake();
+    model.candidate = Some((4, bilingual_answers()));
+    model.edit = Some(Ok(ONE_CONCEPT.to_string()));
+    run_cycle(&mut dao, &mut model)
+}
+
+/// The panel accepts on the sum of the languages' gains only past the noise of
+/// that sum (the root of their floors squared), through `cycle` and the floors
+/// `floor_of` measures. Each language's gain here is inside its own floor and
+/// the sum is past one step but inside the combined noise: a gain that looks
+/// real language by language and is not.
+#[test]
+fn cycle_noise_term_is_pinned_through_cycle() {
+    // One repeat in three reads the lost items back: a floor in both languages.
+    let d = bilingual_cycle(1);
+    let rows = d.panel();
+    assert_eq!(rows.len(), 2);
+    let delta = |r: &weksa::run::PanelReading| r.candidate.unwrap().composite - r.base.composite;
+    let sum: f64 = rows.iter().map(delta).sum();
+    let noise = rows.iter().map(|r| r.floor.composite.powi(2)).sum::<f64>().sqrt();
+    for r in rows {
+        assert!(r.floor.composite > 0.0, "{}: a floor to speak of", r.language);
+        assert!(delta(r) > 0.0, "{}: no language regressed", r.language);
+        assert!(r.candidate.unwrap().chrf >= r.base.chrf && r.candidate.unwrap().meaning >= r.base.meaning);
+    }
+    assert!(sum > LADDER_STEP, "the sum clears a step: {sum}");
+    assert!(sum < noise, "and is inside the noise of the sum: {sum} {noise}");
+    assert_eq!(d.verdict(), Verdict::Rejected(Why::NoGain));
+
+    // The same candidate over replicates that agree with the head has no noise to
+    // clear, and its gain is accepted.
+    let d = bilingual_cycle(0);
+    assert!(d.panel().iter().all(|r| r.floor.composite == 0.0));
+    assert_eq!(d.verdict(), Verdict::Accepted);
+}
+
 #[test]
 fn ablation_reads_each_language_apart() {
     let mut dao = bilingual(LAOZI_JA);
