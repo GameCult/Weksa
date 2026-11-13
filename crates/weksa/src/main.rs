@@ -154,8 +154,9 @@ enum LoopCommand {
         ollama_url: String,
     },
     /// Re-lower round ROUND's Validation packets through arm ARM, score them
-    /// against the items, and, with --floor ARM, decide against that second arm
-    /// by the panel accept rule. Prompts and answers live in
+    /// against the items, and, with --floor ARM given two or more times (prompted
+    /// repeats of the lowering), decide against the paired noise floor of those
+    /// repeats by the panel accept rule. Prompts and answers live in
     /// `<ROOT>/relower-<ROUND>-<ARM>`; the command exits 3 until the arm is
     /// answered. --lowerer names the arm's model in the printed line. A
     /// diagnostic, never a gate; records nothing; Test and Train are never
@@ -169,7 +170,7 @@ enum LoopCommand {
         #[arg(long)]
         lowerer: String,
         #[arg(long)]
-        floor: Option<String>,
+        floor: Vec<String>,
         #[arg(long, default_value = "http://127.0.0.1:11434")]
         ollama_url: String,
     },
@@ -1147,7 +1148,10 @@ fn main() -> Result<()> {
                 (1..=32).contains(&l.len())
                     && l.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
             };
-            if !label(&arm) || floor.as_deref().is_some_and(|f| !label(f) || f == arm) {
+            if !label(&arm)
+                || floor.iter().any(|f| !label(f) || *f == arm)
+                || floor.iter().enumerate().any(|(i, f)| floor[..i].contains(f))
+            {
                 anyhow::bail!("arm and floor labels must match [a-z0-9-]{{1,32}} and differ");
             }
             let run = RunStores::open(&root)?;
@@ -1156,16 +1160,19 @@ fn main() -> Result<()> {
                 run.record().model.clone(),
             );
             let mut files = run.answer_files(run.relower_dir(round, &arm))?;
-            let mut floor_port = floor.as_deref().map(|f| {
-                RecordedAnswers::new(run.relower_dir(round, f), run.record().model.clone())
-            });
+            let mut floor_ports: Vec<RecordedAnswers> = floor
+                .iter()
+                .map(|f| RecordedAnswers::new(run.relower_dir(round, f), run.record().model.clone()))
+                .collect();
+            let mut floor_dyn: Vec<&mut dyn ModelPort> =
+                floor_ports.iter_mut().map(|p| p as &mut dyn ModelPort).collect();
             let scorer = Scorer::new(OllamaEmbedder::new(&ollama_url, &run.record().embedder));
             match run.relower(
                 round,
                 &arm,
                 &mut recorded,
                 &mut files,
-                floor_port.as_mut().map(|p| p as &mut dyn ModelPort),
+                &mut floor_dyn,
                 &scorer,
             )? {
                 RelowerOutcome::Unanswered { prompts } => {

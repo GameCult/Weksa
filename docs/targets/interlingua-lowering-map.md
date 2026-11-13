@@ -359,7 +359,7 @@ the training set is the whole corpus re-encoded under the frozen revision.
 
 A lowerer is compared on round n's Validation packets with the prompts
 byte-identical to the round's, by `weksa loop relower ROOT --round N --arm ARM
---lowerer LABEL [--floor ARM2]`. Every arm is answered through the one prompt
+--lowerer LABEL [--floor ARM2 --floor ARM3 --floor ARM4]`. Every arm is answered through the one prompt
 door (`RunStores::answer_files`, the Test-text guard); a tuned model is a script
 that reads `<digest>.prompt` and writes `<digest>.answer` in
 `<ROOT>/relower-<N>-<ARM>`, not a new adapter. The recorded reading is the
@@ -369,15 +369,26 @@ ask: it is skipped, so the readings exclude it, and it is counted as `skipped=`
 on the line; `n` is the items read, so `recorded` can differ from the round's
 own Validation reading, which scores those items 0. An arm answer that is not a
 usable lowering scores 0 and counts in `unusable=`; the same for the floor arm,
-counted after `floor ... unusable=`. The floor is the spread of the recorded
-lowering and a second prompted arm (lowering-only noise, no encoder noise). The
-verdict is `decide_panel` over (recorded, arm, floor): Accepted is the rule's
-name for a gain past the floor, Rejected(Regressed) for a loss past it,
-Rejected(NoGain) for neither. None is yet a finding about the arm. The rule is calibration-pending: a one-pair floor is noisy
-(a simulated prompted repeat reads NoGain only about 7-15% of the time, Regressed
-44-60%, Accepted 33-41%), so NoGain is not yet evidence of non-inferiority and
-is not yet the bar for cut 13; the calibration arms (a prompted repeat, a
-control) decide what the floor must be before the verdict is read as a ruling.
+counted (over all floor arms) after `floor ... unusable=`. The floor needs three
+or more floor arms, each a prompted repeat of the recorded lowering on the same
+prompts: it is `FLOOR_Z` (3) standard errors of the mean per-item difference
+between the recorded lowering and a repeat, per metric, with the variances
+pooled over the arms (`paired_floor`; lowering-only noise, no encoder noise). The
+verdict is `decide_panel` over (recorded, arm, floor): Accepted is a composite
+gain past the noise of the panel's sum (the root of the languages' composite
+floors squared, at least one step), Rejected(Regressed) a loss past a language's
+floor, Rejected(NoGain) neither. The cycle's own floor is still the spread of two
+round replicates (`floor_of`); it has no per-item scores to pair.
+Calibration (`runs/distil-base`, 7 prompted draws, 14 en-US and 14 ja-JP
+Validation items; every base, candidate and 3-arm floor combination, 420 trials;
+intervals bootstrap over draws): a prompted repeat reads NoGain 92% (80 to 100),
+Regressed 8% (0 to 20), Accepted 0%; an all-"Yes." arm reads Regressed 100%; a
+mild degradation (one detail blurred per utterance) 99% (95 to 100); a subtler
+one 54% (15 to 95). At 14 items a degradation under about three standard errors
+(a composite near 0.06) cannot be told from noise, and no arm known to be better
+exists, so the rule's power to accept a real gain is unmeasured. `FLOOR_Z` was
+chosen on this data (2.5 gives NoGain 85% and 76% on the subtler arm), so the
+rates are in-sample.
 Training pairs are Train only, at a frozen revision; the export is 12b.
 
 ## Lowerer first cut (`golf-loop-lowerer-cut`)
