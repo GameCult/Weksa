@@ -5199,27 +5199,15 @@ fn a_round_stops_on_a_prompt_that_holds_test_text() {
     ));
 }
 
-/// Refuses every prompt as holding Test text, as the answer door does.
-struct Refuses;
-
-impl weksa::model::ModelPort for Refuses {
-    fn model(&self) -> &str {
-        "fake-model"
-    }
-    fn answer(&mut self, _: &weksa::context::Prompt) -> Result<String, weksa::model::PortError> {
-        Err(weksa::model::PortError::Withheld)
-    }
-}
-
 #[test]
-fn every_model_call_stops_on_a_withheld_prompt() {
+fn the_encode_step_and_ontology_mint_stop_on_a_withheld_prompt() {
     use weksa::run::{RunError, round};
     let w = world();
     let mut run = run_over(w.dir.path());
     let scorer = weksa::score::Scorer::new(OneBag);
-    let r = round(&mut run, &mut Refuses, &scorer);
+    let r = round(&mut run, &mut Withholds, &scorer);
     assert!(matches!(r, Err(RunError::Withheld)), "{:?}", r.map(|_| ()));
-    assert!(matches!(run.mint_ontology(&mut Refuses, "en-US"), Err(RunError::Withheld)));
+    assert!(matches!(run.mint_ontology(&mut Withholds, "en-US"), Err(RunError::Withheld)));
 }
 
 #[test]
@@ -5238,4 +5226,55 @@ fn model_written_test_group_text_is_withheld_too() {
             .any(|t| t == "A model line of a Test meaning."),
         "a model-written Test-group item is in no split, and its text is still held out"
     );
+}
+
+// ---- test-text-withheld-arms: a refused prompt stops every model call, none skips it ----
+
+/// Refuses every prompt as holding Test text, as the answer door does.
+struct Withholds;
+
+impl ModelPort for Withholds {
+    fn model(&self) -> &str {
+        "fake-model"
+    }
+    fn answer(&mut self, _: &Prompt) -> Result<String, PortError> {
+        Err(PortError::Withheld)
+    }
+}
+
+#[test]
+fn recall_stops_on_a_withheld_prompt() {
+    let dao = dao();
+    assert!(matches!(dao.run.recall(&mut Withholds), Err(RunError::Withheld)));
+}
+
+#[test]
+fn the_lowering_step_of_a_round_stops_on_a_withheld_prompt() {
+    // Encoding is answered; every lowering prompt is refused.
+    let mut dao = dao();
+    let mut model = fake(&good_answers());
+    model.raw_lowering = Some(Err(PortError::Withheld));
+    let r = round(&mut dao.run, &mut model, &Scorer::new(Bag));
+    assert!(matches!(r, Err(RunError::Withheld)), "{:?}", r.map(|_| ()));
+}
+
+#[test]
+fn the_cycle_editor_stops_on_a_withheld_prompt() {
+    let mut dao = dao();
+    two_rounds(&mut dao);
+    let mut model = cycle_fake(ONE_CONCEPT);
+    model.edit = Some(Err(PortError::Withheld));
+    let r = cycle(&mut dao.run, &mut model, &Scorer::new(Bag));
+    assert!(matches!(r, Err(RunError::Withheld)), "{:?}", r.map(|_| ()));
+}
+
+#[test]
+fn a_stance_ablation_stops_on_a_withheld_prompt() {
+    let (dao, _) = recorded_dao(|_| {});
+    let mut rec = Lowerer::new(blind);
+    let r = ablate(&dao, &mut rec, &mut Withholds);
+    assert!(matches!(r, Err(RunError::Withheld)), "{:?}", r.map(|_| ()));
+    // A recorded answer that is refused stops it as well.
+    let r = ablate(&dao, &mut Withholds, &mut Lowerer::new(blind));
+    assert!(matches!(r, Err(RunError::Withheld)), "{:?}", r.map(|_| ()));
 }
