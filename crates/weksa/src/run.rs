@@ -44,7 +44,7 @@ use crate::encode::{
     EditDraft, LoweringDraft, MAX_EDIT_CHANGES, OntologyDraft, PacketDraft, encoder_id,
 };
 use crate::form::{is_attestation, is_language_tag, is_slug};
-use crate::model::{AnswerFiles, ModelPort, PortError};
+use crate::model::{AnswerFiles, ModelPort, PortError, RecordedAnswers};
 use crate::packet::{Packet, Stance};
 use crate::score::{CHRF_VERSION, chrf, Embedder, ItemScore, ScoreInput, Scorer, SplitMean, aggregate, validation_items};
 use crate::split::{Split, SplitScheme, fnv1a64, fnv1a64_of, hex16};
@@ -1863,6 +1863,215 @@ fn reading_of(scored: &[ItemScore]) -> Result<Reading, RunError> {
     .ok_or(RunError::NoValidation)
 }
 
+/// How trials of one kind read: counts, not rates.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Counts {
+    pub trials: u32,
+    pub accepted: u32,
+    pub nogain: u32,
+    pub regressed: u32,
+}
+
+impl Counts {
+    fn tally(&mut self, v: Verdict) {
+        self.trials += 1;
+        match v {
+            Verdict::Accepted => self.accepted += 1,
+            Verdict::Rejected(Why::Regressed(_)) => self.regressed += 1,
+            Verdict::Rejected(_) => self.nogain += 1,
+        }
+    }
+}
+
+/// What [`calibration_trials`] counted over one set of items.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Trials {
+    /// Ordered (base, candidate) pairs of prompted draws, each over every floor.
+    pub prompted: Counts,
+    /// Per degraded arm in the order given: the arm as the candidate.
+    pub degraded: Vec<Counts>,
+    /// Every candidate arm as the candidate, pooled.
+    pub candidate: Counts,
+    /// The mean of [`panel_noise`] over every (base, floor) choice.
+    pub noise: f64,
+}
+
+/// Every `k`-subset of `pool`, in order.
+fn subsets(pool: &[usize], k: usize) -> Vec<Vec<usize>> {
+    if k == 0 {
+        return vec![Vec::new()];
+    }
+    let mut out = Vec::new();
+    for (i, &first) in pool.iter().enumerate() {
+        for mut rest in subsets(&pool[i + 1..], k - 1) {
+            rest.insert(0, first);
+            out.push(rest);
+        }
+    }
+    out
+}
+
+/// The accept rule replayed over draws that are all lowerings of one round, as
+/// the live loop would meet them: [`decide_panel`] over (base, candidate,
+/// [`paired_floor`] of the base against `FLOOR_ARMS_MIN` other prompted draws),
+/// one row per language. `draws` is `[port][language][item]`; ports
+/// `0..prompted` are prompted draws (the recorded lowering first), then
+/// `degraded` and `candidate` ports follow. A language with no items reads
+/// NaN, which fails closed.
+pub fn calibration_trials(
+    draws: &[Vec<Vec<ItemScore>>],
+    prompted: usize,
+    degraded: usize,
+    candidate: usize,
+) -> Trials {
+    let languages = draws.first().map_or(0, Vec::len);
+    let rows = |b: usize, c: usize, floors: &[usize]| -> Vec<(Reading, Reading, Reading)> {
+        let read = |scores: &[ItemScore]| {
+            reading_of(scores).unwrap_or(Reading { chrf: f64::NAN, meaning: f64::NAN, composite: f64::NAN })
+        };
+        (0..languages)
+            .map(|l| {
+                let arms: Vec<Vec<ItemScore>> = floors.iter().map(|&f| draws[f][l].clone()).collect();
+                (read(&draws[b][l]), read(&draws[c][l]), paired_floor(&draws[b][l], &arms))
+            })
+            .collect()
+    };
+    let pool: Vec<usize> = (0..prompted).collect();
+    let without = |out: &[usize]| -> Vec<usize> { pool.iter().copied().filter(|p| !out.contains(p)).collect() };
+    let (mut prompted_counts, mut candidate_counts) = (Counts::default(), Counts::default());
+    let mut degraded_counts = vec![Counts::default(); degraded];
+    let (mut noise, mut noises) = (0.0, 0u32);
+    for &b in &pool {
+        for floors in subsets(&without(&[b]), FLOOR_ARMS_MIN) {
+            for (d, counts) in degraded_counts.iter_mut().enumerate() {
+                counts.tally(decide_panel(&rows(b, prompted + d, &floors)));
+            }
+            for c in prompted + degraded..prompted + degraded + candidate {
+                candidate_counts.tally(decide_panel(&rows(b, c, &floors)));
+            }
+            noise += panel_noise(&rows(b, b, &floors));
+            noises += 1;
+        }
+        for &c in pool.iter().filter(|&&c| c != b) {
+            for floors in subsets(&without(&[b, c]), FLOOR_ARMS_MIN) {
+                prompted_counts.tally(decide_panel(&rows(b, c, &floors)));
+            }
+        }
+    }
+    Trials {
+        prompted: prompted_counts,
+        degraded: degraded_counts,
+        candidate: candidate_counts,
+        noise: noise / f64::from(noises),
+    }
+}
+
+/// One panel language of a class: items read and live Validation items of the
+/// class not read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClassLanguage {
+    pub language: String,
+    pub n: u32,
+    pub skipped: u32,
+}
+
+/// The trials over one class of items.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClassTrials {
+    pub name: String,
+    pub languages: Vec<ClassLanguage>,
+    pub trials: Trials,
+}
+
+#[derive(Debug)]
+pub enum CalibrateOutcome {
+    /// Draw labels with the number of prompts each has no answer to.
+    Unanswered(Vec<(String, u32)>),
+    /// `unusable` over every prompted, degraded and candidate draw; `all` first,
+    /// then the classes in the order given.
+    Read { unusable: u32, classes: Vec<ClassTrials> },
+}
+
+impl RunStores {
+    /// Replays the accept rule over answered relower draws: reads every draw of
+    /// round `n` (the recorded lowering and the `relower-<n>-<label>`
+    /// directories, through [`RecordedAnswers`] only, so nothing is written
+    /// there) with [`read_draws`](Self::read_draws), and counts
+    /// [`calibration_trials`] over all items and over each class, a class being
+    /// the items whose key starts with any of its prefixes. See
+    /// `docs/calibration.md`. Records nothing; the scratch packet store is
+    /// `<root>/calibrate-<n>/base.cc`.
+    pub fn calibrate<E: Embedder>(
+        &self,
+        n: u32,
+        prompted: &[String],
+        degraded: &[String],
+        candidate: &[String],
+        classes: &[(String, Vec<String>)],
+        scorer: &Scorer<E>,
+    ) -> Result<CalibrateOutcome, RunError> {
+        check_embedder(self, scorer)?;
+        let labels: Vec<&String> = prompted.iter().chain(degraded).chain(candidate).collect();
+        let mut recorded =
+            RecordedAnswers::new(self.root.join(format!("round-{n}")), self.record.model.clone());
+        let mut draws: Vec<RecordedAnswers> = labels
+            .iter()
+            .map(|l| RecordedAnswers::new(self.relower_dir(n, l), self.record.model.clone()))
+            .collect();
+        let mut ports: Vec<&mut dyn ModelPort> = vec![&mut recorded];
+        for d in draws.iter_mut() {
+            ports.push(d);
+        }
+        let dir = self.root.join(format!("calibrate-{n}"));
+        std::fs::create_dir_all(&dir).map_err(|e| RunError::Io(e.kind()))?;
+        let drawn = self.read_draws(n, &dir.join("base.cc"), &mut ports, scorer)?;
+        let missing: Vec<(String, u32)> = labels
+            .iter()
+            .zip(&drawn.waiting[1..])
+            .filter(|(_, w)| !w.is_empty())
+            .map(|(l, w)| ((*l).clone(), w.len() as u32))
+            .collect();
+        if !missing.is_empty() {
+            return Ok(CalibrateOutcome::Unanswered(missing));
+        }
+        let live = self.corpus.all().map_err(|_| RunError::Store)?;
+        let everything = [("all".to_string(), vec![String::new()])];
+        let mut out = Vec::new();
+        for (name, prefixes) in everything.iter().chain(classes) {
+            let keep = |id: &str| prefixes.iter().any(|p| id.starts_with(p.as_str()));
+            let mut by_port: Vec<Vec<Vec<ItemScore>>> = vec![Vec::new(); ports.len()];
+            let mut languages = Vec::new();
+            for l in &drawn.languages {
+                let items: Vec<&Vec<ItemScore>> =
+                    l.items.iter().filter(|(id, _)| keep(id)).map(|(_, s)| s).collect();
+                for (p, port) in by_port.iter_mut().enumerate() {
+                    port.push(items.iter().map(|s| s[p].clone()).collect());
+                }
+                let in_class = live
+                    .iter()
+                    .filter(|i| {
+                        i.language == l.language
+                            && SplitScheme::V1.live(i) == Some(Split::Validation)
+                            && keep(i.id.as_str())
+                    })
+                    .count() as u32;
+                languages.push(ClassLanguage {
+                    language: l.language.clone(),
+                    n: items.len() as u32,
+                    skipped: in_class - items.len() as u32,
+                });
+            }
+            out.push(ClassTrials {
+                name: name.clone(),
+                languages,
+                trials: calibration_trials(&by_port, prompted.len() + 1, degraded.len(), candidate.len()),
+            });
+        }
+        let unusable = drawn.languages.iter().map(|l| l.unusable[1..].iter().sum::<u32>()).sum();
+        Ok(CalibrateOutcome::Read { unusable, classes: out })
+    }
+}
+
 /// The distinct rule codes an admission refusal broke: validator rules by
 /// code, a store refusal by its variant name. Nothing from the packet or the
 /// stores is kept; an I/O failure is `io`.
@@ -2827,6 +3036,52 @@ fn discard_inventory(dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scored(chrf: f64, meaning: f64) -> ItemScore {
+        ItemScore { chrf, meaning: Some(meaning) }
+    }
+
+    /// A draw over `[language][item]`: `base` plus a per-draw, per-item wobble.
+    fn draw(languages: usize, items: usize, base: f64, wobble: f64, seed: usize) -> Vec<Vec<ItemScore>> {
+        (0..languages)
+            .map(|l| {
+                (0..items)
+                    .map(|i| {
+                        let w = wobble * (((i * 7 + seed * 3 + l) % 5) as f64 - 2.0) / 2.0;
+                        scored((100.0 * (base + w)).clamp(0.0, 100.0), (base + w).clamp(0.0, 1.0))
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn calibration_trials_count_every_choice_and_read_the_fixed_cases() {
+        // Six prompted draws, two degraded, three candidates, two languages of 8 items.
+        let mut draws: Vec<_> = (0..6).map(|s| draw(2, 8, 0.6, 0.02, s)).collect();
+        draws.extend((0..2).map(|_| draw(2, 8, 0.0, 0.0, 0)));
+        draws.extend((0..3).map(|s| draw(2, 8, 0.8, 0.02, s)));
+        let t = calibration_trials(&draws, 6, 2, 3);
+        assert_eq!(t.prompted.trials, 120);
+        assert_eq!(t.degraded.iter().map(|d| d.trials).collect::<Vec<_>>(), [60, 60]);
+        assert_eq!(t.candidate.trials, 6 * 10 * 3);
+        assert!(t.noise > 0.0);
+        // An all-zero draw regresses against any base, in every trial.
+        assert!(t.degraded.iter().all(|d| d.regressed == d.trials));
+        // A far better draw is accepted in every trial.
+        assert_eq!(t.candidate.accepted, t.candidate.trials);
+
+        // Identical prompted draws: nothing to gain, nothing regressed, no noise.
+        let same: Vec<_> = (0..6).map(|_| draw(2, 8, 0.6, 0.02, 1)).collect();
+        let t = calibration_trials(&same, 6, 0, 0);
+        assert_eq!((t.prompted.trials, t.prompted.nogain), (120, 120));
+        assert_eq!(t.noise, 0.0);
+
+        // A class of one item has no floor: every trial fails closed.
+        let one: Vec<_> = (0..6).map(|s| draw(2, 1, 0.6, 0.02, s)).collect();
+        let t = calibration_trials(&one, 6, 0, 0);
+        assert_eq!((t.prompted.trials, t.prompted.regressed), (120, 120));
+    }
 
     /// The twin of the `RoundRecord` literal in its compile_fail doctest: the
     /// same fields, compiling here because the fields are private to this module.
