@@ -1634,8 +1634,8 @@ impl RunStores {
 
     /// A diagnostic like [`recall`](Self::recall) and
     /// [`stance_ablation`](Self::stance_ablation), never a gate: it serves the
-    /// distil decision, whether a tuned lowerer beats or matches the prompted
-    /// one. Asks `arm` the byte-identical lowering prompts of round `n`'s live
+    /// distil decision, whether a tuned lowerer is worth keeping against the
+    /// prompted one (calibration-pending: see the map). Asks `arm` the byte-identical lowering prompts of round `n`'s live
     /// Validation items, reads the arm and the round's own lowering
     /// (`recorded`) against the items, and, given a `floor` arm (a second
     /// prompted lowering, so the floor is lowering-only noise), decides by

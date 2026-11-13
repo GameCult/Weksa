@@ -371,9 +371,9 @@ own Validation reading, which scores those items 0. An arm answer that is not a
 usable lowering scores 0 and counts in `unusable=`; the same for the floor arm,
 counted after `floor ... unusable=`. The floor is the spread of the recorded
 lowering and a second prompted arm (lowering-only noise, no encoder noise). The
-verdict is `decide_panel` over (recorded, arm, floor): Accepted means the arm
-helped, Rejected(Regressed) means it is worse, Rejected(NoGain) means it did
-not clearly help. The rule is calibration-pending: a one-pair floor is noisy
+verdict is `decide_panel` over (recorded, arm, floor): Accepted is the rule's
+name for a gain past the floor, Rejected(Regressed) for a loss past it,
+Rejected(NoGain) for neither. None is yet a finding about the arm. The rule is calibration-pending: a one-pair floor is noisy
 (a simulated prompted repeat reads NoGain only about 7-15% of the time, Regressed
 44-60%, Accepted 33-41%), so NoGain is not yet evidence of non-inferiority and
 is not yet the bar for cut 13; the calibration arms (a prompted repeat, a
