@@ -1,7 +1,7 @@
 //! The `weksa` command line: the same validator and store admission the library
 //! exposes, plus text projections (`dump`) that are for review and are not stores.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
@@ -20,7 +20,7 @@ use weksa::run::{
 use weksa::score::ScoreInput;
 use weksa::{
     Annotator, CorpusStore, EntityId, EntityStore, Family, InventoryStore, OllamaEmbedder, OntologyStore, OptionLabel,
-    PacketStore, PairRelation, Party, Scene, Slot, SpeakerStateStore, ValueKind, Scorer, Split, SplitScheme, StoreError, lower, pronounce, validate,
+    PacketStore, PairRelation, Party, Scene, Slot, SpeakerStateStore, ValueKind, Scorer, Split, SplitScheme, StoreError, StoreRefusal, lower, pronounce, validate,
 };
 
 #[derive(Parser)]
@@ -790,6 +790,38 @@ fn main() -> Result<()> {
                 );
             }
             let (new_entities, items) = draft.into_import(&marked, &annotator)?;
+            // Every document passes the real doors on scratch copies of the
+            // stores before the first write, so a refusal leaves them untouched.
+            let scratch = std::env::temp_dir().join(format!("weksa-import-{}", std::process::id()));
+            std::fs::create_dir_all(&scratch)?;
+            let dry = (|| -> Result<()> {
+                let copy = |from: &Path, name: &str| -> Result<PathBuf> {
+                    let to = scratch.join(name);
+                    if from.exists() {
+                        std::fs::copy(from, &to)?;
+                    }
+                    Ok(to)
+                };
+                let mut entities = EntityStore::open(&copy(&cli.entities, "e.cc")?)?;
+                let mut store = CorpusStore::open(&copy(&cli.corpus, "c.cc")?)?;
+                for e in new_entities.clone() {
+                    entities
+                        .put(e)
+                        .map_err(|e| anyhow::anyhow!("a cast entity: {e}"))?;
+                }
+                for item in items.clone() {
+                    let key = item.id.clone();
+                    store.add(item, &entities).map_err(|e| match e {
+                        StoreError::Refused(StoreRefusal::S6TextHeld { held_by, .. }) => {
+                            anyhow::anyhow!("{key} repeats the text of {held_by}")
+                        }
+                        e => anyhow::anyhow!("{key}: {e}"),
+                    })?;
+                }
+                Ok(())
+            })();
+            let _ = std::fs::remove_dir_all(&scratch);
+            dry?;
             let mut entities = EntityStore::open(&cli.entities)?;
             for e in new_entities {
                 let id = e.id.clone();

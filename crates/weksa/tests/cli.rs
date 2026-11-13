@@ -2202,3 +2202,77 @@ fn corpus_import_labels_spans_and_is_idempotent() {
     let dump = out(&weksa(d.path(), &["corpus", "dump"]));
     assert!(dump.contains("by Some(Model"), "{dump}");
 }
+
+const LANTERN_CAST: &str = r#""cast":[{"entity":"entity:orsa","forms":["Orsa"]},{"entity":"entity:tamsin","forms":["Tamsin","Tam"]}]"#;
+const LANTERN_SOURCE: &str = r#""source":{"PublicDomain":{"work":"The Lantern Wager","author":"A. Invented","edition_url":"https://example.invalid/lantern","licence":"public domain","jurisdiction":"US","translator":"none","edition_year":1890}}"#;
+
+/// Writes a work of `lines` (text per line, all said by Orsa) and an answer of
+/// `marked` per line, returns both paths.
+fn lantern(dir: &std::path::Path, lines: &[&str], marked: &[&str]) -> (String, String) {
+    let ls: Vec<String> = lines
+        .iter()
+        .map(|t| format!(r#"{{"group":"s1","speaker":"entity:orsa","text":"{t}"}}"#))
+        .collect();
+    let work = dir.join("w.json");
+    std::fs::write(
+        &work,
+        format!(
+            r#"{{"slug":"lantern-wager","language":"en-US","admitted_on":"2026-11-13",{LANTERN_SOURCE},{LANTERN_CAST},"lines":[{}]}}"#,
+            ls.join(",")
+        ),
+    )
+    .unwrap();
+    let names = dir.join("n.jsonl");
+    let rows: Vec<String> = marked
+        .iter()
+        .enumerate()
+        .map(|(i, m)| format!(r#"{{"line":{},"marked":"{m}"}}"#, i + 1))
+        .collect();
+    std::fs::write(&names, rows.join("\n")).unwrap();
+    (work.to_str().unwrap().into(), names.to_str().unwrap().into())
+}
+
+const MODEL: [&str; 4] = ["--model-family", "anthropic", "--generator", "a name annotator"];
+
+#[test]
+fn a_refused_import_writes_nothing_and_a_redraw_imports() {
+    let d = tempfile::tempdir().unwrap();
+    let lines = ["Tamsin, bring the lantern.", "Tamsin's lantern, said Orsa."];
+    let (w, n) = lantern(d.path(), &lines, &["[[entity:tamsin|Tamsin]], bring the lantern.", "[[entity:tamsin|Tamsin's]] lantern, said Orsa."]);
+    let import = |w: &str, n: &str| weksa(d.path(), &[&["corpus", "import", w, n][..], &MODEL].concat());
+    let bad = import(&w, &n);
+    assert!(!bad.status.success());
+    assert_eq!(out(&weksa(d.path(), &["corpus", "dump"])).trim(), "");
+    assert!(!d.path().join("e.cc").exists() || EntityStore::open(&d.path().join("e.cc")).unwrap().all().unwrap().is_empty());
+    // The redrawn answer, different on line 1 too, imports.
+    let (w, n) = lantern(d.path(), &lines, &["Tamsin, bring the lantern.", "[[entity:tamsin|Tamsin]]'s lantern, said Orsa."]);
+    let good = import(&w, &n);
+    assert!(good.status.success(), "{}", out(&good));
+    assert!(out(&good).contains("Added item:lantern-wager:2"));
+}
+
+#[test]
+fn a_work_repeating_a_line_is_refused_naming_both_lines() {
+    let d = tempfile::tempdir().unwrap();
+    let (w, n) = lantern(d.path(), &["No, my lord.", "No, my lord!", "Quiet, both of you."], &["No, my lord.", "No, my lord!", "Quiet, both of you."]);
+    let o = weksa(d.path(), &[&["corpus", "import", &w, &n][..], &MODEL].concat());
+    assert!(!o.status.success());
+    let err = String::from_utf8_lossy(&o.stderr).to_string();
+    assert!(err.contains("item:lantern-wager:2") && err.contains("item:lantern-wager:1"), "{err}");
+    assert_eq!(out(&weksa(d.path(), &["corpus", "dump"])).trim(), "");
+}
+
+#[test]
+fn the_annotator_flags_decide_the_label() {
+    let d = tempfile::tempdir().unwrap();
+    let (w, n) = lantern(d.path(), &["Quiet, both of you."], &["Quiet, both of you."]);
+    let none = weksa(d.path(), &["corpus", "import", &w, &n]);
+    assert!(!none.status.success());
+    let blank = weksa(d.path(), &["corpus", "import", &w, &n, "--model-family", "anthropic", "--generator", " "]);
+    assert!(!blank.status.success());
+    assert_eq!(out(&weksa(d.path(), &["corpus", "dump"])).trim(), "");
+    let op = weksa(d.path(), &["corpus", "import", &w, &n, "--operator"]);
+    assert!(op.status.success(), "{}", out(&op));
+    let dump = out(&weksa(d.path(), &["corpus", "dump"]));
+    assert!(dump.contains("by Some(Operator)"), "{dump}");
+}
