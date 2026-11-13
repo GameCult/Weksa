@@ -7,7 +7,8 @@
 //! provenance, constraints and extensions, and an empty trace, so a model that
 //! saw a Validation item cannot hand its words to whoever reads packets. The
 //! editor writes family, gloss, value kind and slots only; `into_revision` sets
-//! every id and revision number.
+//! every id and revision number. The public-domain intake file (`WorkDraft`) and
+//! its name-span answer (`MarkedLine`) are read here too.
 
 use std::fmt;
 use std::num::NonZeroU32;
@@ -15,7 +16,12 @@ use std::num::NonZeroU32;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use crate::corpus::CorpusItemId;
+use unicode_normalization::UnicodeNormalization;
+
+use crate::corpus::{CorpusItem, CorpusItemId, NameSpan, Source, item_key};
+use crate::entity::{Entity, EntityOrigin, LanguageForms};
+use crate::form::is_slug;
+use crate::packet::EntityId;
 use crate::inventory::{
     Change, Family, InvId, Inventory, InventoryEntry, InventoryRevision, Slot, ValueKind,
 };
@@ -356,6 +362,196 @@ impl LoweringDraft {
                 .chars()
                 .any(|c| c.is_control() && !matches!(c, '\n' | '\t'))
     }
+}
+
+/// One cast member of a work: the entity and the forms the work spells it with,
+/// in the work's language, citation form first.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CastDraft {
+    pub entity: EntityId,
+    pub forms: Vec<String>,
+}
+
+/// One line of a work: its scene group, the speaker its speech prefix names, text.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LineDraft {
+    pub group: String,
+    pub speaker: EntityId,
+    pub text: String,
+}
+
+/// A transcription of a public-domain work in hand: provenance, cast forms,
+/// lines, scene groups and the speaker each speech prefix names. It holds no
+/// distributor header, licence or trademark text, and nothing reads a URL.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkDraft {
+    pub slug: String,
+    pub language: String,
+    pub admitted_on: String,
+    pub source: Source,
+    pub cast: Vec<CastDraft>,
+    pub lines: Vec<LineDraft>,
+}
+
+/// One line of a name-span answer: the line number and the line copied with
+/// `[[entity:<slug>|<form>]]` around each place it names a cast member.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MarkedLine {
+    pub line: u32,
+    pub marked: String,
+}
+
+impl MarkedLine {
+    pub fn parse(answer: &str) -> Result<Self, DraftError> {
+        from_json(answer)
+    }
+}
+
+/// Why an import was refused before any document was written. The text names
+/// the kind and the line number only, never a value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ImportRefusal {
+    NotPublicDomain,
+    CastRepeated,
+    NoSuchLine { line: u32 },
+    LineMarkedTwice { line: u32 },
+    Group { line: u32 },
+    SpeakerNotInCast { line: u32 },
+    Markup { line: u32 },
+    NotInCast { line: u32 },
+}
+
+impl fmt::Display for ImportRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotPublicDomain => write!(f, "the work's source is not public domain"),
+            Self::CastRepeated => write!(f, "a cast entity is listed twice"),
+            Self::NoSuchLine { line } => write!(f, "the answer marks a line that is not there (line {line})"),
+            Self::LineMarkedTwice { line } => write!(f, "line {line} is marked twice"),
+            Self::Group { line } => write!(f, "the group of line {line} is not a slug"),
+            Self::SpeakerNotInCast { line } => write!(f, "the speaker of line {line} is not in the cast"),
+            Self::Markup { line } => write!(f, "the marked text of line {line} is not its text with markup"),
+            Self::NotInCast { line } => write!(f, "line {line} marks an entity outside the cast"),
+        }
+    }
+}
+
+impl std::error::Error for ImportRefusal {}
+
+impl WorkDraft {
+    pub fn parse(file: &str) -> Result<Self, DraftError> {
+        from_json(file)
+    }
+
+    /// The cast entities and the corpus items for the lines `marked` covers, in
+    /// line order, each item's spans read from its markup and labelled
+    /// `annotator`. Decides everything before any write; whether the documents
+    /// are admissible is `EntityStore::put` and `CorpusStore::add`'s to refuse.
+    pub fn into_import(
+        self,
+        marked: &[MarkedLine],
+        annotator: &Annotator,
+    ) -> Result<(Vec<Entity>, Vec<CorpusItem>), ImportRefusal> {
+        let Source::PublicDomain { work, .. } = &self.source else {
+            return Err(ImportRefusal::NotPublicDomain);
+        };
+        let mut entities = Vec::new();
+        for c in &self.cast {
+            if entities.iter().any(|e: &Entity| e.id == c.entity) {
+                return Err(ImportRefusal::CastRepeated);
+            }
+            entities.push(Entity {
+                id: c.entity.clone(),
+                forms: vec![LanguageForms {
+                    language: self.language.clone(),
+                    forms: c.forms.iter().map(|f| f.nfc().collect()).collect(),
+                    pronunciation: None,
+                }],
+                origin: EntityOrigin::PublicDomain { work: work.clone() },
+            });
+        }
+        let in_cast = |id: &EntityId| entities.iter().any(|e| &e.id == id);
+        let mut answer: Vec<&MarkedLine> = marked.iter().collect();
+        answer.sort_by_key(|m| m.line);
+        let mut items = Vec::new();
+        for (i, m) in answer.iter().enumerate() {
+            let line = m.line;
+            if line == 0 || line as usize > self.lines.len() {
+                return Err(ImportRefusal::NoSuchLine { line });
+            }
+            if i > 0 && answer[i - 1].line == line {
+                return Err(ImportRefusal::LineMarkedTwice { line });
+            }
+            let draft = &self.lines[line as usize - 1];
+            let group = format!("{}-{}", self.slug, draft.group);
+            if !is_slug(&group) {
+                return Err(ImportRefusal::Group { line });
+            }
+            if !in_cast(&draft.speaker) {
+                return Err(ImportRefusal::SpeakerNotInCast { line });
+            }
+            let text: String = draft.text.nfc().collect();
+            if text.contains("[[") || text.contains("]]") {
+                return Err(ImportRefusal::Markup { line });
+            }
+            let marked_nfc: String = m.marked.nfc().collect();
+            let (plain, names) = match unmark(&marked_nfc) {
+                Some((plain, names)) if plain == text => (plain, names),
+                _ => return Err(ImportRefusal::Markup { line }),
+            };
+            if names.iter().any(|n| !in_cast(&n.entity)) {
+                return Err(ImportRefusal::NotInCast { line });
+            }
+            items.push(CorpusItem {
+                id: item_key(&self.slug, line),
+                text: plain,
+                language: self.language.clone(),
+                speaker: draft.speaker.clone(),
+                group,
+                prior_turns: Vec::new(),
+                source: self.source.clone(),
+                admitted_on: self.admitted_on.clone(),
+                supersedes: None,
+                withdrawn: false,
+                names,
+                names_by: Some(annotator.clone()),
+            });
+        }
+        Ok((entities, items))
+    }
+}
+
+/// The text of `marked` with `[[entity|form]]` replaced by `form`, and the
+/// byte span of each form in that text. `None` for any malformed markup. The
+/// only search is for the markup delimiters.
+fn unmark(marked: &str) -> Option<(String, Vec<NameSpan>)> {
+    let mut out = String::with_capacity(marked.len());
+    let mut names = Vec::new();
+    let mut rest = marked;
+    while let Some(at) = rest.find("[[") {
+        out.push_str(&rest[..at]);
+        let inner = &rest[at + 2..];
+        let (id, after) = inner.split_once('|')?;
+        let (form, tail) = after.split_once("]]")?;
+        if form.is_empty() || form.contains("[[") || id.contains("]]") {
+            return None;
+        }
+        let entity = EntityId::parse(id).ok()?;
+        let start = u32::try_from(out.len()).ok()?;
+        out.push_str(form);
+        names.push(NameSpan {
+            entity,
+            start,
+            end: u32::try_from(out.len()).ok()?,
+        });
+        rest = tail;
+    }
+    out.push_str(rest);
+    Some((out, names))
 }
 
 /// `encoder:<hex16>`, a digest of the model id and the prompt digest.
@@ -745,5 +941,125 @@ mod tests {
         );
         assert!(entries.iter().all(|e| e.annotator == by));
         assert_eq!(entries[1].examples, ["x"]);
+    }
+
+    const WORK: &str = r#"{"slug":"lantern-wager","language":"en-US","admitted_on":"2026-11-13",
+        "source":{"PublicDomain":{"work":"The Lantern Wager","author":"A. Invented","edition_url":"https://example.invalid/lantern","licence":"public domain","jurisdiction":"US","translator":"none","edition_year":1890}},
+        "cast":[{"entity":"entity:orsa","forms":["Orsa"]},{"entity":"entity:tamsin","forms":["Tamsin","Tam"]},{"entity":"entity:wexmoor","forms":["Wexmoor"]}],
+        "lines":[{"group":"s1","speaker":"entity:orsa","text":"Tamsin, bring the lantern."},
+                 {"group":"s1","speaker":"entity:tamsin","text":"Orsa, I will not, said Tam."},
+                 {"group":"s2","speaker":"entity:wexmoor","text":"Quiet, both of you."}]}"#;
+
+    fn marked(line: u32, text: &str) -> MarkedLine {
+        MarkedLine { line, marked: text.into() }
+    }
+
+    fn model_annotator() -> Annotator {
+        Annotator::Model {
+            family: crate::corpus::ModelFamily::Anthropic,
+            generator: "g".into(),
+        }
+    }
+
+    fn import(
+        work: &str,
+        answer: &[MarkedLine],
+    ) -> Result<(Vec<Entity>, Vec<CorpusItem>), ImportRefusal> {
+        WorkDraft::parse(work).unwrap().into_import(answer, &model_annotator())
+    }
+
+    #[test]
+    fn a_work_imports_its_cast_and_marked_lines() {
+        let answer = [
+            marked(1, "[[entity:tamsin|Tamsin]], bring the lantern."),
+            marked(2, "[[entity:orsa|Orsa]], I will not, said [[entity:tamsin|Tam]]."),
+        ];
+        let (entities, items) = import(WORK, &answer).unwrap();
+        assert_eq!(entities.len(), 3);
+        for e in &entities {
+            assert!(matches!(&e.origin, EntityOrigin::PublicDomain { work } if work == "The Lantern Wager"));
+            assert_eq!(e.forms[0].language, "en-US");
+        }
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].id, "item:lantern-wager:1");
+        assert_eq!(items[1].id, "item:lantern-wager:2");
+        assert_eq!(items[0].group, "lantern-wager-s1");
+        let span = |e: &str, text: &str, form: &str| {
+            let start = text.find(form).unwrap() as u32;
+            NameSpan { entity: EntityId::parse(e).unwrap(), start, end: start + form.len() as u32 }
+        };
+        let t2 = &items[1].text;
+        assert_eq!(items[0].names, [span("entity:tamsin", &items[0].text, "Tamsin")]);
+        assert_eq!(
+            items[1].names,
+            [span("entity:orsa", t2, "Orsa"), span("entity:tamsin", t2, "Tam")]
+        );
+        // "will" is unmarked and unspanned; the line's speaker is the file's.
+        assert_eq!(items[1].speaker, EntityId::parse("entity:tamsin").unwrap());
+        for i in &items {
+            assert_eq!(i.names_by, Some(model_annotator()));
+            assert!(i.prior_turns.is_empty() && i.supersedes.is_none() && !i.withdrawn);
+        }
+    }
+
+    #[test]
+    fn an_import_refuses_before_any_document() {
+        let ok = marked(1, "Tamsin, bring the lantern.");
+        let refused = |work: &str, answer: &[MarkedLine]| import(work, answer).unwrap_err();
+        let cast_authored = WORK.replace(
+            r#"{"PublicDomain":{"work":"The Lantern Wager","author":"A. Invented","edition_url":"https://example.invalid/lantern","licence":"public domain","jurisdiction":"US","translator":"none","edition_year":1890}}"#,
+            r#""OperatorWritten""#,
+        );
+        assert_eq!(refused(&cast_authored, std::slice::from_ref(&ok)), ImportRefusal::NotPublicDomain);
+        let repeated = WORK.replace(r#"{"entity":"entity:orsa","forms":["Orsa"]}"#, r#"{"entity":"entity:orsa","forms":["Orsa"]},{"entity":"entity:orsa","forms":["O"]}"#);
+        assert_eq!(refused(&repeated, std::slice::from_ref(&ok)), ImportRefusal::CastRepeated);
+        let stranger = WORK.replace(r#""speaker":"entity:orsa""#, r#""speaker":"entity:stranger""#);
+        assert_eq!(refused(&stranger, std::slice::from_ref(&ok)), ImportRefusal::SpeakerNotInCast { line: 1 });
+        assert_eq!(refused(WORK, &[marked(9, "x")]), ImportRefusal::NoSuchLine { line: 9 });
+        assert_eq!(refused(WORK, &[marked(0, "x")]), ImportRefusal::NoSuchLine { line: 0 });
+        assert_eq!(
+            refused(WORK, &[ok.clone(), ok.clone()]),
+            ImportRefusal::LineMarkedTwice { line: 1 }
+        );
+        for bad in [
+            "[[entity:tamsin|Tamsin, bring the lantern.",
+            "[[entity:tamsin Tamsin]], bring the lantern.",
+            "[[tamsin|Tamsin]], bring the lantern.",
+            "[[entity:tamsin|]]Tamsin, bring the lantern.",
+            "Tamsin, bring the lantern",
+        ] {
+            assert_eq!(refused(WORK, &[marked(1, bad)]), ImportRefusal::Markup { line: 1 }, "{bad}");
+        }
+        assert_eq!(
+            refused(WORK, &[marked(1, "[[entity:stranger|Tamsin]], bring the lantern.")]),
+            ImportRefusal::NotInCast { line: 1 }
+        );
+        let group = WORK.replace(r#""group":"s1""#, r#""group":"S 1""#);
+        assert_eq!(refused(&group, &[ok]), ImportRefusal::Group { line: 1 });
+        let bracketed = WORK.replace("Tamsin, bring the lantern.", "Tamsin [[bring]] the lantern.");
+        assert_eq!(
+            refused(&bracketed, &[marked(1, "[[entity:tamsin|Tamsin]] [[entity:orsa|bring]] the lantern.")]),
+            ImportRefusal::Markup { line: 1 }
+        );
+        // The refusal text names the kind and the line, no value.
+        assert_eq!(
+            ImportRefusal::Markup { line: 1 }.to_string(),
+            "the marked text of line 1 is not its text with markup"
+        );
+    }
+
+    #[test]
+    fn markup_offsets_are_bytes_of_the_nfc_text() {
+        let work = WORK
+            .replace("Tamsin, bring the lantern.", "Caf\u{e9} Zo\u{eb}")
+            .replace(r#""forms":["Orsa"]"#, r#""forms":["Zoe\u0308"]"#);
+        let decomposed = "Cafe\u{301} [[entity:orsa|Zoe\u{308}]]";
+        let (entities, items) = import(&work, &[marked(1, decomposed)]).unwrap();
+        assert_eq!(entities[0].forms[0].forms, ["Zo\u{eb}"]);
+        let item = &items[0];
+        assert_eq!(item.text, "Caf\u{e9} Zo\u{eb}");
+        let n = &item.names[0];
+        assert_eq!(&item.text[n.start as usize..n.end as usize], "Zo\u{eb}");
+        assert_eq!(n.start, 6);
     }
 }

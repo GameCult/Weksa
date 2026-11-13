@@ -8,7 +8,7 @@ use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use unicode_normalization::UnicodeNormalization;
 use weksa::corpus::{CorpusItem, ModelFamily, NameSpan, Source, Turn};
-use weksa::encode::{EditDraft, OntologyDraft};
+use weksa::encode::{EditDraft, MarkedLine, OntologyDraft, WorkDraft};
 use weksa::entity::{Entity, EntityOrigin, LanguageForms, Pronunciation};
 use weksa::inventory::{proof_revision, seed, speaker_scene_revision};
 use weksa::packet::{FeatValue, FeatureValue, Grade};
@@ -241,6 +241,22 @@ enum CorpusCommand {
     Dump,
     Withdraw {
         key: String,
+    },
+    /// Import a transcribed public-domain work: mint its cast as entities and
+    /// add each line a name-span answer covers (`docs/name-span-annotation.md`).
+    Import {
+        /// The work file: provenance, cast, lines.
+        work: PathBuf,
+        /// The annotator's answer: one `{"line": N, "marked": "..."}` per line.
+        names: PathBuf,
+        #[arg(long, requires = "generator", conflicts_with = "operator")]
+        model_family: Option<ModelFamilyArg>,
+        /// The attestation string naming the annotating model.
+        #[arg(long, requires = "model_family")]
+        generator: Option<String>,
+        /// Annotated by the operator, not a model.
+        #[arg(long)]
+        operator: bool,
     },
 }
 
@@ -681,6 +697,7 @@ impl AddArgs {
             supersedes: self.supersedes,
             withdrawn: false,
             names,
+            names_by: None,
         })
     }
 }
@@ -696,6 +713,22 @@ fn split_text(item: &CorpusItem) -> String {
     SplitScheme::V1
         .split(item)
         .map_or_else(|| "excluded".to_string(), |s| format!("{s:?}"))
+}
+
+/// The annotator the flags name: a model family with its generator, or the operator.
+fn annotator(
+    model_family: Option<ModelFamilyArg>,
+    generator: Option<String>,
+    operator: bool,
+) -> Result<Annotator> {
+    match (model_family, generator, operator) {
+        (Some(family), Some(generator), false) => Ok(Annotator::Model {
+            family: family.into(),
+            generator,
+        }),
+        (None, None, true) => Ok(Annotator::Operator),
+        _ => bail!("name the annotator: --model-family with --generator, or --operator"),
+    }
 }
 
 fn refused(e: StoreError) -> anyhow::Error {
@@ -737,13 +770,46 @@ fn main() -> Result<()> {
                 .map_err(refused)?;
             println!("{outcome:?} {key}");
         }
+        Command::Corpus(CorpusCommand::Import {
+            work,
+            names,
+            model_family,
+            generator,
+            operator,
+        }) => {
+            let annotator = annotator(model_family, generator, operator)?;
+            let draft = WorkDraft::parse(&std::fs::read_to_string(&work)?)?;
+            let mut marked = Vec::new();
+            for (i, line) in std::fs::read_to_string(&names)?.lines().enumerate() {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                marked.push(
+                    MarkedLine::parse(line)
+                        .map_err(|e| anyhow::anyhow!("names line {}: {e}", i + 1))?,
+                );
+            }
+            let (new_entities, items) = draft.into_import(&marked, &annotator)?;
+            let mut entities = EntityStore::open(&cli.entities)?;
+            for e in new_entities {
+                let id = e.id.clone();
+                let outcome = entities.put(e).map_err(refused)?;
+                println!("{outcome:?} {id}");
+            }
+            let mut store = CorpusStore::open(&cli.corpus)?;
+            for item in items {
+                let (key, split) = (item.id.clone(), split_text(&item));
+                let outcome = store.add(item, &entities).map_err(refused)?;
+                println!("{outcome:?} {key} {split}");
+            }
+        }
         Command::Corpus(CorpusCommand::Dump) => {
             for i in CorpusStore::open(&cli.corpus)?.all()? {
                 let split = split_text(&i);
                 let withdrawn = if i.withdrawn { " withdrawn" } else { "" };
                 println!(
-                    "{} [{} {} group={} {split}{withdrawn}]\n  {:?}\n  names: {:?}\n  source: {:?}",
-                    i.id, i.language, i.speaker, i.group, i.text, i.names, i.source
+                    "{} [{} {} group={} {split}{withdrawn}]\n  {:?}\n  names: {:?} by {:?}\n  source: {:?}",
+                    i.id, i.language, i.speaker, i.group, i.text, i.names, i.names_by, i.source
                 );
             }
         }
@@ -880,14 +946,7 @@ fn main() -> Result<()> {
             generator,
             operator,
         }) => {
-            let annotator = match (model_family, generator, operator) {
-                (Some(family), Some(generator), false) => Annotator::Model {
-                    family: family.into(),
-                    generator,
-                },
-                (None, None, true) => Annotator::Operator,
-                _ => bail!("name the annotator: --model-family with --generator, or --operator"),
-            };
+            let annotator = annotator(model_family, generator, operator)?;
             let inventory_store = InventoryStore::open(&cli.inventory)?;
             let inventory = inventory_store.inventory()?;
             let corpus = CorpusStore::open(&cli.corpus)?;

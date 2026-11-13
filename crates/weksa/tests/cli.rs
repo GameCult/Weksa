@@ -2164,3 +2164,41 @@ fn inventory_admit_cap_is_256_and_a_refusal_writes_nothing() {
     assert!(admitted.status.success(), "{}", out(&admitted));
     assert!(out(&admitted).contains("admitted rev:2 with 256 entries"));
 }
+
+#[test]
+fn corpus_import_labels_spans_and_is_idempotent() {
+    let d = tempfile::tempdir().unwrap();
+    let work = d.path().join("work.json");
+    std::fs::write(
+        &work,
+        r#"{"slug":"lantern-wager","language":"en-US","admitted_on":"2026-11-13",
+        "source":{"PublicDomain":{"work":"The Lantern Wager","author":"A. Invented","edition_url":"https://example.invalid/lantern","licence":"public domain","jurisdiction":"US","translator":"none","edition_year":1890}},
+        "cast":[{"entity":"entity:orsa","forms":["Orsa"]},{"entity":"entity:tamsin","forms":["Tamsin","Tam"]}],
+        "lines":[{"group":"s1","speaker":"entity:orsa","text":"Tamsin, bring the lantern."},
+                 {"group":"s1","speaker":"entity:tamsin","text":"Orsa, I will not."}]}"#,
+    )
+    .unwrap();
+    let names = d.path().join("names.jsonl");
+    std::fs::write(
+        &names,
+        concat!(
+            r#"{"line":1,"marked":"[[entity:tamsin|Tamsin]], bring the lantern."}"#, "\n\n",
+            r#"{"line":2,"marked":"[[entity:orsa|Orsa]], I will not."}"#, "\n",
+        ),
+    )
+    .unwrap();
+    let (w, n) = (work.to_str().unwrap(), names.to_str().unwrap());
+    let bare = weksa(d.path(), &["corpus", "import", w, n]);
+    assert!(!bare.status.success());
+    let flags = ["--model-family", "anthropic", "--generator", "a name annotator"];
+    let run = || weksa(d.path(), &[&["corpus", "import", w, n][..], &flags].concat());
+    let first = run();
+    assert!(first.status.success(), "{}", out(&first));
+    let text = out(&first);
+    assert!(text.contains("Added item:lantern-wager:1 ") && text.contains("Added item:lantern-wager:2 "), "{text}");
+    assert!(text.contains("Added entity:orsa"), "{text}");
+    let second = out(&run());
+    assert!(second.contains("Unchanged item:lantern-wager:1 ") && !second.contains("Added"), "{second}");
+    let dump = out(&weksa(d.path(), &["corpus", "dump"]));
+    assert!(dump.contains("by Some(Model"), "{dump}");
+}
