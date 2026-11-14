@@ -172,6 +172,9 @@ impl Checkpoint {
     }
 }
 
+#[cfg(test)]
+mod mutants;
+
 /// Item builders for the unit tests that live in `src`: the twins of
 /// `tests/common`'s `group_in_bucket`, `item_in`, `cast` and `model`.
 #[cfg(test)]
