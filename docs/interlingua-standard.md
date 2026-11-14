@@ -204,7 +204,7 @@ committed packet uses it, but the encoder sees it, and `V14` and `V15` check onl
 the consent field, so a model-encoded `frame:3` predication with a null
 `addressee_consent` reaches `Prompt::lower` and nothing refuses it. The retired
 gate covered only the deleted `lower()`. Follow-up
-`table-retirement-consent-owner` owns the gap.
+`table-retirement-consent-gap` owns the gap.
 
 ### `stance`
 
