@@ -65,3 +65,43 @@ fn an_uncited_speaker_is_absent_from_the_lowering_prompt() {
     assert!(text.contains("\n\nentities: {\"entity:nibu\":[\"Nibu\"]}\n\n"), "{text}");
     assert!(!text.contains("SPEAKERCANARY"), "{text}");
 }
+
+/// A run refuses a panel language that lacks a live Train or a live Validation
+/// item: one no item carries, one with only a Test item, one with only Train.
+#[test]
+fn a_panel_language_no_item_carries_is_refused_at_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    // Builds the corpus, entity and ontology stores the run reads.
+    drop(common::run_over(d));
+    let entities = common::entities_in(d);
+    let mut corpus = CorpusStore::open(&d.join("c.cc")).unwrap();
+    for (key, language, bucket) in [("item:jp:1", "ja-JP", 90), ("item:pt:1", "pt-BR", 10)] {
+        let mut item = common::item_in(key, &format!("line of {key}"), &common::group_in_bucket(bucket), common::cast());
+        item.language = language.into();
+        corpus.add(item, &entities).unwrap();
+    }
+    drop(corpus);
+    let create = |panel: &[&str]| {
+        weksa::run::RunStores::create(
+            &d.join(format!("run-{}", panel.join("-"))),
+            "t",
+            weksa::run::RunPaths {
+                corpus: &d.join("c.cc"),
+                inventory: &d.join("i.cc"),
+                entities: &d.join("entities.cc"),
+                ontology: &d.join("ontology.cc"),
+                speaker_state: &common::speaker_state_beside(&d.join("ontology.cc")),
+            },
+            "fake-model",
+            "bag",
+            weksa::run::LowererReach::ToolLessRelay,
+            weksa::corpus::ModelFamily::Unrecorded,
+            &panel.iter().map(|t| (*t).to_string()).collect::<Vec<_>>(),
+        )
+    };
+    assert!(create(&["en-US"]).is_ok());
+    for panel in [&["ja-JP"][..], &["pt-BR"], &["xx-XX"], &["en-US", "ja-JP"]] {
+        assert!(matches!(create(panel), Err(weksa::run::RunError::Panel)), "{panel:?}");
+    }
+}
