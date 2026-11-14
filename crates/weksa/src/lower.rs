@@ -1,52 +1,28 @@
-//! The English template lowerer: the validated lowering view of a packet to
-//! text, by a fixed table keyed by inventory ids. It is the deterministic
-//! lowerer of `weksa lower`, the proof fixtures and their tests; the golf loop
-//! lowers through the `ModelPort` (`run.rs`, `Prompt::lower`), and follow-up
-//! `table-retirement` decides this table's future. It renders predications, referents and the
-//! speech act, and nothing else: no style, no model, no corpus text. It takes a
-//! [`LoweringInput`], so it cannot see the trace or the corpus item. A packet
-//! carrying a feature, relation, extension, role fill or referent it does not
-//! render is refused, because rendering part of a meaning would assert a different
-//! one (`polarity: negative` dropped says the opposite). Context, kind and
-//! constraints steer delivery and are not rendered; the concept of a predication
-//! must resolve but the frame owns the verb.
+//! The entity port and the ruled pronunciation of a packet's entities.
 //!
-//! A referent that cites an entity renders as that entity's own form, read
-//! through the [`EntityForms`] port: the first (citation) form stored for
-//! [`TARGET_LANGUAGE`], verbatim. The choice is a table lookup on the language
-//! tag and the form's position, not a reading of the form. Forms after the
-//! first are inflected or particle-bound shapes; no English frame asks for one,
-//! so none is selected. An entity the port does not hold, or one with no form in
-//! the target language, is refused: the concept word would say a different
-//! thing than the name the packet cites.
-//!
-//! A request clause ("You asked Nibu to stop.") says what the addressee did, so
-//! it is gated on the packet's own record of it: `Discourse.addressee_consent`
-//! (set only by authoring or game telemetry, V15) must name that predication,
-//! and its agent must be the addressee. Without it the lowerer refuses
-//! ([`LowerError::ConsentMissing`], [`LowerError::AskerNotAddressee`]); it does
-//! not read wording or guess who asked. A consent naming any other predication
-//! is an unrendered slot.
-//!
-//! The table is a temporary owner. Each row speaks for an inventory entry and
-//! names the gloss it speaks for, so a row cannot outlive a change of what its id
-//! means. `language-ontology` moves the rows into ontology documents.
+//! Wording of a packet in a target language is the `ModelPort`'s answer to
+//! `Prompt::lower` (`context.rs`); nothing here produces lowered text. This
+//! module holds what the entity store owns and the lowering path reads: the
+//! narrow [`EntityForms`] port, the ruled IPA of every entity a packet cites
+//! ([`pronounce`]), and its segmentation into phones ([`phones`]). A referent
+//! that cites an entity is read through the port; an entity the port does not
+//! hold, one with no form or no ruled pronunciation in [`TARGET_LANGUAGE`], is
+//! refused, because spelling is not a pronunciation and there is no
+//! grapheme-to-phoneme guess to offer in its place.
 
 use std::fmt;
 
 use serde::Serialize;
 
 use crate::entity::Entity;
-use crate::inventory::{Family, InvId, Inventory};
-use crate::packet::{EntityId, NodeId, Predication};
+use crate::packet::EntityId;
 use crate::phones::{Phone, PhoneInventory, SegmentError};
 use crate::store::EntityStore;
 use crate::validate::LoweringInput;
 
-/// The language tag of the template table and the phones: what `weksa lower`
-/// says in. The golf loop lowers each item in its own language and does not
-/// read this. Spelled as an entity's `LanguageForms::language` and a corpus
-/// item's language are.
+/// The language tag of [`pronounce`] and [`phones`] only. The golf loop lowers
+/// each item in its own language and does not read this. Spelled as an
+/// entity's `LanguageForms::language` and a corpus item's language are.
 pub const TARGET_LANGUAGE: &str = "en-US";
 
 /// The lowerer's whole view of the entity store: one entity by id. Narrow so a
@@ -62,98 +38,8 @@ impl EntityForms for EntityStore {
     }
 }
 
-/// `(inventory id, the gloss the row speaks for, surface)`.
-type Row = (&'static str, &'static str, &'static str);
-
-/// Referent concepts, as the noun phrase after "the".
-const CONCEPTS: &[Row] = &[
-    ("concept:3", "player", "player"),
-    ("concept:4", "control", "control"),
-    ("concept:5", "ship_mind", "ship mind"),
-    // The Dao De Jing test bed (`daodejing.rs`). Nouns, then the verbs a
-    // `{verb}` frame speaks.
-    ("concept:7", "sage", "sage"),
-    ("concept:8", "mind", "minds"),
-    ("concept:9", "belly", "bellies"),
-    ("concept:10", "will", "wills"),
-    ("concept:11", "bone", "bones"),
-    ("concept:12", "empty", "empties"),
-    ("concept:13", "fill", "fills"),
-    ("concept:14", "weaken", "weakens"),
-    ("concept:15", "strengthen", "strengthens"),
-    ("concept:16", "heaven", "heaven"),
-    ("concept:17", "earth", "earth"),
-    ("concept:18", "is_long_enduring", "is long-enduring"),
-    ("concept:19", "continues_long", "continues long"),
-    ("concept:20", "highest_excellence", "highest excellence"),
-    ("concept:21", "water", "water"),
-    ("concept:22", "true_words", "words that are strictly true"),
-    ("concept:23", "seem_paradoxical", "seem paradoxical"),
-    (
-        "concept:24",
-        "space_between_heaven_and_earth",
-        "space between heaven and earth",
-    ),
-    ("concept:25", "bellows", "bellows"),
-    ("concept:26", "compare", "compare"),
-    ("concept:27", "resemble", "resemble"),
-];
-
-/// Frames: the clause a predication of that frame says. `{gloss}` is the filler
-/// of the role whose inventory gloss it is.
-const FRAMES: &[Row] = &[
-    (
-        "frame:1",
-        "hazard_warning",
-        "{agent} may endanger {patient} by touching {instrument}",
-    ),
-    ("frame:2", "intervention", "{agent} will stop {patient}"),
-    (
-        "frame:3",
-        "request_intervention",
-        "{agent} asked {patient} to stop",
-    ),
-    // The Dao De Jing test bed. Frame 4 was written from a Train chapter, 5 and
-    // 6 from Validation chapters, 7 and 8 from Test chapters.
-    ("frame:4", "act", "{agent} {verb} {patient}"),
-    ("frame:5", "intransitive", "{experiencer} {verb}"),
-    ("frame:6", "likeness", "{experiencer} is like {goal}"),
-    (
-        "frame:7",
-        "seems_paradoxical",
-        "{experiencer} seem paradoxical",
-    ),
-    (
-        "frame:8",
-        "may_be_compared",
-        "{experiencer} may be compared to {goal}",
-    ),
-];
-
-/// The frame of "{agent} asked {patient} to stop": the one frame that reads
-/// the discourse's addressee consent.
-const REQUEST_FRAME: &str = "frame:3";
-
-/// Speech acts: the opener of the first sentence.
-const SPEECH_ACTS: &[Row] = &[
-    ("speech_act:1", "assert", ""),
-    ("speech_act:2", "ask", ""),
-    ("speech_act:5", "warn", "Warning: "),
-];
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LowerError {
-    /// The packet carries a slot the lowerer does not render.
-    Unrendered { what: &'static str },
-    /// No table row for an id the packet uses.
-    NoRow { id: InvId },
-    /// The row's gloss is not the gloss the inventory gives its id at the
-    /// packet's revision, or the id does not resolve there.
-    GlossMismatch { id: InvId, row: &'static str },
-    /// A frame template names a role the inventory has no live entry for.
-    UnknownRole { frame: InvId, role: String },
-    /// The predication fills no role its frame's template needs.
-    MissingRole { predication: NodeId, role: String },
     /// A referent cites an entity the entity port does not hold.
     UnknownEntity { entity: EntityId },
     /// The entity has no form in [`TARGET_LANGUAGE`].
@@ -165,7 +51,7 @@ pub enum LowerError {
     NoEntityReferent,
     /// Phones were requested for an entity whose ruled IPA holds a symbol the
     /// language's phone inventory does not list (or the language has no
-    /// inventory). The lowerer does not guess a phone.
+    /// inventory). No phone is guessed.
     UnknownPhone {
         entity: EntityId,
         at: usize,
@@ -174,12 +60,6 @@ pub enum LowerError {
     /// Phones were requested for an entity whose ruled IPA has a stress mark
     /// with no vowel after it.
     DanglingStress { entity: EntityId, at: usize },
-    /// A request predication the packet does not carry the addressee's consent
-    /// to: no consent, or a consent that names another predication. The
-    /// lowerer does not guess who asked.
-    ConsentMissing { predication: NodeId },
-    /// A request predication whose agent is not the discourse addressee.
-    AskerNotAddressee { predication: NodeId },
     /// The entity port failed to read.
     EntityRead { entity: EntityId, why: String },
     /// A lowering prompt was asked of a view whose scene was never read.
@@ -192,11 +72,6 @@ pub enum LowerError {
 impl fmt::Display for LowerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            LowerError::Unrendered { .. } => "packet carries a slot the lowerer does not render",
-            LowerError::NoRow { .. } => "no table row for an inventory id the packet uses",
-            LowerError::GlossMismatch { .. } => "table row does not match the inventory's gloss",
-            LowerError::UnknownRole { .. } => "frame template names a role the inventory lacks",
-            LowerError::MissingRole { .. } => "predication fills no role its frame needs",
             LowerError::UnknownEntity { .. } => "referent cites an entity the port does not hold",
             LowerError::NoForm { .. } => "entity has no form in the target language",
             LowerError::NoPronunciation { .. } => "entity has no ruled pronunciation",
@@ -205,148 +80,16 @@ impl fmt::Display for LowerError {
                 "ruled pronunciation holds a symbol with no listed phone"
             }
             LowerError::DanglingStress { .. } => "stress mark with no vowel after it",
-            LowerError::ConsentMissing { .. } => "request lacks the addressee's consent",
-            LowerError::AskerNotAddressee { .. } => "request agent is not the addressee",
             LowerError::EntityRead { .. } => "entity port failed to read",
             LowerError::SceneUnread => "the view's scene was never read",
-            LowerError::SpeakerTokenTaken => "a referent cites the entity id the speaker token uses",
+            LowerError::SpeakerTokenTaken => {
+                "a referent cites the entity id the speaker token uses"
+            }
         })
     }
 }
 
 impl std::error::Error for LowerError {}
-
-fn row(
-    table: &'static [Row],
-    id: InvId,
-    inv: &Inventory,
-    rev: u32,
-) -> Result<&'static str, LowerError> {
-    let (_, gloss, surface) = table
-        .iter()
-        .find(|(key, _, _)| *key == id.to_string())
-        .ok_or(LowerError::NoRow { id })?;
-    match inv.resolve(&id, rev) {
-        Some(e) if e.gloss == *gloss => Ok(surface),
-        _ => Err(LowerError::GlossMismatch { id, row: gloss }),
-    }
-}
-
-pub fn lower(
-    input: &LoweringInput,
-    inv: &Inventory,
-    entities: &dyn EntityForms,
-) -> Result<String, LowerError> {
-    let rev = input.inventory_rev();
-    let unrendered = |what| Err(LowerError::Unrendered { what });
-    if input.predications().is_empty() {
-        return unrendered("no predication");
-    }
-    if !input.discourse().features.is_empty()
-        || input.referents().iter().any(|r| !r.features.is_empty())
-        || input.predications().iter().any(|p| !p.features.is_empty())
-    {
-        return unrendered("features");
-    }
-    request_gate(input, inv)?;
-    if !input.relations().is_empty() {
-        return unrendered("relations");
-    }
-    if !input.extensions().is_empty() {
-        return unrendered("extensions");
-    }
-    let opener = match input.discourse().speech_act {
-        Some(act) => row(SPEECH_ACTS, act, inv, rev)?,
-        None => "",
-    };
-    let mut sentences = Vec::new();
-    for p in input.predications() {
-        sentences.push(clause(input, inv, entities, p)?);
-    }
-    let mentioned = |r: &NodeId| {
-        input
-            .predications()
-            .iter()
-            .any(|p| p.roles.iter().any(|f| &f.filler == r))
-    };
-    if input.referents().iter().any(|r| !mentioned(&r.id)) {
-        return unrendered("a referent no role mentions");
-    }
-    let mut out = String::new();
-    for (i, (clause, name_first)) in sentences.iter().enumerate() {
-        if i > 0 {
-            out.push(' ');
-        }
-        if i == 0 {
-            out.push_str(opener);
-        }
-        let mut chars = clause.chars();
-        if let Some(first) = chars.next() {
-            // A name opens its clause as written; only template words are cased.
-            if (i == 0 && !opener.is_empty()) || *name_first {
-                out.push(first);
-            } else {
-                out.extend(first.to_uppercase());
-            }
-            out.push_str(chars.as_str());
-        }
-        out.push('.');
-    }
-    Ok(out)
-}
-
-/// The one place consent is read. A request clause ([`REQUEST_FRAME`]) says what
-/// the addressee did, so it needs the packet's own record of it: the discourse
-/// `addressee_consent`, which validation lets only authoring or game telemetry
-/// set (V15), must name that predication, and its agent must be the addressee.
-/// Nothing here reads wording. A consent naming any other predication is a slot
-/// the lowerer does not render.
-fn request_gate(input: &LoweringInput, inv: &Inventory) -> Result<(), LowerError> {
-    let consent = input.discourse().addressee_consent.as_ref();
-    let requests = input
-        .predications()
-        .iter()
-        .filter(|p| p.frame.to_string() == REQUEST_FRAME);
-    for p in requests {
-        if consent != Some(&p.id) {
-            return Err(LowerError::ConsentMissing {
-                predication: p.id.clone(),
-            });
-        }
-        let agent = inv
-            .entries()
-            .find(|e| {
-                e.family() == Family::Role && e.gloss == "agent" && e.live_at(input.inventory_rev())
-            })
-            .ok_or_else(|| LowerError::UnknownRole {
-                frame: p.frame,
-                role: "agent".to_string(),
-            })?;
-        let asker = p
-            .roles
-            .iter()
-            .find(|r| r.role == agent.id)
-            .map(|r| &r.filler);
-        if asker.is_none() || asker != input.discourse().addressee.as_ref() {
-            return Err(LowerError::AskerNotAddressee {
-                predication: p.id.clone(),
-            });
-        }
-    }
-    match consent {
-        Some(_)
-            if !input
-                .predications()
-                .iter()
-                .any(|p| p.frame.to_string() == REQUEST_FRAME) =>
-        {
-            Err(LowerError::Unrendered {
-                what: "addressee consent",
-            })
-        }
-        _ => Ok(()),
-    }
-}
 
 /// The ruled IPA of every entity a packet cites, one per entity referent in
 /// the packet's referent order, as stored: bare, stress-marked, nothing
@@ -422,91 +165,6 @@ fn ruled(
         return Err(LowerError::NoEntityReferent);
     }
     Ok(out)
-}
-
-fn clause(
-    input: &LoweringInput,
-    inv: &Inventory,
-    entities: &dyn EntityForms,
-    p: &Predication,
-) -> Result<(String, bool), LowerError> {
-    let rev = input.inventory_rev();
-    let template = row(FRAMES, p.frame, inv, rev)?;
-    let mut said: Vec<&NodeId> = Vec::new();
-    let mut out = String::new();
-    let mut name_first = false;
-    let mut rest = template;
-    while let Some(open) = rest.find('{') {
-        out.push_str(&rest[..open]);
-        let close = rest[open..].find('}').map_or(rest.len(), |c| open + c);
-        let name = &rest[open + 1..close];
-        rest = &rest[(close + 1).min(rest.len())..];
-        if name == "verb" {
-            out.push_str(row(CONCEPTS, p.concept, inv, rev)?);
-            continue;
-        }
-        let role = inv
-            .entries()
-            .find(|e| e.family() == Family::Role && e.gloss == name && e.live_at(rev))
-            .ok_or_else(|| LowerError::UnknownRole {
-                frame: p.frame,
-                role: name.to_string(),
-            })?;
-        let fill =
-            p.roles
-                .iter()
-                .find(|r| r.role == role.id)
-                .ok_or_else(|| LowerError::MissingRole {
-                    predication: p.id.clone(),
-                    role: name.to_string(),
-                })?;
-        let (phrase, is_name) = filler(input, inv, entities, &fill.filler, &said)?;
-        name_first |= is_name && out.is_empty();
-        out.push_str(&phrase);
-        said.push(&fill.filler);
-    }
-    out.push_str(rest);
-    if p.roles.len() != said.len() {
-        return Err(LowerError::Unrendered {
-            what: "a role the frame does not name",
-        });
-    }
-    Ok((out, name_first))
-}
-
-/// A role filler as a phrase: the addressee is "you", a predication is "that",
-/// another referent is its entity's citation form when it cites one, else "the"
-/// and its concept word. The addressee said twice in
-/// one predication is reflexive; no other referent is, because the packet has no
-/// animacy to choose "themself" or "itself" by.
-fn filler(
-    input: &LoweringInput,
-    inv: &Inventory,
-    entities: &dyn EntityForms,
-    node: &NodeId,
-    said: &[&NodeId],
-) -> Result<(String, bool), LowerError> {
-    let again = said.contains(&node);
-    if let Some(r) = input.referents().iter().find(|r| &r.id == node) {
-        if input.discourse().addressee.as_ref() == Some(node) {
-            return Ok((if again { "yourself" } else { "you" }.to_string(), false));
-        }
-        if let Some(id) = &r.entity {
-            return Ok((name(entities, id)?, true));
-        }
-        let word = row(CONCEPTS, r.concept, inv, input.inventory_rev())?;
-        return Ok((format!("the {word}"), false));
-    }
-    Ok(("that".to_string(), false))
-}
-
-/// The entity's citation form in [`TARGET_LANGUAGE`].
-fn name(entities: &dyn EntityForms, id: &EntityId) -> Result<String, LowerError> {
-    entity(entities, id)?
-        .forms_in(TARGET_LANGUAGE)
-        .and_then(<[String]>::first)
-        .cloned()
-        .ok_or_else(|| LowerError::NoForm { entity: id.clone() })
 }
 
 pub(crate) fn entity(entities: &dyn EntityForms, id: &EntityId) -> Result<Entity, LowerError> {

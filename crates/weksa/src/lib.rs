@@ -31,7 +31,7 @@ pub use inventory::{
     Change, Family, InvId, Inventory, InventoryEntry, InventoryRevision, OptionLabel, OptionSet,
     Slot, ValueKind,
 };
-pub use lower::{EntityForms, LowerError, PhoneLine, TARGET_LANGUAGE, lower, phones, pronounce};
+pub use lower::{EntityForms, LowerError, PhoneLine, TARGET_LANGUAGE, phones, pronounce};
 pub use model::{AnswerFiles, ModelPort};
 pub use ontology::{Condition, Layer, Ontology, OntologyEntry, Test, select};
 pub use packet::{

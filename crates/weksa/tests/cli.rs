@@ -904,7 +904,7 @@ fn fake_embedder() -> String {
 }
 
 #[test]
-fn proof_packet_lowers_and_the_lowering_scores_against_items() {
+fn proof_packet_pronounces_and_the_item_scores_against_its_own_text() {
     let d = tempfile::tempdir().unwrap();
     cast_entities(d.path(), &["nibu"]);
     for args in [&["inventory", "seed"][..], &["inventory", "proof"]] {
@@ -939,21 +939,11 @@ fn proof_packet_lowers_and_the_lowering_scores_against_items() {
         "{}",
         out(&admitted)
     );
-    let lowered = weksa(d.path(), &["lower", "./p.cc", "packet:6e6962752d303031"]);
-    assert!(lowered.status.success(), "{}", out(&lowered));
-    let text = String::from_utf8(lowered.stdout).unwrap();
-    assert!(
-        text.starts_with("Warning: you may endanger yourself"),
-        "{text}"
-    );
-    // The referent cites entity:nibu: its stored en-US form (NIBU here) reaches the text as stored.
-    assert!(text.contains("NIBU will stop"), "{text}");
-
-    let missing = weksa(d.path(), &["lower", "./p.cc", "packet:0000000000000000"]);
+    let missing = weksa(d.path(), &["pronounce", "./p.cc", "packet:0000000000000000"]);
     assert!(!missing.status.success() && out(&missing).contains("no such packet"));
 
     // IPA is the ruled pronunciation or nothing: spelling is not one.
-    let args = ["lower", "./p.cc", "packet:6e6962752d303031", "--ipa"];
+    let args = ["pronounce", "./p.cc", "packet:6e6962752d303031"];
     let unruled = weksa(d.path(), &args);
     assert!(
         !unruled.status.success() && out(&unruled).contains("entity has no ruled pronunciation"),
@@ -993,11 +983,10 @@ fn proof_packet_lowers_and_the_lowering_scores_against_items() {
     let ipa = weksa(d.path(), &args);
     assert!(ipa.status.success(), "{}", out(&ipa));
     assert_eq!(String::from_utf8(ipa.stdout).unwrap(), "ˈnibu\n");
-    // The phones line is the committed fixture, byte for byte, and is a different
-    // output from --ipa, so the two flags cannot be combined.
+    // The phones line is the committed fixture, byte for byte.
     let phones = weksa(
         d.path(),
-        &["lower", "./p.cc", "packet:6e6962752d303031", "--phones"],
+        &["pronounce", "./p.cc", "packet:6e6962752d303031", "--phones"],
     );
     assert!(phones.status.success(), "{}", out(&phones));
     let fixture = std::fs::read_to_string(
@@ -1006,21 +995,13 @@ fn proof_packet_lowers_and_the_lowering_scores_against_items() {
     )
     .unwrap();
     assert_eq!(String::from_utf8(phones.stdout).unwrap(), fixture);
-    let both = weksa(
-        d.path(),
-        &[
-            "lower",
-            "./p.cc",
-            "packet:6e6962752d303031",
-            "--phones",
-            "--ipa",
-        ],
-    );
-    assert!(!both.status.success(), "{}", out(&both));
-    let again = weksa(d.path(), &["lower", "./p.cc", "packet:6e6962752d303031"]);
-    assert_eq!(String::from_utf8(again.stdout).unwrap(), text);
+    // The old lowering subcommand is gone: clap's usage error, exit 2.
+    let gone = weksa(d.path(), &["lower", "./p.cc", "packet:6e6962752d303031"]);
+    assert_eq!(gone.status.code(), Some(2), "{}", out(&gone));
 
-    std::fs::write(d.path().join("out.txt"), &text).unwrap();
+    // The item's own text, as the scorer's output.
+    let text = "Warning: you may endanger yourself by touching the control. NIBU will stop that.";
+    std::fs::write(d.path().join("out.txt"), text).unwrap();
     let url = fake_embedder();
     let scored = weksa(
         d.path(),
@@ -1180,7 +1161,7 @@ fn cli_errors_never_echo_identifiers() {
         ]),
         "--model-family",
     );
-    // Keys on withdraw, split, validate, lower and score.
+    // Keys on withdraw, split, validate, pronounce and score.
     refuses_without_echo(p, &["corpus", "withdraw", "item:canary:7"], "no such item");
     refuses_without_echo(p, &["split", "item:canary:7"], "no such item");
     std::fs::write(p.join("out.txt"), "text").unwrap();
@@ -1198,7 +1179,7 @@ fn cli_errors_never_echo_identifiers() {
         &["validate", "p.cc", "packet:canary:7"],
         "no such packet",
     );
-    refuses_without_echo(p, &["lower", "p.cc", "packet:canary:7"], "no such packet");
+    refuses_without_echo(p, &["pronounce", "p.cc", "packet:canary:7"], "no such packet");
     // S6 names no held key; S5 names no group.
     let held = weksa(
         p,
