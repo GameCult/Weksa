@@ -202,12 +202,16 @@ telemetry, and it must name a predication of the packet. `V18` refuses a predica
 the gloss `request_intervention` (`frame:3` in the committed inventories)
 unless `addressee_consent` names that predication. The encoder can never set
 consent (`V15`), so an encoder-produced request frame is always refused.
-Residual gaps: `V18` keys on that one gloss, so another frame that asserts the
-addressee's act (for example a `frame:2` intervention on the original
-inventory) or a renamed gloss is not covered; consent is one field, so two
-request predications in one packet cannot validate; and the check that the
-asker is the addressee was not kept. Follow-up
-`weksa-lowering:follow_up:request-frame-consent-residual` owns them.
+Limits: `V18` keys on the gloss `request_intervention` and sees no other frame
+or concept, so a request-shaped meaning built from another frame or from a
+renamed or newly minted frame is not seen by `validate`, which does not read
+meaning; the scorer and flow own that classification
+(`weksa-lowering:ruling:leak-owned-by-flow-and-scorer-3`). `addressee_consent`
+is one field, so a packet carries one request predication, and a compound
+request is two packets until a packet schema revision makes consent a set. The
+asker is not checked to be the addressee: consent is the authored or telemetry
+source's own record, and the lowerer that renders it sees the roles and owns
+that check.
 
 ### `stance`
 
