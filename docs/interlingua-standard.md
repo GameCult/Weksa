@@ -201,13 +201,20 @@ addressee did. `V14` and `V15` check the field: it may be set only by authoring 
 telemetry, and it must name a predication of the packet. `V18` refuses a predication whose frame resolves, at the packet's revision, to
 the gloss `request_intervention` (`frame:3` in the committed inventories)
 unless `addressee_consent` names that predication. The encoder can never set
-consent (`V15`), so an encoder-produced request frame is always refused.
-Residual gaps: `V18` keys on that one gloss, so another frame that asserts the
-addressee's act (for example a `frame:2` intervention on the original
-inventory) or a renamed gloss is not covered; consent is one field, so two
-request predications in one packet cannot validate; and the check that the
-asker is the addressee was not kept. Follow-up
-`weksa-lowering:follow_up:request-frame-consent-residual` owns them.
+consent (`V15`), so an encoder-produced `request_intervention` predication (`frame:3`) is always refused.
+Limits, tracked by `weksa-lowering:follow_up:request-frame-consent-residual`:
+`V18` keys on the gloss `request_intervention` and sees no other frame or
+concept, so a request-shaped meaning built from another frame or concept (a
+`frame:12` communication with `concept:6` request validates) or from a renamed
+or newly minted frame is not seen by `validate`, which does not read meaning.
+The inventory carries no marker for request shape, so classifying it would be
+an inventory-shape decision for Imagination and language-ontology. `addressee_consent`
+is one field, so a packet carries one request predication, and a compound
+request is two packets until a packet schema revision makes consent a set. The
+asker is not checked to be the addressee: a consented `frame:3` whose agent is
+not the addressee validates, and no code outside `validate` and the encoder
+prompt text reads `addressee_consent`. That check is an owed obligation with no
+owner yet.
 
 ### `stance`
 
