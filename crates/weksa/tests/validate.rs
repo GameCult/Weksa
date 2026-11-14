@@ -740,6 +740,53 @@ fn a_source_that_only_read_wording_cannot_set_consent() {
     }
 }
 
+// V18: a request frame is licensed by the packet's own consent record.
+
+/// The committed inventory, where `frame:3` is `request_intervention`.
+fn cast_refusals(p: &Packet) -> Vec<Refusal> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/interlingua/inventory.cc");
+    let inv = weksa::InventoryStore::open(&path).unwrap().inventory().unwrap();
+    validate(p, &inv).err().unwrap_or_default()
+}
+
+fn requesting() -> Packet {
+    let mut p = proof_packet();
+    p.predications[0].frame = iv("frame:3");
+    p.discourse.addressee_consent = Some(nd("n4"));
+    p
+}
+
+#[test]
+fn a_request_frame_needs_consent_naming_its_predication() {
+    assert_eq!(cast_refusals(&requesting()), vec![]);
+    let mut p = requesting();
+    p.discourse.addressee_consent = None;
+    assert_eq!(
+        cast_refusals(&p),
+        vec![Refusal::V18RequestWithoutConsent { predication: nd("n4") }]
+    );
+    p.discourse.addressee_consent = Some(nd("n5"));
+    assert_eq!(
+        cast_refusals(&p),
+        vec![Refusal::V18RequestWithoutConsent { predication: nd("n4") }]
+    );
+    let mut p = requesting();
+    p.provenance.source = ProvenanceSource::GameTelemetry;
+    assert_eq!(cast_refusals(&p), vec![]);
+}
+
+#[test]
+fn model_source_consent_is_v15_alone() {
+    let mut p = requesting();
+    p.provenance.source = ProvenanceSource::ModelDecomposition;
+    assert_eq!(
+        cast_refusals(&p),
+        vec![Refusal::V15ConsentSource {
+            source: ProvenanceSource::ModelDecomposition
+        }]
+    );
+}
+
 // V17: the addressee is someone spoken to, a referent.
 
 #[test]

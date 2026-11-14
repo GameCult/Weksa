@@ -593,6 +593,41 @@ mod lowering {
         assert!(Prompt::lower(&read, &item, &away(), "en-US", &inv, &held, &empty).is_ok());
     }
 
+    /// The packet the encoder emits for a request: frame:3, no consent, source
+    /// ModelDecomposition. Admission refuses it, so no lowering view exists.
+    #[test]
+    fn an_encoder_request_never_reaches_a_lowerer() {
+        let cast = InventoryStore::open(&data("interlingua/inventory.cc")).unwrap();
+        let entities = EntityStore::open(&data("entity/entity.cc")).unwrap();
+        let corpus = CorpusStore::open(&data("corpus/corpus.cc")).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = PacketStore::open(&dir.path().join("p.cc")).unwrap();
+        let mut packet = proof_packet();
+        packet.provenance.source = weksa::packet::ProvenanceSource::ModelDecomposition;
+        packet.predications[0].frame = weksa::InvId::parse("frame:3").unwrap();
+        match store.admit(packet.clone(), &cast, &corpus, &entities) {
+            Err(weksa::StoreError::Invalid(r)) => assert_eq!(
+                r,
+                vec![weksa::Refusal::V18RequestWithoutConsent {
+                    predication: weksa::packet::NodeId::parse("n4").unwrap()
+                }]
+            ),
+            other => panic!("expected V18, got {:?}", other.map(|_| ())),
+        }
+        // Not blanket: telemetry that records the consent admits and lowers.
+        packet.provenance.source = weksa::packet::ProvenanceSource::GameTelemetry;
+        packet.discourse.addressee_consent = Some(weksa::packet::NodeId::parse("n4").unwrap());
+        drop(store);
+        let view = admitted(packet, &cast, "corpus/corpus.cc", &entities);
+        let item = CorpusItemId::parse("item:nibu:1").unwrap();
+        let held = Held(vec![nibu(&[("en-US", &["Nibu"])])]);
+        let empty = weksa::Ontology::empty();
+        assert!(
+            Prompt::lower(&view, &item, &away(), "en-US", &cast.inventory().unwrap(), &held, &empty)
+                .is_ok()
+        );
+    }
+
     fn dao(index: usize) -> (LoweringInput, Inventory, EntityStore, CorpusItemId) {
         let inv = InventoryStore::open(&data("daodejing/inventory.cc")).unwrap();
         let entities = EntityStore::open(&data("daodejing/entity.cc")).unwrap();
