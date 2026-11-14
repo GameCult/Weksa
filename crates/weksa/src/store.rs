@@ -491,8 +491,8 @@ pub(crate) fn normalized(text: &str) -> String {
 
 /// The one-to-one folds `normalized` adds to NFKC and case folding, applied
 /// before the case fold. (U+0130 needs no arm: it folds to i plus a combining
-/// dot, and the dot is dropped when the NFKC split reaches the filter in
-/// `normalized`, so the key is plain `i`.)
+/// dot, and the `dotless` loop in `normalized` drops that dot after an `i`, so
+/// the key is plain `i`.)
 fn fold_variant(c: char) -> impl Iterator<Item = char> {
     let one = |c: char| (c, None);
     let (first, second) = match c {
