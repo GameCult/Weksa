@@ -11,7 +11,9 @@ use weksa::packet::{EntityId, proof_packet};
 use weksa::{CorpusItemId, CorpusStore, EntityForms, EntityStore, InventoryStore, PacketStore};
 
 fn data(sub: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data").join(sub)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../data")
+        .join(sub)
 }
 
 struct Held(Vec<Entity>);
@@ -30,7 +32,10 @@ fn spoken(slug: &str, form: &str) -> Entity {
             forms: vec![form.into()],
             pronunciation: None,
         }],
-        origin: EntityOrigin::Cast { persona: slug.into(), fixture: "f.yaml".into() },
+        origin: EntityOrigin::Cast {
+            persona: slug.into(),
+            fixture: "f.yaml".into(),
+        },
     }
 }
 
@@ -47,8 +52,13 @@ fn an_uncited_speaker_is_absent_from_the_lowering_prompt() {
         .admit(proof_packet(), &cast_inv, &corpus, &entities)
         .unwrap();
     let state = weksa::SpeakerStateStore::open(&dir.path().join("s.cc")).unwrap();
-    let view = view.with_scene(&cast_inv.inventory().unwrap(), &state, &corpus).unwrap();
-    let held = Held(vec![spoken("nibu", "Nibu"), spoken("other", "SPEAKERCANARY")]);
+    let view = view
+        .with_scene(&cast_inv.inventory().unwrap(), &state, &corpus)
+        .unwrap();
+    let held = Held(vec![
+        spoken("nibu", "Nibu"),
+        spoken("other", "SPEAKERCANARY"),
+    ]);
     let item = CorpusItemId::parse("item:nibu:1").unwrap();
     let speaker = EntityId::parse("entity:other").unwrap();
     let prompt = Prompt::lower(
@@ -62,7 +72,10 @@ fn an_uncited_speaker_is_absent_from_the_lowering_prompt() {
     )
     .unwrap();
     let text = prompt.text();
-    assert!(text.contains("\n\nentities: {\"entity:nibu\":[\"Nibu\"]}\n\n"), "{text}");
+    assert!(
+        text.contains("\n\nentities: {\"entity:nibu\":[\"Nibu\"]}\n\n"),
+        "{text}"
+    );
     assert!(!text.contains("SPEAKERCANARY"), "{text}");
 }
 
@@ -77,7 +90,12 @@ fn a_panel_language_no_item_carries_is_refused_at_open() {
     let entities = common::entities_in(d);
     let mut corpus = CorpusStore::open(&d.join("c.cc")).unwrap();
     for (key, language, bucket) in [("item:jp:1", "ja-JP", 90), ("item:pt:1", "pt-BR", 10)] {
-        let mut item = common::item_in(key, &format!("line of {key}"), &common::group_in_bucket(bucket), common::cast());
+        let mut item = common::item_in(
+            key,
+            &format!("line of {key}"),
+            &common::group_in_bucket(bucket),
+            common::cast(),
+        );
         item.language = language.into();
         corpus.add(item, &entities).unwrap();
     }
@@ -102,7 +120,10 @@ fn a_panel_language_no_item_carries_is_refused_at_open() {
     };
     assert!(create(&["en-US"]).is_ok());
     for panel in [&["ja-JP"][..], &["pt-BR"], &["xx-XX"], &["en-US", "ja-JP"]] {
-        assert!(matches!(create(panel), Err(weksa::run::RunError::Panel)), "{panel:?}");
+        assert!(
+            matches!(create(panel), Err(weksa::run::RunError::Panel)),
+            "{panel:?}"
+        );
     }
 }
 
