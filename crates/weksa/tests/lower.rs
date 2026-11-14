@@ -92,6 +92,21 @@ fn say(entities: &dyn EntityForms) -> Result<Vec<String>, LowerError> {
 }
 
 #[test]
+fn a_failing_entity_port_is_refused_by_name() {
+    let e = Entities {
+        fault: true,
+        ..Entities::default()
+    };
+    assert_eq!(
+        say(&e),
+        Err(LowerError::EntityRead {
+            entity: EntityId::parse("entity:nibu").unwrap(),
+            why: "store unreadable".into()
+        })
+    );
+}
+
+#[test]
 fn nibu_round_trips_from_the_committed_seed_to_its_ruled_ipa() {
     let seed = committed_entities();
     let nibu = seed
