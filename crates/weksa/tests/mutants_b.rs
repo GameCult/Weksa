@@ -78,7 +78,7 @@ fn a_pronunciation_keeps_at_most_eight_rejected_variants() {
 }
 
 #[test]
-fn an_ontology_entry_read_at_an_unknown_revision_is_refused_once_per_condition() {
+fn an_ontology_entry_read_at_an_unknown_revision_is_refused_with_one_refusal() {
     let w = world();
     let mut onto = OntologyStore::open(&w.dir.path().join("o2.cc")).unwrap();
     let entry = OntologyEntry {
@@ -292,5 +292,6 @@ fn relower_refuses_malformed_arm_and_floor_labels_before_reading_the_run() {
     }
     // Well-formed, distinct labels get past the label check (to the missing run).
     let o = relower("a", &["b", "c"]);
-    assert!(!out(&o).contains("arm and floor labels"), "{}", out(&o));
+    assert!(!o.status.success());
+    assert!(out(&o).contains("the root holds no run"), "{}", out(&o));
 }
