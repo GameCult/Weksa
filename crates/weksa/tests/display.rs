@@ -104,6 +104,7 @@ fn refusal_display_names_the_rule_and_no_identifier() {
         },
         Refusal::V16SpeakerNotInScene,
         Refusal::V17AddresseeNotAReferent { id: node() },
+        Refusal::V18RequestWithoutConsent { predication: node() },
     ];
     assert_eq!(
         Refusal::V16SpeakerNotInScene.to_string(),

@@ -4,7 +4,7 @@
 //! lowerer sees, comes from `PacketStore::admit` alone, which builds it from
 //! the admitted packet and its corpus item through the crate-private
 //! `LoweringInput::of`. The stance is checked like every feature
-//! list, in slot `Stance`. The rules are V1..V8, V10..V12 and V14..V17: the
+//! list, in slot `Stance`. The rules are V1..V8, V10..V12 and V14..V18: the
 //! shape of an id or a grade is its type's parse, not a rule, so V9 is retired
 //! and not renumbered; V13 is retired too. [`LoweringInput::with_scene`] reads the
 //! scene of the view's own item group from the speaker-state store, and
@@ -120,6 +120,12 @@ pub enum Refusal {
     V17AddresseeNotAReferent {
         id: NodeId,
     },
+    /// V18: a predication whose frame is the inventory's `request_intervention`,
+    /// with no `addressee_consent` naming it. It says what the addressee did, so
+    /// only the packet's own record may license it.
+    V18RequestWithoutConsent {
+        predication: NodeId,
+    },
 }
 
 impl Refusal {
@@ -144,6 +150,7 @@ impl Refusal {
             Refusal::V15ConsentSource { .. } => "V15",
             Refusal::V16SpeakerNotInScene => "V16",
             Refusal::V17AddresseeNotAReferent { .. } => "V17",
+            Refusal::V18RequestWithoutConsent { .. } => "V18",
         }
     }
 }
@@ -173,6 +180,9 @@ impl fmt::Display for Refusal {
                 "the scene does not cover the speaker of every live item of its group"
             }
             Refusal::V17AddresseeNotAReferent { .. } => "the addressee names no referent",
+            Refusal::V18RequestWithoutConsent { .. } => {
+                "a request frame needs the addressee's consent naming it"
+            }
         };
         write!(f, "{}: {what}", self.rule())
     }
@@ -221,6 +231,7 @@ pub fn validate(packet: &Packet, inventory: &Inventory) -> Result<(), Vec<Refusa
             out: &mut out,
         }
         .check(packet);
+        check_requests(packet, inventory, &mut out);
     } else {
         out.push(Refusal::V10UnknownRevision {
             rev: packet.inventory_rev,
@@ -300,6 +311,25 @@ fn check_consent(packet: &Packet, nodes: &BTreeSet<NodeId>, out: &mut Vec<Refusa
     match packet.provenance.source {
         ProvenanceSource::Authored | ProvenanceSource::GameTelemetry => {}
         source => out.push(Refusal::V15ConsentSource { source }),
+    }
+}
+
+/// The gloss of the inventory frame that reports an addressee's request.
+const REQUEST_FRAME_GLOSS: &str = "request_intervention";
+
+/// V18: a predication whose frame, resolved at the packet's revision, is the
+/// request frame is named by `addressee_consent`. An unresolved frame is V5's.
+fn check_requests(packet: &Packet, inventory: &Inventory, out: &mut Vec<Refusal>) {
+    for p in &packet.predications {
+        if inventory
+            .resolve(&p.frame, packet.inventory_rev)
+            .is_some_and(|e| e.gloss == REQUEST_FRAME_GLOSS)
+            && packet.discourse.addressee_consent.as_ref() != Some(&p.id)
+        {
+            out.push(Refusal::V18RequestWithoutConsent {
+                predication: p.id.clone(),
+            });
+        }
     }
 }
 

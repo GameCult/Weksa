@@ -164,6 +164,7 @@ names the rule.
   `GameTelemetry`; a decomposition of text or imported corpus text cannot mint
   it.
 - V17: an `addressee` names a referent, not a predication.
+- V18: a predication whose frame is the inventory's `request_intervention` is named by `addressee_consent`.
 
 V9 is retired and not renumbered: the form of a key or a grade is its type, and
 an extension key's family is V6. `PacketStore::admit` returns the lowering view of a
