@@ -3113,6 +3113,9 @@ fn discard_inventory(dir: &Path) {
 }
 
 #[cfg(test)]
+mod mutants;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

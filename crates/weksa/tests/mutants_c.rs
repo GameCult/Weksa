@@ -105,3 +105,11 @@ fn a_panel_language_no_item_carries_is_refused_at_open() {
         assert!(matches!(create(panel), Err(weksa::run::RunError::Panel)), "{panel:?}");
     }
 }
+
+/// A run keeps its recall probes in `recall` under its own root.
+#[test]
+fn a_run_keeps_its_recall_under_its_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let run = common::run_over(dir.path());
+    assert_eq!(run.recall_dir(), dir.path().join("run").join("recall"));
+}
