@@ -198,14 +198,16 @@ whatever the inventory grows). This is source-side communicative pressure, not
 target-language register. `addressee_consent` is no feature: it names the
 predication the addressee asked for or agreed to, a fact about what the
 addressee did. `V14` and `V15` check the field: it may be set only by authoring or game
-telemetry, and it must name a predication of the packet. Open gap: `frame:3`
-(`request_intervention`) is in the committed inventories (`data/interlingua`,
-`data/original`, `data/daodejing`) and seeded at `inventory.rs:518`. No
-committed packet uses it, but the encoder sees it, and `V14` and `V15` check only
-the consent field, so a model-encoded `frame:3` predication with a null
-`addressee_consent` reaches `Prompt::lower` and nothing refuses it. The retired
-gate covered only the deleted `lower()`. Follow-up
-`table-retirement-consent-gap` owns the gap.
+telemetry, and it must name a predication of the packet. `V18` refuses a predication whose frame resolves, at the packet's revision, to
+the gloss `request_intervention` (`frame:3` in the committed inventories)
+unless `addressee_consent` names that predication. The encoder can never set
+consent (`V15`), so an encoder-produced request frame is always refused.
+Residual gaps: `V18` keys on that one gloss, so another frame that asserts the
+addressee's act (for example a `frame:2` intervention on the original
+inventory) or a renamed gloss is not covered; consent is one field, so two
+request predications in one packet cannot validate; and the check that the
+asker is the addressee was not kept. Follow-up
+`weksa-lowering:follow_up:request-frame-consent-residual` owns them.
 
 ### `stance`
 
