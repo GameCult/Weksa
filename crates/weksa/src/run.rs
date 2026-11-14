@@ -1485,13 +1485,11 @@ impl RunStores {
                     p.stance = Stance::default();
                     variants[0] = Some(prompt_of(1, p)?);
                 }
-                if held.len() > 1 {
-                    let mut p = packet.clone();
-                    p.stance = held[(i + 1) % held.len()].1.stance.clone();
-                    let prompt = prompt_of(2, p)?;
-                    if prompt.digest() != base.digest() {
-                        variants[1] = Some(prompt);
-                    }
+                let mut p = packet.clone();
+                p.stance = held[(i + 1) % held.len()].1.stance.clone();
+                let prompt = prompt_of(2, p)?;
+                if prompt.digest() != base.digest() {
+                    variants[1] = Some(prompt);
                 }
                 // The round's own answer must exist; a missing one is not a gap to ask for.
                 let recorded_text = match asked(recorded, &base)? {
