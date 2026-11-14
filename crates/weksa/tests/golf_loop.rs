@@ -2742,15 +2742,6 @@ fn source_tripwires() {
         .collect();
     let count = |needle: &str| code.iter().filter(|l| l.contains(needle)).count();
     assert!(!run.contains("pub fn new"));
-    // The round does not call the template table: the model lowers.
-    assert_eq!(
-        code.iter()
-            .filter(|l| l.contains("lower(&") && !l.contains("Prompt::lower("))
-            .count(),
-        0,
-        "run.rs calls the table"
-    );
-    assert_eq!(count("crate::lower::lower"), 0, "run.rs imports the table");
     assert_eq!(
         count("Prompt::lower("),
         2,

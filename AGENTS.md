@@ -60,4 +60,4 @@ language-project truth.
   `CARGO_HOME=/var/lib/mind-weksa-self/cargo-home cargo test --workspace`.
 - `weksa packet proof <store>` admits the nibu proof packet under the key
   `packet:6e6962752d303031` (hex of `nibu-001`), not `nibu-proof-001`. Use that key
-  with `weksa lower <store> <key>`.
+  with `weksa pronounce <store> <key>`.

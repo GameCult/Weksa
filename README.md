@@ -35,8 +35,8 @@ measured.
 - `settings/`: setting-specific proving grounds for language projects.
 
 **Live versus planned.** Live: docs, fixtures, examples, ontology data and the
-packet crate `crates/weksa`, including `weksa lower` (the template lowerer for
-proof fixtures) and `weksa score`, and the golf loop's round and edit-accept
+packet crate `crates/weksa`, including `weksa pronounce` (the ruled IPA and phones
+of the entities a packet cites), `weksa score`, and the golf loop's round and edit-accept
 cycle (`weksa loop open|round|cycle`), which encodes and lowers through the
 model (a prompted Claude subagent, per staged-distill).
 Planned: Score and lowering documents and the other panel languages. No

@@ -20,7 +20,7 @@ use weksa::run::{
 use weksa::score::ScoreInput;
 use weksa::{
     Annotator, CorpusStore, EntityId, EntityStore, Family, InventoryStore, OllamaEmbedder, OntologyStore, OptionLabel,
-    PacketStore, PairRelation, Party, Scene, Slot, SpeakerStateStore, ValueKind, Scorer, Split, SplitScheme, StoreError, StoreRefusal, lower, pronounce, validate,
+    PacketStore, PairRelation, Party, Scene, Slot, SpeakerStateStore, ValueKind, Scorer, Split, SplitScheme, StoreError, StoreRefusal, pronounce, validate,
 };
 
 #[derive(Parser)]
@@ -64,17 +64,14 @@ enum Command {
     Scene(SceneCommand),
     #[command(subcommand)]
     Packet(PacketCommand),
-    /// Lower a stored packet to English text.
-    Lower {
+    /// Print the ruled IPA of each entity a stored packet cites, one per line;
+    /// refused for an entity with no ruled pronunciation.
+    Pronounce {
         store: PathBuf,
         key: String,
-        /// Print the ruled IPA of each entity the packet cites, one per line,
-        /// instead of the text; refused for an entity with no ruled pronunciation.
-        #[arg(long, conflicts_with = "phones")]
-        ipa: bool,
-        /// Print the phones line of each entity the packet cites, one JSON
-        /// object per line ({language, source, phones: [{ipa, stress}]}),
-        /// instead of the text; refused for a phone the inventory lacks.
+        /// Print the phones line of each entity instead, one JSON object per
+        /// line ({language, source, phones: [{ipa, stress}]}); refused for a
+        /// phone the inventory lacks.
         #[arg(long)]
         phones: bool,
     },
@@ -1120,14 +1117,8 @@ fn main() -> Result<()> {
                 .map_err(refused)?;
             println!("admitted {key}");
         }
-        Command::Lower {
-            store,
-            key,
-            ipa,
-            phones,
-        } => {
+        Command::Pronounce { store, key, phones } => {
             let inventory_store = InventoryStore::open(&cli.inventory)?;
-            let inventory = inventory_store.inventory()?;
             let mut packets = PacketStore::open(&store)?;
             let packet = packets.get(&key)?.context("no such packet")?;
             // Admission is the only source of a LoweringInput; re-admitting the
@@ -1141,16 +1132,14 @@ fn main() -> Result<()> {
                 )
                 .map_err(refused)?;
             let entities = EntityStore::open(&cli.entities)?;
-            if ipa {
-                for line in pronounce(&view, &entities)? {
-                    println!("{line}");
-                }
-            } else if phones {
+            if phones {
                 for line in weksa::phones(&view, &entities)? {
                     println!("{}", serde_json::to_string(&line)?);
                 }
             } else {
-                println!("{}", lower(&view, &inventory, &entities)?);
+                for line in pronounce(&view, &entities)? {
+                    println!("{line}");
+                }
             }
         }
         Command::Score(args) => {

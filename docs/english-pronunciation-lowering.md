@@ -85,8 +85,8 @@ thing.
 An entity's citation form in a language may carry a ruled pronunciation
 (`LanguageForms.pronunciation`): bare IPA with stress marks, who ruled it, the
 date, the source, and an optional list of rejected variants kept so nobody
-re-proposes them. `weksa lower <store> <key> --ipa` prints the stored IPA of each
-entity the packet cites, one per line, and refuses with `NoPronunciation` for an
+re-proposes them. `weksa pronounce <store> <key>` prints the stored IPA of each
+entity the packet cites, one per line (`--phones` prints the phones line), and refuses with `NoPronunciation` for an
 entity with none; rejected variants are never read. This is not the plan below:
 it carries no timing, contour, length or invented prosody, and Weksa has no
 English G2P, so an unruled name has no IPA.

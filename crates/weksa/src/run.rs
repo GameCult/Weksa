@@ -19,8 +19,7 @@
 //! take caller stores (`validate`, `packet proof|dao`, `lower`) are unchanged.
 //!
 //! A round encodes, admits, then lowers each admitted view through the
-//! `ModelPort` (`Prompt::lower`), in two answer phases; the CLI's `lower` still
-//! uses the template table. The prompt source pin covers `context.rs`,
+//! `ModelPort` (`Prompt::lower`), in two answer phases; no other path produces lowered text. The prompt source pin covers `context.rs`,
 //! `split.rs` and `lower.rs`.
 //!
 //! `RunStores::stance_ablation`, like `recall`, is a diagnostic in its own
@@ -3973,7 +3972,7 @@ mod tests {
                 );
             }
             if prompt.text().starts_with(crate::context::LOWER_INSTRUCTIONS) {
-                // The table's English for the Dao items, the lowerer's answer.
+                // The fake lowerer's answer for the Dao items.
                 let text = match prompt.item_keys()[0].as_str() {
                     "item:daodejing:1" => "The sage empties the minds. The sage fills the bellies. The sage weakens the wills. The sage strengthens the bones.",
                     "item:daodejing:2" => "The heaven is long-enduring. The earth continues long.",

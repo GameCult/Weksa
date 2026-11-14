@@ -11,7 +11,7 @@ use weksa::packet::{FeatValue, FeatureValue, Packet, proof_packet};
 use weksa::speaker::{Annotator, PairRelation, Party, Scene};
 use weksa::{
     CorpusStore, EntityStore, Inventory, InventoryStore, LoweringInput, NameSpan, PacketStore,
-    Refusal, SceneRead, SpeakerStateStore, StoreError, lower,
+    Refusal, SceneRead, SpeakerStateStore, StoreError,
 };
 
 struct W {
@@ -158,7 +158,7 @@ fn selected(rev: u32, features: Vec<FeatureValue>) -> SceneRead {
 }
 
 #[test]
-fn a_scene_relation_reaches_the_lowering_view_and_changes_no_english() {
+fn a_scene_relation_reaches_the_lowering_view() {
     let mut w = world();
     put(&mut w, standard("g", 1));
     let plain = view_of(&w, 3, Some("n3"));
@@ -170,10 +170,6 @@ fn a_scene_relation_reaches_the_lowering_view_and_changes_no_english() {
         .unwrap();
     assert_eq!(with.scene(), status().as_slice());
     assert_eq!(with.scene_read(), &selected(1, status()));
-    assert_eq!(
-        lower(&with, &inv(&w), &w.entities).unwrap(),
-        lower(&plain, &inv(&w), &w.entities).unwrap()
-    );
 }
 
 #[test]

@@ -33,20 +33,6 @@ fn assert_clean_and_distinct<T: std::fmt::Display + std::fmt::Debug>(all: Vec<T>
 #[test]
 fn lower_error_display_names_the_variant_and_no_identifier() {
     assert_clean_and_distinct(vec![
-        LowerError::Unrendered { what: SENTINEL },
-        LowerError::NoRow { id: inv() },
-        LowerError::GlossMismatch {
-            id: inv(),
-            row: SENTINEL,
-        },
-        LowerError::UnknownRole {
-            frame: inv(),
-            role: SENTINEL.into(),
-        },
-        LowerError::MissingRole {
-            predication: node(),
-            role: SENTINEL.into(),
-        },
         LowerError::UnknownEntity { entity: entity() },
         LowerError::NoForm { entity: entity() },
         LowerError::NoPronunciation { entity: entity() },
@@ -59,12 +45,6 @@ fn lower_error_display_names_the_variant_and_no_identifier() {
         LowerError::DanglingStress {
             entity: entity(),
             at: 4242,
-        },
-        LowerError::ConsentMissing {
-            predication: node(),
-        },
-        LowerError::AskerNotAddressee {
-            predication: node(),
         },
         LowerError::EntityRead {
             entity: entity(),
