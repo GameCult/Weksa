@@ -81,6 +81,8 @@ ceiling of an author who saw the reference:
   frame minted from Train, scored lowest (chrF 44.18). The scores rise with
   how bespoke the frame is, the reverse of generalisation. The Validation and
   Test numbers measure the lowerer table, not what the interlingua can carry.
+  That table is deleted: the Dao numbers below were measured on it, and the
+  loop now lowers through the model (`Prompt::lower`).
 - n = 5, one translation as reference, one embedding model, no variance.
 
 ## What the scorer cannot see

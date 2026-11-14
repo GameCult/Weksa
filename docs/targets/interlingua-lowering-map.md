@@ -606,57 +606,25 @@ measurable with this corpus either.
 
 Training pairs are Train only, at a frozen revision; the export is 12b.
 
-## Lowerer first cut (`golf-loop-lowerer-cut`)
+## Lowering authorities (`golf-loop-lowerer-cut`, `table-retirement`)
 
-Authority map for the smallest lowerer, written before its code (Imagination
-pass by the Weksa Self run, 2026-11-01). The cut exists to give the golf loop a
-measurable baseline from a packet: `lower` gives text, `score` gives numbers.
+Authority map of who decides what about a packet's wording. The first cut gave
+the loop a baseline from an English template table; cut `table-retirement`
+deleted that table, `lower()` and the CLI lowering command, so no deterministic path
+produces lowered text and the model's answer to `Prompt::lower` is the only
+wording owner. `lower.rs` keeps the entity port, `pronounce` and `phones`
+(`weksa pronounce`).
 
 | Decision | Owner | Inputs | Outputs | Not the owner |
 |---|---|---|---|---|
 | Whether a packet exists | `validate` / `PacketStore::admit` (unchanged) | packet, inventory, corpus, entities | admitted packet or typed refusal | the lowerer |
 | Wording of a scored item in English (golf loop, `golf-loop-model-lowerer`) | the ModelPort's answer to `Prompt::lower` (`context.rs`), read as `LoweringDraft` (`encode.rs`) and held in `run::score_round`'s locals | the admitted view, the inventory at its revision, en-US entity forms | `{"text"}`, scored once, never stored | the corpus item, the scorer, the editor |
-| Wording of a packet in English (`weksa lower`, proof fixtures) | `crates/weksa/src/lower.rs`: `lower(&LoweringInput, &Inventory) -> Result<String, LowerError>` | the validated lowering view and the inventory at its revision | text, or a typed refusal naming the missing template | the corpus item, the scorer, the golf loop |
-| English template table (concept words, frame templates, speech-act openers) | the same module, as rows `(inventory id, gloss it speaks for, surface)` | none; it is data in code | rows the lowerer looks up | the inventory (it owns the ids and glosses, not the English) |
 | The inventory's concepts and frames | an inventory revision; here `inventory::proof_revision()` (rev 2), hand-seeded as `seed()` is | none | the 6 concepts and 3 frames `nibu-proof-001` and the consent-gated request packet name | the lowerer |
 | What a score counts | `Scorer::score` (unchanged) | output text, reference text | `ItemScore` | `weksa score`, which only reads text and calls it |
 | The proof packet | `packet::proof_packet()`, typed ids of rev 2, admitted by `weksa packet proof <store>` through `PacketStore::admit`. Not JSON: `Packet`'s serde is CultCache's positional tuple, and JSON in is the xenos boundary the cut 7 encoder owns | none | admitted packet | the CLI decides nothing about validity |
 
 Decisions this map makes, and why:
 
-- **`lower` takes `&LoweringInput`, not `&Packet`.** A `Packet` carries `trace`
-  and `provenance.corpus_item`; the model page says the lowerer sees the packet
-  without its trace and never the corpus item (`lowering-traced`,
-  `leak-owned-by-flow-and-scorer-3`). `validate` already yields the view, so the
-  CLI runs `validate` and hands it over. Cut 4 narrows the door to
-  `PacketStore::admit`; this cut does not wait on it.
-- **The frame owns the verb phrase; a predication's concept must resolve but is
-  not rendered.** Referent concepts supply nouns. A frame template names its
-  roles by inventory gloss (`{agent}`), resolved against the inventory at the
-  packet's revision, so a retired or re-glossed role cannot be silently
-  mis-keyed. A row whose gloss differs from the inventory's entry for its id is
-  a `LowerError`, so a table row cannot speak for a different meaning than its
-  id now carries.
-- **Rendering rules, all deterministic and all from packet fields:** the
-  discourse addressee renders "you" ("yourself" when it already filled a role
-  in the same predication), other referents render "the <concept word>", a
-  predication filling a role renders "that", the speech-act row supplies an
-  optional opener, sentences are capitalised and end in a full stop.
-  Entity-bearing referents render by concept word: the lowerer does not read
-  the entity store in this cut (follow-up: entity forms in the lowerer).
-- **No style, no register, no features.** Hedge, certainty, modality and
-  polarity are not rendered, so the baseline scores what meaning alone buys.
-  A lowerer that ignores `polarity: negative` would assert the opposite, so
-  `lower` refuses any packet that carries a feature, relation or extension it
-  does not render rather than render it wrong (`packet-owns-meaning`); features arrive as templates
-  learn them.
-- **Deleted by later cuts, not this one:** the table in `lower.rs` and
-  `proof_revision()` are temporary owners. Cut 5 (`language-ontology`) moves
-  the table to `weksa.ontology_entry` documents selected by the target
-  profile; cut 7 replaces `proof_revision()` with the loop's minting round.
-  Nothing is deleted today because no earlier lowerer exists; the YAML
-  `examples/english-lowering/` hand-lowerings are fixtures, not owners, and
-  stay.
 - **`weksa score` is a thin reader of `Scorer::score`**: `weksa score <item>...
   [--output FILE]` embeds the output text once against every named item. It
   stores nothing (Score documents arrive with cut 7) and gates nothing.
