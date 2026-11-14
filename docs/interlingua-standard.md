@@ -197,8 +197,14 @@ whatever the inventory grows). This is source-side communicative pressure, not
 target-language register. `addressee_consent` is no feature: it names the
 predication the addressee asked for or agreed to, a fact about what the
 addressee did. `V14` and `V15` check the field: it may be set only by authoring or game
-telemetry, and it must name a predication of the packet. Nothing lowers a
-request clause from it today (follow-up `table-retirement-consent-owner`).
+telemetry, and it must name a predication of the packet. Open gap: `frame:3`
+(`request_intervention`) is in the committed inventories (`data/interlingua`,
+`data/original`, `data/daodejing`) and seeded at `inventory.rs:518`. No
+committed packet uses it, but the encoder sees it, and `V14` and `V15` check only
+the consent field, so a model-encoded `frame:3` predication with a null
+`addressee_consent` reaches `Prompt::lower` and nothing refuses it. The retired
+gate covered only the deleted `lower()`. Follow-up
+`table-retirement-consent-owner` owns the gap.
 
 ### `stance`
 
