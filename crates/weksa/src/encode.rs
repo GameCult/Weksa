@@ -567,6 +567,9 @@ pub fn packet_id(item: &CorpusItemId, rev: u32, encoder: &EncoderId) -> PacketId
 }
 
 #[cfg(test)]
+mod mutants;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::daodejing::packets;

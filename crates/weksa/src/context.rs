@@ -760,6 +760,9 @@ impl Prompt {
 }
 
 #[cfg(test)]
+mod mutants;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::split::fixture::{group_in, item};
