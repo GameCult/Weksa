@@ -1,0 +1,5 @@
+i Probe.pgf
+l -table UttS (PosS (ClNPAP (TheCN (ModCN (SuperlA high_A) (UseN good_N))) (LikeAP like_A2 (BareN water_N))))
+l -table UttS (NegS (ClNPNP (TheCN (RelCN (UseN way_N) (CanBePassedRS speak_V2))) (TheCN (ModCN (PosA constant_A) (UseN way_N)))))
+l PhrPlain (UttS (PosS (ClNPAP (TheCN (ModCN (SuperlA high_A) (UseN good_N))) (LikeAP like_A2 (BareN water_N)))))
+l PhrResp (UttS (PosS (ClNPAP (TheCN (ModCN (SuperlA high_A) (UseN good_N))) (LikeAP like_A2 (BareN water_N)))))
