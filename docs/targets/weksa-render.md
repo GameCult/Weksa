@@ -100,8 +100,16 @@ dictionary and never hand-edited.
   ambiguity (Japanese has no articles). No parse at all is a grammar fault.
 - `voice-channels` (ruling `weksa-body:ruling:high-imperial-voice-split`): a
   rendered utterance is a record of named voice channels, never a single
-  string. English and Japanese declare one channel. High Imperial declares two
-  obligatory channels, `low` and `high`, and the split is grammatical. The
+  string. No language is text-only (ruling `weksa-body:ruling:every-language-is-multichannel`).
+  English and Japanese each declare at least two channels: a segmental channel
+  and a prosodic one. The prosodic channel carries intonation, stress, focus
+  and phrasing, and for Japanese also pitch accent; ToBI and J_ToBI are prior
+  art for its notation. Focus, question force and irony are tree content, like
+  register. Written text is a deterministic, lossy projection of the channels
+  (orthography, with punctuation and emphasis standing in for prosody). A parse
+  from text alone may return more trees than a parse from all channels.
+  High Imperial declares two obligatory voices, `low` and `high`, each with its
+  own prosody, and the split is grammatical. The
   language definition decides which content each voice carries, and the
   generator emits both. Neither voice is ornament on the other. The round trip
   parses all channels jointly and must recover the whole tree. The probe found
