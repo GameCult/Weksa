@@ -98,6 +98,16 @@ dictionary and never hand-edited.
   and the original tree must be among the parses. A render that fails this is
   refused, not shipped. More than one parse is allowed, since that is real
   ambiguity (Japanese has no articles). No parse at all is a grammar fault.
+- `voice-channels` (ruling `weksa-body:ruling:high-imperial-voice-split`): a
+  rendered utterance is a record of named voice channels, never a single
+  string. English and Japanese declare one channel. High Imperial declares two
+  obligatory channels, `low` and `high`, and the split is grammatical. The
+  language definition decides which content each voice carries, and the
+  generator emits both. Neither voice is ornament on the other. The round trip
+  parses all channels jointly and must recover the whole tree. The probe found
+  that the GF C parser reads field 0 only (`gf-probe.parse-field0`). Joint
+  parsing therefore goes through one serialized, channel-tagged field, and the
+  shared abstract never assumes a single-string surface.
 - `render-deterministic`: the same packet, speaker and scene state, entity
   store, dictionary, grammar build and language-definition revision give
   byte-identical text and trace.
